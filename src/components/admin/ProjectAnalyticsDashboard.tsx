@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import type { ObservationCaptureDto, ProjectAnalyticsDto } from '@/lib/types'
+import { generateScientificCsv, triggerCsvDownload } from '@/lib/exportHelpers'
+import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 
 type ProjectAnalyticsDashboardProps = {
   analytics: ProjectAnalyticsDto
@@ -44,6 +46,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
     pointsAnalytics[0]?.pointId ?? null,
   )
   const [selectedCapture, setSelectedCapture] = useState<ObservationCaptureDto | null>(null)
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false)
 
   const selectedPoint = pointsAnalytics.find((p) => p.pointId === selectedPointId)
 
@@ -54,71 +57,14 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
     ...ghostPointsAnalytics.captures.map((c) => c.timestampTotal),
   )
 
-  // Export CSV natif côté client
+  // Exportation CSV scientifique complète
   const handleExportCsv = () => {
-    const rows = [
-      [
-        'Projet',
-        'Point_Cible',
-        'Trame_Debut',
-        'Trame_Fin',
-        'Horodatage_Observation',
-        'Delai_Reaction_Sec',
-        'Statut_Fausse_Alerte',
-        'ID_Anonyme_Observateur',
-        'URL_Capture_Cloudinary',
-        'Date_Soumission',
-      ],
-    ]
-
-    // Observations des points cibles
-    for (const point of pointsAnalytics) {
-      for (const cap of point.captures) {
-        rows.push([
-          `"${project.title}"`,
-          `"${point.pointName}"`,
-          point.trameDebut.toString(),
-          point.trameFin.toString(),
-          cap.timestampTotal.toString(),
-          (cap.delaySeconds ?? '').toString(),
-          'NON',
-          `"${cap.observerAnonymousId}"`,
-          `"${cap.imageUrl}"`,
-          `"${cap.createdAt}"`,
-        ])
-      }
-    }
-
-    // Points fantômes
-    for (const cap of ghostPointsAnalytics.captures) {
-      rows.push([
-        `"${project.title}"`,
-        '"POINT_FANTOME_HORS_TRAME"',
-        '',
-        '',
-        cap.timestampTotal.toString(),
-        '',
-        'OUI',
-        `"${cap.observerAnonymousId}"`,
-        `"${cap.imageUrl}"`,
-        `"${cap.createdAt}"`,
-      ])
-    }
-
-    const csvContent =
-      'data:text/csv;charset=utf-8,\uFEFF' + rows.map((e) => e.join(';')).join('\n')
-    const encodedUri = encodeURI(csvContent)
-    const link = document.createElement('a')
-    link.setAttribute('href', encodedUri)
-    link.setAttribute(
-      'download',
-      `vision-analytics-${project.id.slice(0, 8)}-concordance.csv`,
+    const csvContent = generateScientificCsv(analytics)
+    triggerCsvDownload(
+      `vision-analytics-${project.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-rapport.csv`,
+      csvContent,
     )
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
   }
-
   return (
     <div className="flex flex-col gap-6">
       {/* ——— En-tête Navigation & Actions ——— */}
@@ -144,6 +90,13 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsReportModalOpen(true)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3.5 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          >
+            <span aria-hidden="true">📄</span> Rapport PDF
+          </button>
           <button
             type="button"
             onClick={handleExportCsv}
@@ -740,6 +693,13 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
           </div>
         </div>
       )}
+
+      {/* ——— MODAL RAPPORT EXÉCUTIF IMPRIMABLE (PDF) ——— */}
+      <ExecutiveReportModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        analytics={analytics}
+      />
     </div>
   )
 }
