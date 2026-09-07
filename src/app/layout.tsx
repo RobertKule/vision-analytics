@@ -4,6 +4,7 @@ import "./globals.css";
 import ThemeProvider from "@/components/theme-provider";
 import Toaster from "@/components/Toaster";
 import Navbar from "@/components/Navbar";
+import { getLocale } from "@/lib/i18n-server";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -21,13 +22,15 @@ export const metadata: Metadata = {
     template: "%s · Vision Analytics",
   },
   description:
-    "Plateforme d’analyse de vidéos scientifiques : lecture, annotation et capture d’observations horodatées.",
+    "Scientific video observation platform: blind annotation sessions, inter-observer concordance and PDF / CSV exports.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const locale = await getLocale();
+
   return (
     <html
-      lang="fr"
+      lang={locale}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >

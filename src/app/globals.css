@@ -7,20 +7,31 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Virunga palette — light */
+  --background: #f4f6f8;
+  --foreground: #161b22;
   color-scheme: light;
 }
 
 .dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  /* Virunga palette — dark (volcanic charcoal) */
+  --background: #0d1117;
+  --foreground: #e6edf3;
   color-scheme: dark;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* Virunga accents exposed to Tailwind utilities (emerald / amber / mist blue) */
+  --color-forest-300: #6ee7b7;
+  --color-forest-400: #34d399;
+  --color-forest-500: #10b981;
+  --color-forest-600: #059669;
+  --color-forest-700: #047857;
+  --color-mist-400: #22d3ee;
+  --color-mist-500: #06b6d4;
+  --color-mist-600: #0891b2;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -28,5 +39,6 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }

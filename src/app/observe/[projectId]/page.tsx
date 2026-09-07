@@ -1,9 +1,11 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { ArrowLeft, Film } from 'lucide-react'
+import { ArrowLeft, EyeOff, Film, ShieldCheck, VideoOff } from 'lucide-react'
 import { getBlindProject } from '@/app/actions/observationActions'
 import VideoAnnotator from '@/components/VideoAnnotator'
+import { getLocale } from '@/lib/i18n-server'
+import { getDictionary } from '@/lib/i18n'
 
 type PageProps = {
   params: Promise<{ projectId: string }>
@@ -11,39 +13,56 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { projectId } = await params
-  const project = await getBlindProject(projectId)
+  const locale = await getLocale()
+  const [project] = await Promise.all([getBlindProject(projectId)])
 
   if (!project) {
     return {
-      title: 'Projet introuvable — Vision Analytics',
+      title: locale === 'en' ? 'Experiment not found' : 'Expérience introuvable',
     }
   }
 
   return {
-    title: `Observation : ${project.title} — Vision Analytics`,
-    description: `Session d’observation scientifique en aveugle pour le projet « ${project.title} ».`,
+    title:
+      locale === 'en'
+        ? `Observe: ${project.title}`
+        : `Observation : ${project.title}`,
+    description:
+      locale === 'en'
+        ? `Blind scientific observation session for the experiment “${project.title}”.`
+        : `Session d’observation scientifique en aveugle pour l’expérience « ${project.title} ».`,
   }
 }
 
 export default async function ObserveProjectPage({ params }: PageProps) {
   const { projectId } = await params
+  const locale = await getLocale()
   const project = await getBlindProject(projectId)
 
   if (!project) {
     notFound()
   }
 
+  const d = getDictionary(locale)
+  const t = d.session
+  const hasVideo = Boolean(project.videoUrl?.trim())
+
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-red-700 dark:bg-red-950 dark:text-red-300">
-              Protocole en Double Aveugle
+            <span className="inline-flex items-center gap-1 rounded-full bg-forest-500/10 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-forest-700 dark:bg-forest-500/10 dark:text-forest-400">
+              <EyeOff aria-hidden="true" className="h-3 w-3" />
+              {t.blindBadge}
             </span>
             <span className="text-xs text-zinc-400 dark:text-zinc-500">•</span>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              Session d’observation active
+            <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-forest-500 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-forest-500" />
+              </span>
+              {t.activeLabel}
             </span>
           </div>
 
@@ -56,46 +75,69 @@ export default async function ObserveProjectPage({ params }: PageProps) {
               {project.description}
             </p>
           )}
-
-          {project.videoUrl && (
-            <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
-              <Film aria-hidden="true" className="h-3.5 w-3.5 text-zinc-500" />
-              <span>Vidéo cible requise :</span>
-              <code className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
-                {project.videoUrl}
-              </code>
-            </div>
-          )}
         </div>
 
         <Link
           href="/observe"
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />
-          Changer de projet
+          {t.changeProject}
         </Link>
       </header>
 
       {/* Bannière de rigueur scientifique */}
-      <div className="mb-6 rounded-xl border border-zinc-200 bg-gradient-to-r from-zinc-50 to-white p-4 text-xs leading-relaxed text-zinc-600 shadow-sm dark:border-zinc-800 dark:from-zinc-900 dark:to-zinc-950 dark:text-zinc-400">
-        <p>
-          <strong className="font-semibold text-zinc-900 dark:text-zinc-100">
-            Directives de l’observateur :{' '}
-          </strong>
-          Chargez le fichier vidéo correspondant sur votre poste local. Visionnez la séquence à
-          votre rythme, mettez en pause pour marquer chaque anomalie ou zone d’intérêt à l’aide d’un
-          cercle rouge, puis capturez. Les fenêtres de référence temporelle restent confidentielles
-          et seront évaluées automatiquement sur le serveur lors de la soumission de la session.
+      <div className="mb-6 rounded-xl border border-forest-500/20 bg-gradient-to-r from-forest-500/[0.07] to-transparent p-4 text-xs leading-relaxed text-zinc-600 dark:border-forest-500/15 dark:from-forest-500/10 dark:to-transparent dark:text-zinc-400">
+        <p className="inline-flex items-center gap-1.5 font-semibold text-zinc-900 dark:text-zinc-100">
+          <ShieldCheck aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
+          {t.guidelinesTitle}
         </p>
+        <p className="mt-1.5">{t.guidelines}</p>
       </div>
 
-      {/* Lecteur vidéo configuré pour ce projet en aveugle */}
-      <VideoAnnotator
-        projectId={project.id}
-        projectTitle={project.title}
-        expectedVideoUrl={project.videoUrl}
-      />
+      {hasVideo ? (
+        <>
+          {project.videoUrl && (
+            <div className="mb-4 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-white/10 dark:bg-[#161b22] dark:text-zinc-300">
+              <Film aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
+              <span>{t.targetVideoLabel}</span>
+              <code className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{project.videoUrl}</code>
+            </div>
+          )}
+
+          <VideoAnnotator
+            projectId={project.id}
+            projectTitle={project.title}
+            expectedVideoUrl={project.videoUrl}
+            locale={locale}
+            t={{
+              annotator: d.annotator,
+              stepper: d.stepper,
+              completion: d.completion,
+            }}
+          />
+        </>
+      ) : (
+        /* ——— État vide : l'expérience n'a pas encore partagé sa vidéo ——— */
+        <div className="rounded-2xl border-2 border-dashed border-amber-500/40 bg-white p-10 text-center dark:border-amber-500/30 dark:bg-[#161b22]">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
+            <VideoOff aria-hidden="true" className="h-8 w-8" />
+          </div>
+          <h2 className="mx-auto mt-5 max-w-md text-lg font-bold text-zinc-900 dark:text-zinc-50">
+            {t.noVideoTitle}
+          </h2>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+            {t.noVideoBody}
+          </p>
+          <Link
+            href="/observe"
+            className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500"
+          >
+            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
+            {t.noVideoAction}
+          </Link>
+        </div>
+      )}
     </div>
   )
 }

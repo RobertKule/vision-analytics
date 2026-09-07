@@ -1,3 +1,5 @@
+import type { Locale } from '@/lib/i18n'
+
 /** Types sérialisables échangés entre les Server Actions, la page serveur et le client. */
 
 export type ProjectPointDto = {
@@ -47,6 +49,8 @@ export type SubmitObservationsInput = {
     timestamp: number
     imageDataUrl: string
   }>
+  /** Langue de l'interface, pour renvoyer des messages d'erreur localisés. */
+  locale?: Locale
 }
 
 /** Résultat de la soumission d'une session d'observations. */
