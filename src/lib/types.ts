@@ -63,3 +63,86 @@ export type SubmissionResultDto =
 
 /** Résultat standardisé des mutations côté serveur (affichage d'erreur sans boundary). */
 export type ActionResult = { ok: true; id?: string } | { ok: false; error: string }
+
+// ——— Types pour le Moteur d'Analyse Scientifique (Phase 5) ———
+
+/** Capture d'observation détaillée pour l'analyse administrateur. */
+export type ObservationCaptureDto = {
+  id: string
+  timestampTotal: number
+  delaySeconds: number | null // Décalage temporel par rapport à trameDebut
+  imageUrl: string
+  observerAnonymousId: string
+  observerEmail?: string | null
+  createdAt: string
+  isGhostPoint: boolean
+}
+
+/** Statistiques de concordance scientifique par point cible. */
+export type PointConcordanceDto = {
+  pointId: string
+  pointName: string
+  trameDebut: number
+  trameFin: number
+  targetDuration: number
+  observerCount: number // Nombre d'observateurs distincts ayant validé cette cible
+  concordanceRate: number // Taux en pourcentage (0-100) par rapport au total des observateurs
+  avgDelaySeconds: number | null // Délai moyen de détection en secondes
+  minTimestamp: number | null
+  maxTimestamp: number | null
+  captures: ObservationCaptureDto[]
+}
+
+/** Répartition temporelle par tranche pour les fausses alertes (Points Fantômes). */
+export type GhostBucketDto = {
+  intervalLabel: string
+  startSecond: number
+  endSecond: number
+  count: number
+}
+
+/** Synthèse des fausses alertes (Points Fantômes) d'un projet. */
+export type GhostPointAnalyticsDto = {
+  totalGhostPoints: number
+  ghostRate: number // Pourcentage par rapport au total des observations (0-100)
+  timelineDistribution: GhostBucketDto[]
+  captures: ObservationCaptureDto[]
+}
+
+/** Métrique de précision et de participation par observateur. */
+export type ObserverMetricDto = {
+  userId: string
+  anonymousId: string
+  email: string
+  totalObservations: number
+  validObservationsCount: number
+  ghostPointsCount: number
+  pointsDetectedCount: number // Nombre de cibles distinctes détectées
+  precisionRate: number // % d'observations valides (0-100)
+  firstSessionAt: string
+  lastSessionAt: string
+}
+
+/** Données complètes d'analyse d'un projet d'observation. */
+export type ProjectAnalyticsDto = {
+  project: {
+    id: string
+    title: string
+    description: string | null
+    videoUrl: string | null
+    createdAt: string
+    totalDefinedPoints: number
+  }
+  summary: {
+    totalObservers: number
+    totalObservations: number
+    validObservationsCount: number
+    ghostPointsCount: number
+    overallConcordanceRate: number // Moyenne des taux de concordance des points cibles
+    overallPrecisionRate: number // % d'observations valides vs total
+    averageDetectionDelay: number | null // Moyenne globale des délais de réaction
+  }
+  pointsAnalytics: PointConcordanceDto[]
+  ghostPointsAnalytics: GhostPointAnalyticsDto
+  observersMetrics: ObserverMetricDto[]
+}
