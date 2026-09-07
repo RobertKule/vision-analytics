@@ -1,0 +1,66 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  OBSERVER
+}
+
+model User {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  password     String
+  role         Role          @default(OBSERVER)
+  anonymousId  String        @unique @default(uuid())
+  observations Observation[]
+  createdAt    DateTime      @default(now())
+}
+
+model Project {
+  id           String         @id @default(uuid())
+  title        String
+  description  String?
+  videoUrl     String?        // Chemin ou nom du fichier vidéo local
+  isArchived   Boolean        @default(false)
+  points       ProjectPoint[]
+  observations Observation[]
+  createdAt    DateTime       @default(now())
+}
+
+model ProjectPoint {
+  id             String        @id @default(uuid())
+  projectId      String
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pointName      String        // ex: "Point 2"
+  trameDebut     Int           // Trame début en secondes
+  trameFin       Int           // Trame fin en secondes
+  observations   Observation[]
+
+  @@index([projectId])
+}
+
+model Observation {
+  id             String        @id @default(uuid())
+  projectId      String
+  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pointId        String?       // Auto-assigné si dans [trameDebut, trameFin]
+  point          ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
+  timestampTotal Int           // Horodatage saisi en secondes
+  imageUrl       String        // URL Cloudinary de la capture annotée
+  isGhostPoint   Boolean       @default(false) // Indique si hors-trame / fausse alerte
+  isVerified     Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+
+  @@index([projectId])
+  @@index([userId])
+  @@index([pointId])
+}
