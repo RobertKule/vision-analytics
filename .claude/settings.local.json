@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(npx tsc *)",
+      "Bash(node -e \"const p=require\\('./node_modules/prisma/package.json'\\); console.log\\('prisma', p.version\\); const c=require\\('./node_modules/@prisma/client/package.json'\\); console.log\\('@prisma/client', c.version\\)\")",
+      "Bash(cd \"c:/src/Stage/vision-analytics\" && rm prisma.config.ts && echo \"deleted\")",
+      "Bash(echo \"exit=$?\")",
+      "Bash(echo \"tsc-exit=$?\")",
+      "Read(//tmp/**)",
+      "Bash(tasklist //FI \"IMAGENAME eq node.exe\")",
+      "Bash(curl -s -o /dev/null -w \"home=%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s http://localhost:3000/observe)",
+      "Bash(curl -s -o /dev/null -w \"observe=%{http_code}\\\\n\" http://localhost:3000/observe)",
+      "Bash(npm run *)",
+      "Bash(echo \"lint-exit=$?\")",
+      "Bash(node --env-file=.env -e 'const {PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\); const p=new PrismaClient\\(\\); p.project.count\\(\\).then\\(c=>{console.log\\('\\\\''PROJECT_TABLE_OK count='\\\\''+c\\); return p.$disconnect\\(\\)}\\).catch\\(async e=>{console.log\\('\\\\''ERR '\\\\''+e.code+'\\\\'' '\\\\''+e.message.split\\('\\\\''\\\\n'\\\\''\\)[0]\\); await p.$disconnect\\(\\)}\\)')",
+      "Bash(node --env-file=.env -e 'const {PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\); const p=new PrismaClient\\(\\); p.project.count\\(\\).then\\(c=>{console.log\\('\\\\''PROJECT_TABLE_OK count='\\\\''+c\\); return p.$disconnect\\(\\)}\\).catch\\(async e=>{console.log\\('\\\\''ERR_BEGIN'\\\\''\\); console.log\\(String\\(e\\)\\); console.log\\('\\\\''ERR_END'\\\\''\\); await p.$disconnect\\(\\).catch\\(\\(\\)=>{}\\)}\\)')",
+      "Bash(node -e \"const net=require\\('net'\\); const s=net.connect\\(5432,'ep-silent-sun-ae099hzf.c-2.us-east-2.aws.neon.tech'\\); s.setTimeout\\(8000\\); s.on\\('connect',\\(\\)=>{console.log\\('TCP_OK'\\); s.destroy\\(\\)}\\); s.on\\('timeout',\\(\\)=>{console.log\\('TCP_TIMEOUT'\\); s.destroy\\(\\)}\\); s.on\\('error',\\(e\\)=>{console.log\\('TCP_ERR '+e.code\\)}\\)\")",
+      "Bash(node --env-file=.env -e 'const {PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\); const p=new PrismaClient\\(\\); p.$queryRawUnsafe\\('\\\\''SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname=$$public$$ ORDER BY tablename'\\\\''\\).then\\(rows=>{console.log\\('\\\\''TABLES='\\\\''+JSON.stringify\\(rows.map\\(r=>r.tablename\\)\\)\\); return p.$disconnect\\(\\)}\\).catch\\(async e=>{console.log\\('\\\\''ERR '\\\\''+String\\(e\\).split\\('\\\\''\\\\n'\\\\''\\)[0]\\); await p.$disconnect\\(\\).catch\\(\\(\\)=>{}\\)}\\)')",
+      "Bash(node --env-file=.env -e 'const {PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\); const p=new PrismaClient\\(\\); p.$queryRawUnsafe\\('\\\\''select 1'\\\\''\\).then\\(r=>{console.log\\('\\\\''SELECT1_OK'\\\\'', JSON.stringify\\(r\\)\\); return p.$disconnect\\(\\)}\\).catch\\(async e=>{console.log\\('\\\\''ERR_BEGIN'\\\\''\\); console.log\\(String\\(e\\)\\); console.log\\('\\\\''ERR_END'\\\\''\\); await p.$disconnect\\(\\).catch\\(\\(\\)=>{}\\)}\\)')",
+      "Bash(node -e ' *)",
+      "Bash(node --env-file=.env -e 'const {PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\); const p=new PrismaClient\\(\\); p.$queryRawUnsafe\\('\\\\''SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname=$$public$$ ORDER BY tablename'\\\\''\\).then\\(rows=>{console.log\\('\\\\''TABLES='\\\\''+JSON.stringify\\(rows.map\\(r=>r.tablename\\)\\)\\); return p.$disconnect\\(\\)}\\).catch\\(async e=>{console.log\\('\\\\''ERR '\\\\''+String\\(e\\).split\\('\\\\''\\\\n'\\\\''\\).filter\\(Boolean\\).join\\('\\\\'' | '\\\\''\\)\\); await p.$disconnect\\(\\).catch\\(\\(\\)=>{}\\)}\\)')"
+    ],
+    "additionalDirectories": [
+      "c:\\src\\Stage\\vision-analytics"
+    ]
+  }
+}
