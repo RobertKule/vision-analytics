@@ -191,7 +191,13 @@ function ProjectCard({ project }: { project: ProjectDto }) {
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <Link
+            href={`/admin/projects/${project.id}/analytics`}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          >
+            <span aria-hidden="true">📊</span> Statistiques
+          </Link>
           <Link
             href={`/observe/${project.id}`}
             className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-red-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-red-500"
