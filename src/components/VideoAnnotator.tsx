@@ -1,6 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CaptureRecord } from '@/lib/types'
+import SubmissionStepper from '@/components/SubmissionStepper'
 
 /**
  * Cercle d'intérêt dessiné sur l'image.
@@ -8,15 +10,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  */
 type AnnotationCircle = { x: number; y: number; r: number }
 
-/** Observation capturée en session (local uniquement — persistance en étape ultérieure). */
-type ObservationRecord = {
-  id: string
-  /** Horodatage vidéo en secondes au moment de la capture. */
-  timestamp: number
-  /** Capture PNG encodée en Base64 (data:image/png;base64,…). */
-  imageDataUrl: string
-  /** Nombre de cercles d'intérêt portés par la capture. */
-  circleCount: number
+type VideoAnnotatorProps = {
+  projectId?: string
+  projectTitle?: string
+  expectedVideoUrl?: string | null
 }
 
 function generateId(): string {
@@ -52,7 +49,11 @@ function paintCircle(ctx: CanvasRenderingContext2D, circle: AnnotationCircle): v
   ctx.stroke()
 }
 
-export default function VideoAnnotator() {
+export default function VideoAnnotator({
+  projectId,
+  projectTitle,
+  expectedVideoUrl,
+}: VideoAnnotatorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -69,8 +70,12 @@ export default function VideoAnnotator() {
   const [isReady, setIsReady] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
   const [annotations, setAnnotations] = useState<AnnotationCircle[]>([])
-  const [observations, setObservations] = useState<ObservationRecord[]>([])
+  const [observations, setObservations] = useState<CaptureRecord[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  // Gestion du stepper de soumission
+  const [isStepperOpen, setIsStepperOpen] = useState(false)
+  const [submissionSuccessNotice, setSubmissionSuccessNotice] = useState<string | null>(null)
 
   const canAnnotate = isReady && !isPlaying && videoUrl !== null
 
@@ -112,6 +117,10 @@ export default function VideoAnnotator() {
     redraw()
   }, [redraw])
 
+  const handleDeleteCapture = useCallback((captureId: string) => {
+    setObservations((prev) => prev.filter((item) => item.id !== captureId))
+  }, [])
+
   /** Réinitialise l'état pour une nouvelle vidéo. */
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -122,6 +131,7 @@ export default function VideoAnnotator() {
       return
     }
     setErrorMessage(null)
+    setSubmissionSuccessNotice(null)
     clearDrawing()
     setObservations([])
     setFileName(file.name)
@@ -148,6 +158,7 @@ export default function VideoAnnotator() {
     const container = containerRef.current
     if (!container) return
     syncCanvasSize()
+
     if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(syncCanvasSize)
     observer.observe(container)
@@ -258,8 +269,6 @@ export default function VideoAnnotator() {
     const video = videoRef.current
     if (!video) return
     const target = Number(event.target.value)
-    // Les cercles annotent une frame précise : si la frame change (ici, en
-    // pause) on les retire pour éviter un décalage avec la nouvelle image.
     if (circlesRef.current.length > 0 && Math.abs(target - video.currentTime) > 0.001) {
       clearDrawing()
     }
@@ -280,6 +289,28 @@ export default function VideoAnnotator() {
     <div className="flex w-full flex-col gap-4 lg:flex-row lg:items-start">
       {/* ——— Colonne principale : chargement + lecteur + commandes ——— */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
+        {/* Encart de succès après soumission */}
+        {submissionSuccessNotice && (
+          <div
+            role="status"
+            className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200"
+          >
+            <div className="flex items-center gap-2">
+              <span aria-hidden="true" className="text-base">
+                ✓
+              </span>
+              <span>{submissionSuccessNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSubmissionSuccessNotice(null)}
+              className="text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-300"
+            >
+              Fermer
+            </button>
+          </div>
+        )}
+
         {/* Sélection du fichier vidéo */}
         <label
           htmlFor="video-upload"
@@ -302,13 +333,18 @@ export default function VideoAnnotator() {
             </span>
           ) : (
             <span className="text-zinc-500 dark:text-zinc-400">
-              Vidéo locale — un fichier {`MP4, WebM ou MOV`} de votre ordinateur.
+              {expectedVideoUrl
+                ? `Vidéo recommandée pour ce projet : ${expectedVideoUrl}`
+                : 'Vidéo locale — un fichier MP4, WebM ou MOV de votre ordinateur.'}
             </span>
           )}
         </label>
 
         {errorMessage ? (
-          <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+          <p
+            role="alert"
+            className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+          >
             {errorMessage}
           </p>
         ) : null}
@@ -374,7 +410,7 @@ export default function VideoAnnotator() {
           </div>
         ) : (
           <div className="grid h-64 w-full place-items-center rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400">
-            Aucune vidéo chargée. Sélectionnez un fichier ci-dessus pour démarrer une session
+            Aucune vidéo chargée. Sélectionnez un fichier ci-dessus pour démarrer votre session
             d’observation.
           </div>
         )}
@@ -465,38 +501,83 @@ export default function VideoAnnotator() {
         {observations.length === 0 ? (
           <div className="grid flex-1 place-items-center px-4 py-10 text-center text-sm text-zinc-500 dark:text-zinc-400">
             <p>
-              Chargez une vidéo, mettez-la en pause, tracez une zone d’intérêt puis capturez.
-              La liste apparaîtra ici.
+              Chargez la vidéo du projet, mettez sur pause, tracez une zone d’intérêt puis capturez.
+              Vos observations apparaîtront ici.
             </p>
           </div>
         ) : (
-          <ol className="flex max-h-[30rem] flex-col gap-3 overflow-y-auto p-3">
-            {observations.map((observation, index) => (
-              <li
-                key={observation.id}
-                className="overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950"
-              >
-                {/* La capture contient déjà la frame + les cercles rouges. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={observation.imageDataUrl}
-                  alt={`Capture de l’observation n°${observations.length - index}`}
-                  className="block aspect-video w-full bg-black object-contain"
-                />
-                <div className="flex items-center justify-between gap-2 px-3 py-2">
-                  <span className="font-mono text-xs tabular-nums text-zinc-700 dark:text-zinc-200">
-                    T+ {formatTime(observation.timestamp)}
-                  </span>
-                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                    #{observations.length - index} · {observation.circleCount} cercle
-                    {observation.circleCount > 1 ? 's' : ''}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ol>
+          <>
+            <ol className="flex max-h-[26rem] flex-col gap-3 overflow-y-auto p-3">
+              {observations.map((observation, index) => (
+                <li
+                  key={observation.id}
+                  className="group relative overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={observation.imageDataUrl}
+                    alt={`Capture de l’observation n°${observations.length - index}`}
+                    className="block aspect-video w-full bg-black object-contain"
+                  />
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    <span className="font-mono text-xs tabular-nums text-zinc-700 dark:text-zinc-200">
+                      T+ {formatTime(observation.timestamp)}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                        #{observations.length - index} · {observation.circleCount} cercle
+                        {observation.circleCount > 1 ? 's' : ''}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteCapture(observation.id)}
+                        className="text-xs text-zinc-400 transition-colors hover:text-red-600 dark:hover:text-red-400"
+                        title="Supprimer cette capture"
+                        aria-label={`Supprimer l’observation #${observations.length - index}`}
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ol>
+
+            {/* Bouton de déclenchement du Stepper de Soumission */}
+            {projectId && (
+              <footer className="border-t border-zinc-100 p-3 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setIsStepperOpen(true)}
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
+                >
+                  <span>Soumettre la session ({observations.length})</span>
+                  <span aria-hidden="true">→</span>
+                </button>
+              </footer>
+            )}
+          </>
         )}
       </aside>
+
+      {/* Stepper Modal */}
+      {projectId && (
+        <SubmissionStepper
+          isOpen={isStepperOpen}
+          onClose={() => setIsStepperOpen(false)}
+          projectId={projectId}
+          projectTitle={projectTitle || 'Session d’observation'}
+          captures={observations}
+          onDeleteCapture={handleDeleteCapture}
+          onSubmissionSuccess={() => {
+            setObservations([])
+            clearDrawing()
+            setSubmissionSuccessNotice(
+              'Vos observations ont été transmises et enregistrées avec succès en base de données.',
+            )
+          }}
+        />
+      )}
     </div>
   )
 }

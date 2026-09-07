@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition, type FormEvent } from 'react'
+import Link from 'next/link'
 import {
   addProjectPoint,
   archiveProject,
@@ -190,14 +191,22 @@ function ProjectCard({ project }: { project: ProjectDto }) {
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={handleArchive}
-          disabled={isPending}
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-500 dark:hover:text-red-400"
-        >
-          {isPending ? '…' : <span aria-hidden="true">🗄️</span>} Archiver
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <Link
+            href={`/observe/${project.id}`}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-red-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-red-500"
+          >
+            <span aria-hidden="true">👁️</span> Tester en aveugle
+          </Link>
+          <button
+            type="button"
+            onClick={handleArchive}
+            disabled={isPending}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-500 dark:hover:text-red-400"
+          >
+            {isPending ? '…' : <span aria-hidden="true">🗄️</span>} Archiver
+          </button>
+        </div>
       </header>
 
       <div className="px-5 py-4">
