@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { ArrowLeft, Film } from 'lucide-react'
 import { getBlindProject } from '@/app/actions/observationActions'
 import VideoAnnotator from '@/components/VideoAnnotator'
 
@@ -58,7 +59,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
 
           {project.videoUrl && (
             <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
-              <span aria-hidden="true">🎞️</span>
+              <Film aria-hidden="true" className="h-3.5 w-3.5 text-zinc-500" />
               <span>Vidéo cible requise :</span>
               <code className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">
                 {project.videoUrl}
@@ -67,20 +68,13 @@ export default async function ObserveProjectPage({ params }: PageProps) {
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <Link
-            href="/observe"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            ← Changer de projet
-          </Link>
-          <Link
-            href="/admin/projects"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Administration
-          </Link>
-        </div>
+        <Link
+          href="/observe"
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />
+          Changer de projet
+        </Link>
       </header>
 
       {/* Bannière de rigueur scientifique */}

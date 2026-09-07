@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { ArrowRight, Film } from 'lucide-react'
 import { listBlindProjects } from '@/app/actions/observationActions'
 import VideoAnnotator from '@/components/VideoAnnotator'
 
@@ -14,32 +15,16 @@ export default async function ObservePage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
-      <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">
-            Espace Observateur
-          </p>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-50">
-            Sessions d’observation scientifique
-          </h1>
-          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-            Rejoignez une étude active en double aveugle ou utilisez le lecteur libre ci-dessous.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/admin/projects"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Administration
-          </Link>
-          <Link
-            href="/"
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            <span aria-hidden="true">←</span> Accueil
-          </Link>
-        </div>
+      <header className="mb-8">
+        <p className="text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">
+          Espace Observateur
+        </p>
+        <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-50">
+          Sessions d’observation scientifique
+        </h1>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          Rejoignez une étude active en double aveugle ou utilisez le lecteur libre ci-dessous.
+        </p>
       </header>
 
       {/* ——— Liste des projets disponibles pour observation ——— */}
@@ -93,7 +78,7 @@ export default async function ObservePage() {
 
                   {project.videoUrl && (
                     <div className="mt-3 flex items-center gap-1.5 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
-                      <span aria-hidden="true">🎞️</span>
+                      <Film aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                       <span className="truncate">{project.videoUrl}</span>
                     </div>
                   )}
@@ -105,7 +90,7 @@ export default async function ObservePage() {
                     className="inline-flex w-full h-9 items-center justify-center gap-1.5 rounded-lg bg-zinc-900 text-xs font-semibold text-white transition-colors hover:bg-red-600 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-red-600 dark:hover:text-white"
                   >
                     <span>Participer à l’observation</span>
-                    <span aria-hidden="true">→</span>
+                    <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
                   </Link>
                 </div>
               </article>

@@ -1,6 +1,7 @@
 'use server'
 
 import { prisma } from '@/lib/prisma'
+import { getCurrentAdmin } from '@/lib/auth'
 import type {
   GhostBucketDto,
   ObservationCaptureDto,
@@ -21,6 +22,10 @@ function formatSeconds(seconds: number): string {
 export async function getProjectAnalytics(
   projectId: string,
 ): Promise<ProjectAnalyticsDto | null> {
+  // Zone administrateur : toute lecture d'analyses exige une session valide.
+  if (!(await getCurrentAdmin())) {
+    return null
+  }
   if (!projectId || typeof projectId !== 'string' || !projectId.trim()) {
     return null
   }

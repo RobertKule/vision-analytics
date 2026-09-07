@@ -1,5 +1,6 @@
 'use client'
 
+import { FileText, Printer, X } from 'lucide-react'
 import type { ProjectAnalyticsDto } from '@/lib/types'
 
 type ExecutiveReportModalProps = {
@@ -38,8 +39,8 @@ export default function ExecutiveReportModal({
         {/* Barre d'action supérieure (masquée à l'impression) */}
         <header className="flex items-center justify-between border-b border-zinc-100 bg-zinc-50 px-6 py-3 dark:border-zinc-800 dark:bg-zinc-950 print:hidden">
           <div className="flex items-center gap-2">
-            <span className="text-base" aria-hidden="true">
-              📑
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400">
+              <FileText aria-hidden="true" className="h-4 w-4" />
             </span>
             <h2 id="report-modal-title" className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
               Rapport Exécutif d’Analyse — Aperçu & Impression PDF
@@ -51,7 +52,7 @@ export default function ExecutiveReportModal({
               onClick={handlePrint}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
-              <span aria-hidden="true">🖨️</span> Imprimer / Enregistrer en PDF
+              <Printer aria-hidden="true" className="h-3.5 w-3.5" /> Imprimer / Enregistrer en PDF
             </button>
             <button
               type="button"
@@ -59,7 +60,7 @@ export default function ExecutiveReportModal({
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
               aria-label="Fermer le rapport"
             >
-              ✕
+              <X aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>
         </header>

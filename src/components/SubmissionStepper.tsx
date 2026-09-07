@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { ArrowLeft, ArrowRight, Check, CloudUpload, RefreshCw, Timer, Trash, X } from 'lucide-react'
 import type { CaptureRecord, SubmissionResultDto } from '@/lib/types'
 import { submitObservations } from '@/app/actions/observationActions'
 
@@ -148,7 +149,7 @@ function SubmissionStepperModal({
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
               aria-label="Fermer la boîte de dialogue"
             >
-              ✕
+              <X aria-hidden="true" className="h-4 w-4" />
             </button>
           )}
         </header>
@@ -183,7 +184,11 @@ function SubmissionStepperModal({
                           : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
                     }`}
                   >
-                    {isPast ? '✓' : step.num}
+                    {isPast ? (
+                      <Check aria-hidden="true" className="h-3.5 w-3.5" />
+                    ) : (
+                      step.num
+                    )}
                   </span>
                   <span className="hidden sm:inline">{step.label}</span>
                 </li>
@@ -247,12 +252,13 @@ function SubmissionStepperModal({
                           title="Supprimer cette capture"
                           aria-label={`Supprimer l’observation de ${formatTime(capture.timestamp)}`}
                         >
-                          🗑️
+                          <Trash aria-hidden="true" className="h-4 w-4" />
                         </button>
                       </div>
                       <div className="flex items-center justify-between px-3 py-2 text-xs">
-                        <span className="font-mono font-semibold text-zinc-800 dark:text-zinc-200">
-                          ⏱ T+ {formatTime(capture.timestamp)}
+                        <span className="inline-flex items-center gap-1 font-mono font-semibold text-zinc-800 dark:text-zinc-200">
+                          <Timer aria-hidden="true" className="h-3.5 w-3.5" /> T+{' '}
+                          {formatTime(capture.timestamp)}
                         </span>
                         <span className="text-zinc-500 dark:text-zinc-400">
                           #{index + 1} · {capture.circleCount} zone{capture.circleCount > 1 ? 's' : ''}
@@ -337,9 +343,9 @@ function SubmissionStepperModal({
                     <button
                       type="button"
                       onClick={handleRegenerateId}
-                      className="inline-flex h-10 items-center justify-center rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                     >
-                      🔄 Régénérer
+                      <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" /> Régénérer
                     </button>
                   </div>
                   <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
@@ -369,8 +375,8 @@ function SubmissionStepperModal({
             <div className="flex flex-col gap-5 text-center">
               {isSuccess ? (
                 <div className="py-6">
-                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-2xl text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400">
-                    ✓
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400">
+                    <Check aria-hidden="true" className="h-7 w-7" strokeWidth={2.5} />
                   </div>
                   <h3 className="mt-4 text-xl font-bold text-zinc-900 dark:text-zinc-50">
                     Soumission enregistrée avec succès !
@@ -386,7 +392,7 @@ function SubmissionStepperModal({
               ) : (
                 <div className="flex flex-col items-center py-4">
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400">
-                    ☁️
+                    <CloudUpload aria-hidden="true" className="h-6 w-6" />
                   </div>
                   <h3 className="mt-3 text-lg font-bold text-zinc-900 dark:text-zinc-100">
                     Prêt pour la transmission finale
@@ -446,9 +452,9 @@ function SubmissionStepperModal({
                   <button
                     type="button"
                     onClick={() => setCurrentStep((prev) => (prev - 1) as 1 | 2)}
-                    className="inline-flex h-9 items-center justify-center rounded-lg border border-zinc-300 px-4 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-zinc-300 px-4 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
-                    ← Précédent
+                    <ArrowLeft aria-hidden="true" className="h-4 w-4" /> Précédent
                   </button>
                 )}
               </div>
@@ -470,7 +476,8 @@ function SubmissionStepperModal({
                     disabled={captures.length === 0}
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-zinc-900 px-5 text-sm font-semibold text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
                   >
-                    Suivant : Identification →
+                    Suivant : Identification{' '}
+                    <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </button>
                 )}
 
@@ -481,7 +488,8 @@ function SubmissionStepperModal({
                     disabled={!effectiveIdentifier}
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-zinc-900 px-5 text-sm font-semibold text-white hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
                   >
-                    Suivant : Vérification →
+                    Suivant : Vérification{' '}
+                    <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </button>
                 )}
 

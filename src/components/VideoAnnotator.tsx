@@ -1,6 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { Camera, Film, Pause, Play, Send, Timer, Trash } from 'lucide-react'
 import type { CaptureRecord } from '@/lib/types'
 import SubmissionStepper from '@/components/SubmissionStepper'
 
@@ -75,7 +77,6 @@ export default function VideoAnnotator({
 
   // Gestion du stepper de soumission
   const [isStepperOpen, setIsStepperOpen] = useState(false)
-  const [submissionSuccessNotice, setSubmissionSuccessNotice] = useState<string | null>(null)
 
   const canAnnotate = isReady && !isPlaying && videoUrl !== null
 
@@ -131,7 +132,6 @@ export default function VideoAnnotator({
       return
     }
     setErrorMessage(null)
-    setSubmissionSuccessNotice(null)
     clearDrawing()
     setObservations([])
     setFileName(file.name)
@@ -289,28 +289,6 @@ export default function VideoAnnotator({
     <div className="flex w-full flex-col gap-4 lg:flex-row lg:items-start">
       {/* ——— Colonne principale : chargement + lecteur + commandes ——— */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
-        {/* Encart de succès après soumission */}
-        {submissionSuccessNotice && (
-          <div
-            role="status"
-            className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/60 dark:text-emerald-200"
-          >
-            <div className="flex items-center gap-2">
-              <span aria-hidden="true" className="text-base">
-                ✓
-              </span>
-              <span>{submissionSuccessNotice}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSubmissionSuccessNotice(null)}
-              className="text-xs font-semibold text-emerald-700 hover:underline dark:text-emerald-300"
-            >
-              Fermer
-            </button>
-          </div>
-        )}
-
         {/* Sélection du fichier vidéo */}
         <label
           htmlFor="video-upload"
@@ -328,7 +306,7 @@ export default function VideoAnnotator({
           />
           {fileName ? (
             <span className="inline-flex min-w-0 items-center gap-2 text-zinc-700 dark:text-zinc-300">
-              <span aria-hidden="true">🎞️</span>
+              <Film aria-hidden="true" className="h-4 w-4 shrink-0" />
               <span className="truncate font-medium">{fileName}</span>
             </span>
           ) : (
@@ -403,8 +381,9 @@ export default function VideoAnnotator({
             ) : null}
 
             {isPlaying ? (
-              <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
-                ▶ Lecture — mettez la vidéo sur pause pour annoter
+              <div className="pointer-events-none absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full bg-black/70 px-3 py-1 text-xs font-medium text-white">
+                <Play aria-hidden="true" className="h-3 w-3 fill-current" />
+                Lecture — mettez la vidéo sur pause pour annoter
               </div>
             ) : null}
           </div>
@@ -426,11 +405,11 @@ export default function VideoAnnotator({
             >
               {isPlaying ? (
                 <>
-                  <span aria-hidden="true">⏸</span> Pause
+                  <Pause aria-hidden="true" className="h-4 w-4" /> Pause
                 </>
               ) : (
                 <>
-                  <span aria-hidden="true">▶</span> Lecture
+                  <Play aria-hidden="true" className="h-4 w-4" /> Lecture
                 </>
               )}
             </button>
@@ -448,7 +427,10 @@ export default function VideoAnnotator({
                 className="w-full accent-red-600 disabled:opacity-40"
               />
               <div className="flex items-center justify-between font-mono text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
-                <span>⏱ {formatTime(currentTime)}</span>
+                <span className="inline-flex items-center gap-1">
+                  <Timer aria-hidden="true" className="h-3.5 w-3.5" />
+                  {formatTime(currentTime)}
+                </span>
                 <span>Durée {formatTime(duration)}</span>
               </div>
             </div>
@@ -461,7 +443,7 @@ export default function VideoAnnotator({
               disabled={!canAnnotate || annotations.length === 0}
               className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <span aria-hidden="true">📸</span> Capturer l’observation
+              <Camera aria-hidden="true" className="h-4 w-4" /> Capturer l’observation
             </button>
             <button
               type="button"
@@ -535,7 +517,7 @@ export default function VideoAnnotator({
                         title="Supprimer cette capture"
                         aria-label={`Supprimer l’observation #${observations.length - index}`}
                       >
-                        🗑️
+                        <Trash aria-hidden="true" className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
@@ -552,7 +534,7 @@ export default function VideoAnnotator({
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
                 >
                   <span>Soumettre la session ({observations.length})</span>
-                  <span aria-hidden="true">→</span>
+                  <Send aria-hidden="true" className="h-4 w-4" />
                 </button>
               </footer>
             )}
@@ -572,9 +554,9 @@ export default function VideoAnnotator({
           onSubmissionSuccess={() => {
             setObservations([])
             clearDrawing()
-            setSubmissionSuccessNotice(
-              'Vos observations ont été transmises et enregistrées avec succès en base de données.',
-            )
+            toast.success('Session soumise avec succès', {
+              description: 'Vos observations ont été transmises et enregistrées en base de données.',
+            })
           }}
         />
       )}

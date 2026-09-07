@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
+import { getCurrentAdmin } from '@/lib/auth'
 import type { ActionResult, ProjectDto } from '@/lib/types'
 
 type CreateProjectInput = {
@@ -18,9 +19,10 @@ type AddProjectPointInput = {
 }
 
 /**
- * Toutes les actions sont des points d'entrée publics (aucune session d'auth pour
- * l'instant, décision reportée à l'étape d'authentification) : chaque entrée est
- * donc validée et normalisée ici, jamais fait confiance au client.
+ * Actions d'administration : zone réservée aux administrateurs authentifiés.
+ * Chaque mutation commence par un garde `getCurrentAdmin()` (cookie de session signé,
+ * cf. src/lib/session.ts). Par ailleurs chaque entrée est validée et normalisée côté
+ * serveur : on ne fait jamais confiance au client.
  */
 
 /** Liste des projets non archivés avec leurs fenêtres temporelles triées. */
@@ -52,6 +54,9 @@ export async function listProjects(): Promise<ProjectDto[]> {
 
 /** Crée un nouveau projet d'observation. */
 export async function createProject(input: CreateProjectInput): Promise<ActionResult> {
+  if (!(await getCurrentAdmin())) {
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
+  }
   try {
     const title = (input?.title ?? '').trim()
     if (!title) {
@@ -77,6 +82,9 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
 
 /** Archive un projet (les observations liées sont conservées). */
 export async function archiveProject(projectId: string): Promise<ActionResult> {
+  if (!(await getCurrentAdmin())) {
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
+  }
   try {
     if (typeof projectId !== 'string' || !projectId.trim()) {
       return { ok: false, error: 'Identifiant de projet invalide.' }
@@ -114,6 +122,9 @@ function parseSeconds(value: unknown): number | null {
 
 /** Ajoute une fenêtre de validation temporelle (point) à un projet. */
 export async function addProjectPoint(input: AddProjectPointInput): Promise<ActionResult> {
+  if (!(await getCurrentAdmin())) {
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
+  }
   const projectId = typeof input?.projectId === 'string' ? input.projectId.trim() : ''
   const pointName = (input?.pointName ?? '').trim()
   const trameDebut = parseSeconds(input?.trameDebut)
@@ -173,6 +184,9 @@ export async function addProjectPoint(input: AddProjectPointInput): Promise<Acti
 
 /** Supprime une fenêtre temporelle (les observations restent, sans point rattaché). */
 export async function deleteProjectPoint(pointId: string): Promise<ActionResult> {
+  if (!(await getCurrentAdmin())) {
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
+  }
   try {
     if (typeof pointId !== 'string' || !pointId.trim()) {
       return { ok: false, error: 'Identifiant de point invalide.' }

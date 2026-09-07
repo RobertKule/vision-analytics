@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import Link from 'next/link'
+import { RefreshCw, TriangleAlert } from 'lucide-react'
 
 export default function GlobalError({
   error,
@@ -16,8 +17,8 @@ export default function GlobalError({
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center px-4 py-16 text-center sm:px-6">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-100 text-3xl text-red-600 dark:bg-red-950/80 dark:text-red-400">
-        ⚠️
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-100 text-red-600 dark:bg-red-950/80 dark:text-red-400">
+        <TriangleAlert aria-hidden="true" className="h-7 w-7" />
       </div>
 
       <p className="mt-6 text-xs font-bold uppercase tracking-widest text-red-600 dark:text-red-400">
@@ -43,13 +44,14 @@ export default function GlobalError({
           onClick={() => retry()}
           className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-red-600 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
         >
-          🔄 Réessayer l'opération
+          <RefreshCw aria-hidden="true" className="h-4 w-4" />
+          Réessayer l’opération
         </button>
         <Link
           href="/"
           className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-300 px-5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
-          Retour à l'accueil
+          Retour à l’accueil
         </Link>
       </div>
     </div>
