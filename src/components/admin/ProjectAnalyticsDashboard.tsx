@@ -5,10 +5,10 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
-  Download,
   ExternalLink,
   Eye,
   EyeOff,
+  FileSpreadsheet,
   FileText,
   LayoutDashboard,
   ScanLine,
@@ -17,7 +17,6 @@ import {
   X,
 } from 'lucide-react'
 import type { ObservationCaptureDto, ProjectAnalyticsDto } from '@/lib/types'
-import { generateScientificCsv, triggerCsvDownload } from '@/lib/exportHelpers'
 import Tabs from '@/components/ui/Tabs'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 import ClientChart from '@/components/charts/ClientChart'
@@ -58,6 +57,8 @@ const AXIS_TICK = { fontSize: 10, fill: '#8C8275' }
 
 type ProjectAnalyticsDashboardProps = {
   analytics: ProjectAnalyticsDto
+  /** Nom (ou email) affiché comme auteur du rapport imprimable. */
+  authorName?: string
 }
 
 type AnalyticsTab = 'overview' | 'inspection' | 'alertes'
@@ -90,7 +91,10 @@ function getConcordanceBadge(rate: number) {
   }
 }
 
-export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalyticsDashboardProps) {
+export default function ProjectAnalyticsDashboard({
+  analytics,
+  authorName = '',
+}: ProjectAnalyticsDashboardProps) {
   const { project, summary, pointsAnalytics, ghostPointsAnalytics, observersMetrics } = analytics
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview')
@@ -118,16 +122,6 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
   })
   const windowBars = buildWindowBars(pointsAnalytics)
   const hasWindows = pointsAnalytics.length > 0
-
-  // Exportation CSV scientifique complète
-  const handleExportCsv = () => {
-    const fileName = `vision-analytics-${project.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-rapport.csv`
-    const csvContent = generateScientificCsv(analytics)
-    triggerCsvDownload(fileName, csvContent)
-    toast.success('Export CSV téléchargé', {
-      description: 'Le rapport scientifique complet est prêt à être archivé ou publié.',
-    })
-  }
 
   const handleOpenReport = () => {
     setIsReportModalOpen(true)
@@ -168,14 +162,28 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
           >
             <FileText aria-hidden="true" className="h-3.5 w-3.5" /> Rapport PDF
           </button>
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={summary.totalObservations === 0}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3.5 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-          >
-            <Download aria-hidden="true" className="h-3.5 w-3.5" /> Exporter CSV
-          </button>
+          {summary.totalObservations === 0 ? (
+            <span
+              aria-disabled="true"
+              className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk opacity-40 dark:bg-milk dark:text-ink"
+              title="Aucune observation à exporter"
+            >
+              <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5" /> Export Global (Excel)
+            </span>
+          ) : (
+            <a
+              href={`/api/admin/projects/${project.id}/export-global-excel`}
+              onClick={() =>
+                toast.info('Préparation de l’Export Global (Excel)…', {
+                  description: 'Synthèse, matrice observateurs et relevé global (3 feuilles .xlsx).',
+                })
+              }
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+              title="Export Global (Excel) — Synthèse_Projet · Matrice_Observateurs · Données_Brutes_Globales"
+            >
+              <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5" /> Export Global (Excel)
+            </a>
+          )}
           <Link
             href={`/experience/${project.id}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft"
@@ -970,11 +978,12 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
         </div>
       )}
 
-      {/* ——— MODAL RAPPORT EXÉCUTIF IMPRIMABLE (PDF) ——— */}
+      {/* ——— MODAL RAPPORT SCIENTIFIQUE IMPRIMABLE (PDF) ——— */}
       <ExecutiveReportModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
         analytics={analytics}
+        authorName={authorName}
       />
     </div>
   )
