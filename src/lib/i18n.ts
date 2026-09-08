@@ -178,6 +178,17 @@ const en = {
     confirmSend: 'Confirm & send',
     fullscreenEnter: 'Enter fullscreen',
     fullscreenExit: 'Exit fullscreen',
+    // — Brouillon local & état de connexion (reprise de session) —
+    offlineWarning:
+      'You are offline. Your observations stay saved on this device and will be submitted once you are back online.',
+    offlineSubmitBlocked:
+      'You are offline. Your captures are safe locally — reconnect to submit them.',
+    draftStatus: 'Session auto-saved on this device.',
+    draftResumeTitle: 'An observation session is saved on this device',
+    draftResumeBody:
+      '{{n}} unsent observation(s), last saved {{saved}}, are still here. Resume to keep annotating, or discard them to start a fresh session.',
+    draftResumeAction: 'Resume session',
+    draftDiscardAction: 'Discard draft',
     // — Types d'observation configurables par l'administrateur —
     obsTypeLabel: 'Observation type',
     obsTypePlaceholder: 'Select a type…',
@@ -723,6 +734,17 @@ const fr: typeof en = {
     confirmSend: 'Confirmer & envoyer',
     fullscreenEnter: 'Plein écran',
     fullscreenExit: 'Quitter le plein écran',
+    // — Brouillon local & état de connexion (reprise de session) —
+    offlineWarning:
+      'Vous êtes hors ligne. Vos observations restent enregistrées sur cet appareil et seront soumises dès le retour en ligne.',
+    offlineSubmitBlocked:
+      'Vous êtes hors ligne. Vos captures sont conservées en local — reconnectez-vous pour les soumettre.',
+    draftStatus: 'Session enregistrée automatiquement sur cet appareil.',
+    draftResumeTitle: 'Une session d’observation est enregistrée sur cet appareil',
+    draftResumeBody:
+      '{{n}} observation(s) non envoyée(s), dernière sauvegarde {{saved}}, sont toujours présentes. Reprenez pour continuer à annoter, ou supprimez-les pour démarrer une nouvelle session.',
+    draftResumeAction: 'Reprendre la session',
+    draftDiscardAction: 'Supprimer le brouillon',
     // — Types d'observation configurables par l'administrateur —
     obsTypeLabel: 'Type d’observation',
     obsTypePlaceholder: 'Sélectionnez un type…',
