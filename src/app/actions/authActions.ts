@@ -118,7 +118,14 @@ export async function register(input: {
   return { ok: false, error: locale === 'fr' ? fr : en }
 }
 
-/** Connexion administrateur par email / mot de passe (compte géré en base de données). */
+/**
+ * Connexion administrateur par email / mot de passe (compte géré en base de données).
+ *
+ * Exige un rôle réellement ADMIN : si le compte authentifié est ANALYST ou OBSERVER,
+ * la session ouverte par `authenticateUser` est immédiatement révoquée et l'accès
+ * refusé — un non-administrateur ne doit jamais pénétrer la zone /admin, même en
+ * passant par l'URL de cette Server Action.
+ */
 export async function loginAdmin(input: { email: string; password: string }): Promise<AuthResult> {
   const email = (input?.email ?? '').trim()
   if (!email || !input?.password) {
@@ -133,6 +140,10 @@ export async function loginAdmin(input: { email: string; password: string }): Pr
           ? 'Ce compte a été désactivé. Contactez un administrateur.'
           : 'Identifiants invalides. Accès refusé.',
     }
+  }
+  if (result.session.role !== 'ADMIN') {
+    await closeSession()
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
   }
   return {
     ok: true,
