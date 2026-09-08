@@ -191,6 +191,29 @@ export function sanitizeBaseName(value: string): string {
   return cleaned || 'projet'
 }
 
+/** Libellé lisible d'une passe vidéo (nom → type → « Passe N » → nom de fichier). */
+export function videoDisplayName(
+  video: {
+    name?: string | null
+    typeLabel?: string | null
+    source?: string | null
+    orderIndex?: number | null
+  } | null | undefined,
+): string {
+  if (!video) return ''
+  const named = video.name?.trim()
+  if (named) return named
+  const typed = video.typeLabel?.trim()
+  if (typed) return typed
+  if (typeof video.orderIndex === 'number') return `Passe ${video.orderIndex + 1}`
+  const source = video.source?.trim() ?? ''
+  if (source) {
+    const leaf = source.split('/').pop() ?? source
+    return leaf.length > 40 ? `${leaf.slice(0, 37)}…` : leaf
+  }
+  return 'Vidéo'
+}
+
 /** Libellé lisible d'un observateur (username → email → identifiant anonyme). */
 export function observerLabelOf(row: Pick<
   ProjectObservationRowDto,
