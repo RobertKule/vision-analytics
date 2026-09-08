@@ -10,6 +10,8 @@ import {
   Crosshair,
   Edit2,
   Film,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   RotateCcw,
@@ -157,6 +159,28 @@ export default function VideoAnnotator({
   const [ended, setEnded] = useState(false)
   const [endPromptDismissed, setEndPromptDismissed] = useState(false)
   const [submittedCount, setSubmittedCount] = useState<number | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  /** Suit l'état du plein écran natif (bouton ou touche Échap) du lecteur. */
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(
+        Boolean(containerRef.current && document.fullscreenElement === containerRef.current),
+      )
+    }
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange)
+  }, [containerRef])
+
+  const toggleFullscreen = () => {
+    const scene = containerRef.current
+    if (!scene) return
+    if (document.fullscreenElement) {
+      void document.exitFullscreen()
+    } else if (typeof scene.requestFullscreen === 'function') {
+      void scene.requestFullscreen()
+    }
+  }
 
   const canAnnotate = isReady && !isPlaying && videoUrl !== null
 
@@ -655,11 +679,22 @@ export default function VideoAnnotator({
 
         {/* Scène vidéo + calque d'annotation */}
         {videoUrl ? (
-          <div ref={containerRef} className="relative w-full overflow-hidden rounded-xl bg-black">
+          <div
+            ref={containerRef}
+            className={
+              isFullscreen
+                ? 'relative flex h-full w-full items-center justify-center overflow-hidden bg-black'
+                : 'relative w-full overflow-hidden rounded-xl bg-black'
+            }
+          >
             <video
               ref={videoRef}
               src={videoUrl}
-              className="block h-auto w-full"
+              className={
+                isFullscreen
+                  ? 'block max-h-full w-full object-contain'
+                  : 'block h-auto w-full object-contain'
+              }
               playsInline
               preload="metadata"
               onClick={togglePlayback}
@@ -832,6 +867,20 @@ export default function VideoAnnotator({
                 </span>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              disabled={!isReady}
+              aria-label={isFullscreen ? t.annotator.fullscreenExit : t.annotator.fullscreenEnter}
+              title={isFullscreen ? t.annotator.fullscreenExit : t.annotator.fullscreenEnter}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-zinc-300 text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5"
+            >
+              {isFullscreen ? (
+                <Minimize2 aria-hidden="true" className="h-4 w-4" />
+              ) : (
+                <Maximize2 aria-hidden="true" className="h-4 w-4" />
+              )}
+            </button>
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-white/10">

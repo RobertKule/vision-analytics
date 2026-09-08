@@ -4,7 +4,6 @@ import {
   authenticateUser,
   closeAdminSession,
   getCurrentSession,
-  openAdminSession,
   registerUser,
   type RegisterableRole,
 } from '@/lib/auth'
@@ -21,11 +20,6 @@ export type SessionInfo = {
   role: SessionRole
 } | null
 
-function isDemoLoginAllowed(): boolean {
-  if (process.env.ALLOW_DEMO_LOGIN === 'true') return true
-  return process.env.NODE_ENV !== 'production'
-}
-
 /** Messages d'erreur localisés (EN / FR) selon la langue de l'interface. */
 function loginMessages(locale: Locale, code: 'invalid_credentials' | 'account_inactive') {
   const en =
@@ -37,14 +31,6 @@ function loginMessages(locale: Locale, code: 'invalid_credentials' | 'account_in
       ? 'Email / nom d’utilisateur ou mot de passe invalide.'
       : 'Ce compte a été désactivé. Contactez un administrateur.'
   return locale === 'fr' ? fr : en
-}
-
-/**
- * Indique si la connexion « Démo Admin » en 1 clic est disponible
- * (permis de masquer le bouton en production).
- */
-export async function isDemoLoginAvailable(): Promise<boolean> {
-  return isDemoLoginAllowed()
 }
 
 /** Expose la session courante au Navbar (mode visiteur / connecté). */
@@ -154,22 +140,6 @@ export async function loginAdmin(input: { email: string; password: string }): Pr
     username: result.session.username,
     role: result.session.role,
   }
-}
-
-/** Connexion « Démo Admin » en 1 clic (recette). Désactivée en production sauf ALLOW_DEMO_LOGIN. */
-export async function loginDemo(): Promise<AuthResult> {
-  if (!isDemoLoginAllowed()) {
-    return { ok: false, error: 'La connexion de démonstration est désactivée en production.' }
-  }
-  const session = await openAdminSession()
-  if (!session) {
-    return {
-      ok: false,
-      error:
-        'Compte administrateur indisponible. Vérifiez ADMIN_EMAIL et ADMIN_PASSWORD dans l’environnement.',
-    }
-  }
-  return { ok: true, email: session.email, username: session.username, role: session.role }
 }
 
 /** Déconnexion : supprime le cookie de session. */

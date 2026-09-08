@@ -423,7 +423,7 @@ function ProjectCard({ project }: { project: ProjectDto }) {
             href={`/observe/${project.id}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-600 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-red-500"
           >
-            <Eye aria-hidden="true" className="h-3.5 w-3.5" /> Tester en aveugle
+            <Eye aria-hidden="true" className="h-3.5 w-3.5" /> Ouvrir la session d’observation
           </Link>
           <button
             type="button"

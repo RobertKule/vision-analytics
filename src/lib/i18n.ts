@@ -33,6 +33,10 @@ const en = {
     themeDarkToast: 'Dark mode enabled',
     themeLightToast: 'Light mode enabled',
     themeToastDesc: 'Your preference is saved for this session.',
+    myWorkspace: 'My workspace',
+    menuOpenAria: 'Open the menu',
+    menuCloseAria: 'Close the menu',
+    profileAria: 'Open the account menu',
   },
   home: {
     eyebrow: 'Scientific video observation',
@@ -107,7 +111,7 @@ const en = {
     switchHint: 'Pick another experiment above to switch video.',
   },
   session: {
-    blindBadge: 'Double-blind protocol',
+    blindBadge: 'Double-blind scientific validation protocol',
     activeLabel: 'Active observation session',
     changeProject: 'Change experiment',
     guidelinesTitle: 'Observer guidelines',
@@ -172,9 +176,11 @@ const en = {
     confirmCancel: 'Cancel',
     confirmFollow: 'Continue observing',
     confirmSend: 'Confirm & send',
+    fullscreenEnter: 'Enter fullscreen',
+    fullscreenExit: 'Exit fullscreen',
   },
   stepper: {
-    kicker: 'Blind protocol',
+    kicker: 'Scientific validation protocol',
     title: 'Submit session — {{title}}',
     closeAria: 'Close dialog',
     progressAria: 'Submission progress',
@@ -225,7 +231,7 @@ const en = {
     timePrefix: 'T+',
   },
   completion: {
-    kicker: 'Blind session',
+    kicker: 'Blind observation session',
     title: 'Observation session complete',
     body:
       'Your annotated observations are now recorded in the secure scientific database. '
@@ -274,8 +280,6 @@ const en = {
     welcomeToast: 'Welcome, {{name}}!',
     loginSuccessToast: 'Signed in successfully',
     registerSuccessToast: 'Account created successfully',
-    demoAdmin: 'Admin demo (1 click)',
-    demoTag: 'Development only',
   },
   shell: {
     overview: 'Overview',
@@ -359,7 +363,7 @@ const en = {
     archiveYes: 'Archive',
     cancel: 'Cancel',
     openStats: 'Analytics',
-    openBlind: 'Test blind',
+    openBlind: 'Open the observation session',
     copySessionLink: 'Copy session link',
     emptyTitle: 'No project yet.',
     emptyHint: 'Create your first double-blind observation project to begin.',
@@ -445,6 +449,10 @@ const fr: typeof en = {
     themeDarkToast: 'Mode sombre activé',
     themeLightToast: 'Mode clair activé',
     themeToastDesc: 'Votre préférence est enregistrée pour cette session.',
+    myWorkspace: 'Mon espace de travail',
+    menuOpenAria: 'Ouvrir le menu',
+    menuCloseAria: 'Fermer le menu',
+    profileAria: 'Ouvrir le menu du compte',
   },
   home: {
     eyebrow: 'Observation scientifique de vidéos',
@@ -520,7 +528,7 @@ const fr: typeof en = {
     switchHint: 'Choisissez une autre expérience ci-dessus pour changer de vidéo.',
   },
   session: {
-    blindBadge: 'Protocole en double aveugle',
+    blindBadge: 'Protocole de validation scientifique en double aveugle',
     activeLabel: 'Session d’observation active',
     changeProject: 'Changer d’expérience',
     guidelinesTitle: 'Directives de l’observateur',
@@ -585,9 +593,11 @@ const fr: typeof en = {
     confirmCancel: 'Annuler',
     confirmFollow: 'Suivre',
     confirmSend: 'Confirmer & envoyer',
+    fullscreenEnter: 'Plein écran',
+    fullscreenExit: 'Quitter le plein écran',
   },
   stepper: {
-    kicker: 'Protocole en aveugle',
+    kicker: 'Protocole de validation scientifique',
     title: 'Soumission de la session — {{title}}',
     closeAria: 'Fermer la boîte de dialogue',
     progressAria: 'Progression de la soumission',
@@ -638,7 +648,7 @@ const fr: typeof en = {
     timePrefix: 'T+',
   },
   completion: {
-    kicker: 'Session en aveugle',
+    kicker: 'Session d’observation à l’aveugle',
     title: 'Session d’observation terminée',
     body:
       'Vos observations annotées sont désormais enregistrées dans la base scientifique sécurisée. '
@@ -688,8 +698,6 @@ const fr: typeof en = {
     welcomeToast: 'Bienvenue, {{name}} !',
     loginSuccessToast: 'Connexion réussie',
     registerSuccessToast: 'Compte créé avec succès',
-    demoAdmin: 'Démo Admin (1 clic)',
-    demoTag: 'Développement uniquement',
   },
   shell: {
     overview: 'Vue d’ensemble',
@@ -773,7 +781,7 @@ const fr: typeof en = {
     archiveYes: 'Archiver',
     cancel: 'Annuler',
     openStats: 'Statistiques',
-    openBlind: 'Tester en aveugle',
+    openBlind: 'Ouvrir la session d’observation',
     copySessionLink: 'Copier le lien de session',
     emptyTitle: 'Aucun projet pour le moment.',
     emptyHint: 'Créez votre premier projet d’observation en double aveugle pour commencer.',

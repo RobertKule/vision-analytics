@@ -5,8 +5,8 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Eye, EyeOff, Lock, LogIn, Sparkles, User } from 'lucide-react'
-import { login, loginDemo, type AuthResult } from '@/app/actions/authActions'
+import { ArrowLeft, Eye, EyeOff, Lock, LogIn, User } from 'lucide-react'
+import { login, type AuthResult } from '@/app/actions/authActions'
 import type { Locale, AuthText, RolesText } from '@/lib/i18n'
 import { homeForRole, resolvePostLoginRedirect } from '@/lib/navigation'
 
@@ -14,10 +14,9 @@ type LoginFormProps = {
   locale: Locale
   t: AuthText
   roleName: RolesText
-  demoAvailable: boolean
 }
 
-export default function LoginForm({ locale, t, roleName, demoAvailable }: LoginFormProps) {
+export default function LoginForm({ locale, t, roleName }: LoginFormProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -49,13 +48,6 @@ export default function LoginForm({ locale, t, roleName, demoAvailable }: LoginF
     setErrorMessage(null)
     startTransition(async () => {
       applyAuthResult(await login({ identifier, password, locale }))
-    })
-  }
-
-  const handleDemoLogin = () => {
-    setErrorMessage(null)
-    startTransition(async () => {
-      applyAuthResult(await loginDemo())
     })
   }
 
@@ -182,27 +174,6 @@ export default function LoginForm({ locale, t, roleName, demoAvailable }: LoginF
           )}
         </button>
       </form>
-
-      {/* ——— Connexion Démo 1-clic (développement) ——— */}
-      {demoAvailable ? (
-        <div className="mt-4">
-          <div className="flex items-center gap-3 text-[11px] font-medium uppercase tracking-widest text-[#8C8275] dark:text-zinc-500">
-            <span className="h-px flex-1 bg-[#E5E0D8] dark:bg-white/10" />
-            <span>{roleName.ADMIN}</span>
-            <span className="h-px flex-1 bg-[#E5E0D8] dark:bg-white/10" />
-          </div>
-          <button
-            type="button"
-            onClick={handleDemoLogin}
-            disabled={isPending}
-            className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed border-[#121417]/30 bg-white/50 text-sm font-semibold text-[#121417] transition-colors hover:bg-[#F4F0EA] disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/25 dark:bg-white/5 dark:text-[#FBF9F5] dark:hover:bg-white/10"
-          >
-            <Sparkles aria-hidden="true" className="h-4 w-4" />
-            {t.demoAdmin}
-          </button>
-          <p className="mt-2 text-center text-[11px] text-[#8C8275] dark:text-zinc-500">{t.demoTag}</p>
-        </div>
-      ) : null}
 
       {/* ——— Création de compte ——— */}
       <p className="mt-6 text-center text-sm text-[#4A4E57] dark:text-zinc-400">
