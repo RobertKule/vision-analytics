@@ -3,7 +3,8 @@
 import { revalidatePath, unstable_cache, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { uploadAnnotationToCloudinary } from '@/lib/cloudinary'
-import type { BlindProjectDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
+import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 import { Role } from '@prisma/client'
 
@@ -13,6 +14,53 @@ import { Role } from '@prisma/client'
  * lectures via `revalidateTag`.
  */
 const BLIND_PROJECTS_TAG = 'blind-projects'
+
+/** Identifiant de passe « vide » renvoyé pour la vidéo générique héritée (project.videoUrl). */
+const LEGACY_GENERIC_VIDEO_ID = ''
+
+const blindVideoSelect = {
+  id: true,
+  typeLabel: true,
+  name: true,
+  source: true,
+  orderIndex: true,
+} as const
+
+/**
+ * Construit la liste des passes vidéo exposées à l'observateur.
+ *
+ * — Un projet multi-vidéo expose ses `Video` (jamais leurs benchmarks).
+ * — Un projet hérité (vidéo unique, `videoUrl` sans enregistrement `Video`) est
+ *   représenté par une passe synthétique d'id `LEGACY_GENERIC_VIDEO_ID` : la
+ *   soumission omet alors `videoId` et le serveur matche les fenêtres génériques.
+ */
+function buildBlindVideos(project: {
+  videoUrl: string | null
+  videos: Array<{ id: string; typeLabel: string | null; name: string | null; source: string; orderIndex: number }>
+}): BlindVideoDto[] {
+  const rows = project.videos.map((video) => ({
+    id: video.id,
+    typeLabel: video.typeLabel,
+    name: video.name,
+    source: video.source,
+    orderIndex: video.orderIndex,
+  }))
+
+  if (rows.length > 0) return rows
+
+  const legacy = project.videoUrl
+  if (!legacy || !legacy.trim()) return []
+
+  return [
+    {
+      id: LEGACY_GENERIC_VIDEO_ID,
+      typeLabel: null,
+      name: deriveObservationNameFromVideo(legacy),
+      source: legacy,
+      orderIndex: 0,
+    },
+  ]
+}
 
 function isValidBase64Image(dataUrl: string): boolean {
   return typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')
@@ -35,6 +83,10 @@ async function queryBlindProject(projectId: string): Promise<BlindProjectDto | n
       videoUrl: true,
       observationTypes: true,
       createdAt: true,
+      videos: {
+        orderBy: { orderIndex: 'asc' },
+        select: blindVideoSelect,
+      },
     },
   })
 
@@ -47,6 +99,7 @@ async function queryBlindProject(projectId: string): Promise<BlindProjectDto | n
     videoUrl: project.videoUrl,
     observationTypes: project.observationTypes,
     createdAt: project.createdAt.toISOString(),
+    videos: buildBlindVideos(project),
   }
 }
 
@@ -60,6 +113,10 @@ async function queryBlindProjects(): Promise<BlindProjectDto[]> {
       videoUrl: true,
       observationTypes: true,
       createdAt: true,
+      videos: {
+        orderBy: { orderIndex: 'asc' },
+        select: blindVideoSelect,
+      },
     },
     orderBy: { createdAt: 'desc' },
   })
@@ -71,6 +128,7 @@ async function queryBlindProjects(): Promise<BlindProjectDto[]> {
     videoUrl: p.videoUrl,
     observationTypes: p.observationTypes,
     createdAt: p.createdAt.toISOString(),
+    videos: buildBlindVideos(p),
   }))
 }
 
@@ -204,7 +262,12 @@ export async function submitObservations(
     // Vérification du projet (isArchived + types d'observation configurés)
     const project = await prisma.project.findUnique({
       where: { id: projectId },
-      select: { id: true, isArchived: true, observationTypes: true },
+      select: {
+        id: true,
+        isArchived: true,
+        observationTypes: true,
+        videos: { select: { id: true, typeLabel: true } },
+      },
     })
 
     if (!project) {
@@ -227,11 +290,13 @@ export async function submitObservations(
     // Récupération de l'observateur (User)
     const user = await resolveObserverUser(identifier)
 
-    // Récupération sécurisée des fenêtres de validation définies par l'administrateur
+    // Récupération sécurisée des fenêtres de validation définies par l'administrateur.
+    // Chaque fenêtre est rattachée à une passe vidéo (`videoId`, null = passe générique).
     const validationPoints = await prisma.projectPoint.findMany({
       where: { projectId },
       select: {
         id: true,
+        videoId: true,
         trameDebut: true,
         trameFin: true,
       },
@@ -241,11 +306,39 @@ export async function submitObservations(
     const configuredTypes = project.observationTypes ?? []
     const configuredTypeSet = new Set(configuredTypes.map((type) => type.trim()))
 
+    // Passes vidéo « typées » : une capture émise depuis cette passe doit porter ce type exact.
+    const videoTypeById = new Map<string, string>()
+    for (const video of project.videos) {
+      if (video.typeLabel) videoTypeById.set(video.id, video.typeLabel.trim())
+    }
+
+    // Normalise l'identifiant vidéo d'une capture ('' synthétique = passe générique héritée).
+    const normalizeVideoId = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null
+      const trimmed = value.trim()
+      return trimmed === '' || trimmed === LEGACY_GENERIC_VIDEO_ID ? null : trimmed
+    }
+
     // Validation des types AVANT tout téléversement Cloudinary (échec rapide).
     for (let i = 0; i < observations.length; i++) {
       const rawType = observations[i]?.observationType
       const type = typeof rawType === 'string' ? rawType.trim() : ''
-      if (configuredTypes.length > 0) {
+      const videoId = normalizeVideoId(observations[i]?.videoId)
+      const typedLabel = videoId ? videoTypeById.get(videoId) : undefined
+
+      if (typedLabel) {
+        // Onglet typé : le type est imposé par l'association vidéo → type.
+        if (!type || type.toLowerCase() !== typedLabel.toLowerCase()) {
+          return {
+            ok: false,
+            error: msg(
+              `Capture #${i + 1} must be typed "${typedLabel}" (its video is bound to that type).`,
+              `La capture n°${i + 1} doit être typée « ${typedLabel} » (sa vidéo est rattachée à ce type).`,
+            ),
+          }
+        }
+      } else if (configuredTypes.length > 0) {
+        // Passe générique : le type doit exister dans la configuration du projet.
         if (!type) {
           return {
             ok: false,
@@ -274,6 +367,7 @@ export async function submitObservations(
       pointId: string | null
       isGhostPoint: boolean
       observationType: string | null
+      videoId: string | null
     }> = []
 
     for (const obs of observations) {
@@ -283,9 +377,17 @@ export async function submitObservations(
         configuredTypes.length > 0 && typeof obs.observationType === 'string'
           ? obs.observationType.trim()
           : null
+      const videoId = normalizeVideoId(obs.videoId)
+
+      // Une capture n'est évaluée que contre les fenêtres de SA passe vidéo (ou contre
+      // les fenêtres génériques pour la passe héritée) — jamais contre celles d'une autre vidéo.
+      const scopedPoints =
+        videoId === null
+          ? validationPoints.filter((point) => point.videoId === null)
+          : validationPoints.filter((point) => point.videoId === videoId)
 
       // Recherche d'une fenêtre de validation correspondante
-      const matchedPoint = validationPoints.find(
+      const matchedPoint = scopedPoints.find(
         (point) => timestampTotal >= point.trameDebut && timestampTotal <= point.trameFin,
       )
 
@@ -295,6 +397,7 @@ export async function submitObservations(
         pointId: matchedPoint ? matchedPoint.id : null,
         isGhostPoint: !matchedPoint, // Si aucune fenêtre ne correspond => Point Fantôme (fausse alerte)
         observationType,
+        videoId,
       })
     }
 
@@ -303,6 +406,7 @@ export async function submitObservations(
       data: uploadedRecords.map((record) => ({
         projectId,
         userId: user.id,
+        videoId: record.videoId,
         pointId: record.pointId,
         timestampTotal: record.timestampTotal,
         imageUrl: record.imageUrl,
