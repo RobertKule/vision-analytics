@@ -271,7 +271,9 @@ export default function ProjectOverviewTab({ project, points, videos }: ProjectO
         </h3>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
           Ces fenêtres restent invisibles pour les observateurs : elles servent à attribuer chaque
-          capture à un point (ou à une fausse alerte) lors de l’analyse.
+          capture à un point (ou à une fausse alerte) lors de l’analyse. Chaque fenêtre est
+          rattachée à une vidéo (donc à son type) : une capture n’est validée que par les fenêtres
+          de la vidéo observée.
         </p>
 
         {project.isArchived ? (
@@ -281,7 +283,7 @@ export default function ProjectOverviewTab({ project, points, videos }: ProjectO
           </p>
         ) : (
           <div className="mt-4">
-            <ValidationWindowsPanel projectId={project.id} points={points} />
+            <ValidationWindowsPanel projectId={project.id} points={points} videos={videos} />
           </div>
         )}
       </section>
