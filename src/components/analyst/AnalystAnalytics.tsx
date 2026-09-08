@@ -1,14 +1,18 @@
 'use client'
 
 import { useState } from 'react'
+import { toast } from 'sonner'
 import {
   ChartColumn,
   ChartPie,
+  Download,
   FileJson2,
   FileSpreadsheet,
   FolderArchive,
   Ghost,
+  Loader2,
   Printer,
+  RotateCcw,
   Target,
   Timer,
   Users,
@@ -18,10 +22,14 @@ import type { Locale, AnalyticsText } from '@/lib/i18n'
 import ClientChart from '@/components/charts/ClientChart'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 import { buildSplitSlices, buildWindowBars } from '@/components/charts/chartData'
+import { getProjectAnalytics } from '@/app/actions/analyticsActions'
+import { friendlyActionError } from '@/lib/actionError'
+import { downloadChartPng } from '@/lib/chartPngExport'
 import {
   buildAnalyticsObservationJson,
   sanitizeBaseName,
   triggerFileDownload,
+  videoDisplayName,
 } from '@/lib/exportHelpers'
 import {
   Bar,
@@ -67,14 +75,84 @@ function shortId(id: string): string {
   return id.slice(0, 6)
 }
 
-export default function AnalystAnalytics({ t, analytics, authorName = '' }: AnalystAnalyticsProps) {
+export default function AnalystAnalytics({
+  locale,
+  t,
+  analytics: initialAnalytics,
+  authorName = '',
+}: AnalystAnalyticsProps) {
+  // L'analyse vit en état local : le filtre Type / Vidéo déclenche un RECALCUL
+  // CÔTÉ SERVEUR — les KPIs, graphiques et concordances suivent toujours le
+  // sous-ensemble réellement sélectionné (jamais une simple coupe frontend).
+  const [analytics, setAnalytics] = useState<ProjectAnalyticsDto>(initialAnalytics)
+
+  // Filtre réellement appliqué (renvoyé par le serveur) : vérité affichée.
+  const appliedFilter = analytics.summary.appliedFilter
+  const appliedType = appliedFilter?.observationType ?? ''
+  const appliedVideoId = appliedFilter?.videoId ?? ''
+  // Brouillon du formulaire (appliqué au clic sur « Recalculer »).
+  const [draftType, setDraftType] = useState<string>(appliedType)
+  const [draftVideo, setDraftVideo] = useState<string>(appliedVideoId)
+  const [filtering, setFiltering] = useState(false)
+
+  const appliedVideoLabel = videoDisplayName(
+    (analytics.project.videos ?? []).find((video) => video.id === appliedVideoId),
+  )
+  const contextParts: string[] = []
+  if (appliedType) contextParts.push(appliedType)
+  if (appliedVideoId && appliedVideoLabel && appliedVideoLabel !== '—') {
+    contextParts.push(appliedVideoLabel)
+  }
+  const hasAppliedFilter = contextParts.length > 0
+  const chartTitleSuffix = hasAppliedFilter ? ` — ${contextParts.join(' · ')}` : ''
+  const pngContextBanner = [
+    appliedType ? `Type : ${appliedType}` : '',
+    appliedVideoId && appliedVideoLabel && appliedVideoLabel !== '—'
+      ? `Vidéo : ${appliedVideoLabel}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const draftDirty = draftType.trim() !== appliedType || draftVideo.trim() !== appliedVideoId
+
+  const runServerFilter = (nextType: string, nextVideo: string) => {
+    setFiltering(true)
+    const projectId = analytics.project.id
+    void getProjectAnalytics(projectId, {
+      observationType: nextType ? nextType : undefined,
+      videoId: nextVideo ? nextVideo : undefined,
+    })
+      .then((result) => {
+        if (!result) return // projet inaccessible : on conserve l'état précédent
+        setAnalytics(result)
+        // Le filtre observateur (couche client) ne s'applique plus au nouveau contexte.
+        setSelectedObserverId('')
+      })
+      .catch((error: unknown) => {
+        toast.error(t.filterApply, {
+          description: friendlyActionError(error, locale === 'fr' ? 'fr' : 'en'),
+        })
+      })
+      .finally(() => setFiltering(false))
+  }
+
+  const handleApplyFilter = () => {
+    if (!draftDirty || filtering) return
+    runServerFilter(draftType.trim(), draftVideo.trim())
+  }
+
+  const handleResetFilterDraft = () => {
+    setDraftType(appliedType)
+    setDraftVideo(appliedVideoId)
+  }
+
   const summary = analytics.summary
   const hasWindows = analytics.pointsAnalytics.length > 0
   const hasData = summary.totalObservations > 0
   const totalGhostBuckets = analytics.ghostPointsAnalytics.timelineDistribution
   const maxBucket = Math.max(1, ...totalGhostBuckets.map((bucket) => bucket.count))
 
-  // Filtre d'observateur pour les visualisations (« '' » = tous).
+  // Filtre d'observateur pour les visualisations (« '' » = tous) — couche client.
   const [selectedObserverId, setSelectedObserverId] = useState('')
   const [isReportOpen, setIsReportOpen] = useState(false)
   const selectedObserver = analytics.observersMetrics.find(
@@ -95,6 +173,25 @@ export default function AnalystAnalytics({ t, analytics, authorName = '' }: Anal
   const windowBars = buildWindowBars(analytics.pointsAnalytics, observerAnonymousId)
 
   const exportBase = sanitizeBaseName(analytics.project.title)
+
+  // ——— Téléchargement PNG du graphique réellement visible (SVG sérialisé → canvas) ———
+  const exportChartPng = (chartId: string, fileName: string, chartTitle: string) => {
+    void downloadChartPng({
+      chartId,
+      fileName: `${exportBase}_${fileName}`,
+      projectTitle: analytics.project.title,
+      chartTitle,
+      context: pngContextBanner || undefined,
+      legend: [
+        { color: COLOR_GOLD, label: t.chartValid },
+        { color: COLOR_SLATE, label: t.chartGhost },
+      ],
+    }).catch((error: unknown) => {
+      toast.error(t.chartExportErrorTitle, {
+        description: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
 
   const handleExportJson = () => {
     triggerFileDownload(
@@ -137,6 +234,82 @@ export default function AnalystAnalytics({ t, analytics, authorName = '' }: Anal
           Timer,
           'bg-zinc-700',
         )}
+      </section>
+
+      {/* ——— Filtres Type / Vidéo — recalcul côté serveur ——— */}
+      <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            {t.filterType}
+            <select
+              value={draftType}
+              disabled={filtering}
+              onChange={(event) => setDraftType(event.target.value)}
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-milk dark:focus:ring-milk/15"
+            >
+              <option value="">{t.filterTypeAll}</option>
+              {(analytics.project.observationTypes ?? []).map((observationType) => (
+                <option key={observationType} value={observationType}>
+                  {observationType}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            {t.filterVideo}
+            <select
+              value={draftVideo}
+              disabled={filtering}
+              onChange={(event) => setDraftVideo(event.target.value)}
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-milk dark:focus:ring-milk/15"
+            >
+              <option value="">{t.filterVideoAll}</option>
+              {(analytics.project.videos ?? []).map((video) => (
+                <option key={video.id} value={video.id}>
+                  {videoDisplayName(video)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            type="button"
+            onClick={handleApplyFilter}
+            disabled={!draftDirty || filtering}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+          >
+            {filtering ? (
+              <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+            ) : null}
+            {filtering ? t.filterUpdate : t.filterApply}
+          </button>
+
+          {draftDirty ? (
+            <button
+              type="button"
+              onClick={handleResetFilterDraft}
+              disabled={filtering}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3.5 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+              {t.filterReset}
+            </button>
+          ) : null}
+        </div>
+
+        <p className="mt-3 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          {hasAppliedFilter ? (
+            <>
+              {t.filterApplied}{' '}
+              <span className="font-semibold text-gold-700 dark:text-gold-400">
+                {contextParts.join(' · ')}
+              </span>
+            </>
+          ) : (
+            t.filterAll
+          )}
+        </p>
       </section>
 
       {/* ——— Exports scientifiques & rapport imprimable ——— */}
@@ -354,12 +527,30 @@ export default function AnalystAnalytics({ t, analytics, authorName = '' }: Anal
           <div className="mt-5 grid items-stretch gap-6 lg:grid-cols-2">
             {/* Valides vs Fantômes */}
             <div className="rounded-xl border border-zinc-200 p-4 dark:border-white/10">
-              <h3 className="flex items-center gap-2 text-sm font-bold text-zinc-900 dark:text-zinc-50">
-                <ChartPie aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-                {observerFiltered ? t.chartSplitTitle : t.chartSplitAllTitle}
-              </h3>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                  <ChartPie aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
+                  {observerFiltered ? t.chartSplitTitle : t.chartSplitAllTitle}
+                  {chartTitleSuffix}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() =>
+                    exportChartPng(
+                      'ventilation',
+                      'validites_fantomes',
+                      `${observerFiltered ? t.chartSplitTitle : t.chartSplitAllTitle}${chartTitleSuffix}`,
+                    )
+                  }
+                  title={t.pngDownload}
+                  aria-label={`${t.pngDownload} — ${observerFiltered ? t.chartSplitTitle : t.chartSplitAllTitle}`}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-2.5 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  <Download aria-hidden="true" className="h-3.5 w-3.5" /> PNG
+                </button>
+              </div>
               <div className="mt-2 flex items-center justify-center gap-6">
-                <div className="h-48 w-full max-w-[15rem]">
+                <div className="h-48 w-full max-w-[15rem]" data-chart-export="ventilation">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Tooltip contentStyle={TOOLTIP_STYLE} />
@@ -404,20 +595,39 @@ export default function AnalystAnalytics({ t, analytics, authorName = '' }: Anal
 
             {/* Captures par fenêtre cible */}
             <div className="rounded-xl border border-zinc-200 p-4 dark:border-white/10">
-              <h3 className="flex items-center gap-2 text-sm font-bold text-zinc-900 dark:text-zinc-50">
-                <ChartColumn
-                  aria-hidden="true"
-                  className="h-4 w-4 text-gold-700 dark:text-gold-400"
-                />
-                {t.chartWindowTitle}
-              </h3>
+              <div className="flex items-start justify-between gap-3">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-zinc-900 dark:text-zinc-50">
+                  <ChartColumn
+                    aria-hidden="true"
+                    className="h-4 w-4 text-gold-700 dark:text-gold-400"
+                  />
+                  {t.chartWindowTitle}
+                  {chartTitleSuffix}
+                </h3>
+                <button
+                  type="button"
+                  disabled={!hasWindows}
+                  onClick={() =>
+                    exportChartPng(
+                      'fenetres',
+                      'captures_par_fenetre',
+                      `${t.chartWindowTitle}${chartTitleSuffix}`,
+                    )
+                  }
+                  title={t.pngDownload}
+                  aria-label={`${t.pngDownload} — ${t.chartWindowTitle}`}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-2.5 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                >
+                  <Download aria-hidden="true" className="h-3.5 w-3.5" /> PNG
+                </button>
+              </div>
               {!hasWindows ? (
                 <p className="mt-6 px-2 text-center text-xs text-zinc-500 dark:text-zinc-400">
                   {t.chartWindowsEmpty}
                 </p>
               ) : (
                 <ClientChart>
-                  <div className="h-56 w-full">
+                  <div className="h-56 w-full" data-chart-export="fenetres">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={windowBars}
