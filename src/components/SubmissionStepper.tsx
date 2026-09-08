@@ -17,6 +17,11 @@ import type { CaptureRecord, SubmissionResultDto } from '@/lib/types'
 import { submitObservations } from '@/app/actions/observationActions'
 import type { Locale, StepperText } from '@/lib/i18n'
 import { computeTypeCompletion } from '@/lib/captureCompletion'
+import {
+  getAnonymousObserverId,
+  newSessionToken,
+  rotateAnonymousObserverId,
+} from '@/lib/draftStore'
 
 type SubmissionStepperProps = {
   isOpen: boolean
@@ -61,20 +66,6 @@ function pluralLabel(unit: { one: string; many: string }, count: number): string
  */
 const SUBMIT_BATCH_SIZE = 5
 
-function getStoredOrNewAnonymousId(): string {
-  if (typeof window === 'undefined') return ''
-  const stored = localStorage.getItem('va_observer_anonymous_id')
-  if (stored && stored.trim()) return stored.trim()
-
-  const newId =
-    typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : `obs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-
-  localStorage.setItem('va_observer_anonymous_id', newId)
-  return newId
-}
-
 export default function SubmissionStepper(props: SubmissionStepperProps) {
   if (!props.isOpen) return null
   return <SubmissionStepperModal {...props} />
@@ -94,7 +85,12 @@ function SubmissionStepperModal({
 }: Omit<SubmissionStepperProps, 'isOpen'>) {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1)
   const [identityMode, setIdentityMode] = useState<'anonymous' | 'email'>('anonymous')
-  const [anonymousId, setAnonymousId] = useState<string>(getStoredOrNewAnonymousId)
+  const [anonymousId, setAnonymousId] = useState<string>(getAnonymousObserverId)
+  /**
+   * Jeton de cette « session » logique, stable pour tous les lots d'une même soumission
+   * (y compris une reprise après échec partiel) : comptage de sessions sans doublon.
+   */
+  const [sessionRunId] = useState<string>(newSessionToken)
   const [email, setEmail] = useState<string>('')
   const [errorNotice, setErrorNotice] = useState<string | null>(null)
   const [isSuccess, setIsSuccess] = useState(false)
@@ -129,12 +125,7 @@ function SubmissionStepperModal({
   const gapsPresent = completion.totalRequired > 0 && !completion.allRequiredCovered
 
   const handleRegenerateId = () => {
-    const newId =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : `obs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-    localStorage.setItem('va_observer_anonymous_id', newId)
-    setAnonymousId(newId)
+    setAnonymousId(rotateAnonymousObserverId())
   }
 
   const effectiveIdentifier =
@@ -196,11 +187,15 @@ function SubmissionStepperModal({
             projectId,
             observerIdentifier: effectiveIdentifier,
             locale,
+            runId: sessionRunId,
             observations: chunk.map((c) => ({
               timestamp: c.timestamp,
               imageDataUrl: c.imageDataUrl,
               observationType: c.observationType,
               videoId: c.videoId,
+              // Clé de déduplication stable (id local de la capture) : re-soumettre un
+              // brouillon déjà partiellement enregistré ne crée jamais de doublon serveur.
+              clientKey: c.id,
             })),
           })
 
