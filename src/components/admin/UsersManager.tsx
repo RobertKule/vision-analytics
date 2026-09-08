@@ -17,6 +17,7 @@ import { fill } from '@/lib/i18n'
 import type { SessionRole } from '@/lib/session'
 import Sheet from '@/components/ui/Sheet'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
+import { friendlyActionError } from '@/lib/actionError'
 
 type UsersManagerProps = {
   locale: Locale
@@ -44,7 +45,7 @@ export default function UsersManager({ locale, t, roleName, currentUserId, users
         <span className="text-xs text-zinc-400 dark:text-zinc-500">{t.subtitle}</span>
       </div>
 
-      <MembersTable users={users} currentUserId={currentUserId} t={t} roleName={roleName} />
+      <MembersTable users={users} currentUserId={currentUserId} t={t} roleName={roleName} locale={locale} />
 
       {adding ? (
         <AddUserSheet
@@ -67,11 +68,13 @@ function MembersTable({
   currentUserId,
   t,
   roleName,
+  locale,
 }: {
   users: UserAdminDto[]
   currentUserId: string
   t: UsersText
   roleName: RolesText
+  locale: Locale
 }) {
   const router = useRouter()
 
@@ -83,10 +86,14 @@ function MembersTable({
       toast.error(t.selfProtected)
       return
     }
-    void setUserRole({ userId: user.id, role: role as UserAdminRole }).then((r) => {
-      router.refresh()
-      if (!r.ok) toast.error(t.actionFailed, { description: r.error })
-    })
+    void setUserRole({ userId: user.id, role: role as UserAdminRole })
+      .then((r) => {
+        router.refresh()
+        if (!r.ok) toast.error(t.actionFailed, { description: r.error })
+      })
+      .catch((error: unknown) => {
+        toast.error(t.actionFailed, { description: friendlyActionError(error, locale) })
+      })
   }
 
   const toggleActive = (user: UserAdminDto) => {
@@ -94,19 +101,27 @@ function MembersTable({
       toast.error(t.selfProtected)
       return
     }
-    void setUserActive({ userId: user.id, active: !user.isActive }).then((r) => {
-      router.refresh()
-      if (r.ok) toast.success(user.isActive ? t.deactivated : t.reactivated)
-      else toast.error(t.actionFailed, { description: r.error })
-    })
+    void setUserActive({ userId: user.id, active: !user.isActive })
+      .then((r) => {
+        router.refresh()
+        if (r.ok) toast.success(user.isActive ? t.deactivated : t.reactivated)
+        else toast.error(t.actionFailed, { description: r.error })
+      })
+      .catch((error: unknown) => {
+        toast.error(t.actionFailed, { description: friendlyActionError(error, locale) })
+      })
   }
 
   const runDelete = (user: UserAdminDto) => {
-    void deleteUserByAdmin({ userId: user.id }).then((r) => {
-      router.refresh()
-      if (r.ok) toast.success(t.removed)
-      else toast.error(t.actionFailed, { description: r.error })
-    })
+    void deleteUserByAdmin({ userId: user.id })
+      .then((r) => {
+        router.refresh()
+        if (r.ok) toast.success(t.removed)
+        else toast.error(t.actionFailed, { description: r.error })
+      })
+      .catch((error: unknown) => {
+        toast.error(t.actionFailed, { description: friendlyActionError(error, locale) })
+      })
   }
 
   const askDelete = (user: UserAdminDto) => {
@@ -259,7 +274,9 @@ function AddUserSheet({
   const doCreate = () => {
     if (!step1Valid) return
     startTransition(async () => {
-      const result = await createUserByAdmin({ username, email, password, role, locale })
+      const result = await createUserByAdmin({ username, email, password, role, locale }).catch(
+        (error: unknown) => ({ ok: false, error: friendlyActionError(error, locale) }),
+      )
       if (result.ok) {
         toast.success(t.created)
         router.refresh()

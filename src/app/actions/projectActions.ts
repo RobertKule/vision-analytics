@@ -18,6 +18,7 @@ type CreateProjectInput = {
   title: string
   description?: string | null
   videoUrl?: string | null
+  observationTypes?: string[]
 }
 
 type AddProjectPointInput = {
@@ -25,6 +26,27 @@ type AddProjectPointInput = {
   pointName: string
   trameDebut: number
   trameFin: number
+}
+
+/**
+ * Nettoie une liste de types d'observation : chaque entrée est trimée, dédupliquée,
+ * limitée en longueur, et les valeurs vides sont retirées (liste plafonnée à 40).
+ */
+function sanitizeObservationTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (!trimmed || trimmed.length > 80) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(trimmed)
+    if (result.length >= 40) break
+  }
+  return result
 }
 
 /**
@@ -54,6 +76,7 @@ export async function listProjects(): Promise<ProjectDto[]> {
     title: project.title,
     description: project.description,
     videoUrl: project.videoUrl,
+    observationTypes: project.observationTypes,
     createdAt: project.createdAt.toISOString(),
     observationCount: project._count.observations,
     points: project.points.map((point) => ({
@@ -111,6 +134,7 @@ export async function getAdminProjectDetail(
     isGhostPoint: obs.isGhostPoint,
     imageUrl: obs.imageUrl,
     createdAt: obs.createdAt.toISOString(),
+    observationType: obs.observationType,
     pointId: obs.pointId,
     pointLabel: obs.point?.pointName ?? null,
     observerId: obs.user.id,
@@ -126,6 +150,7 @@ export async function getAdminProjectDetail(
       description: project.description,
       videoUrl: project.videoUrl,
       isArchived: project.isArchived,
+      observationTypes: project.observationTypes,
       createdAt: project.createdAt.toISOString(),
       observationCount: rows.length,
       observerCount: new Set(rows.map((row) => row.observerId)).size,
@@ -157,6 +182,7 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
         title,
         description: input?.description?.trim() || null,
         videoUrl: input?.videoUrl?.trim() || null,
+        observationTypes: sanitizeObservationTypes(input?.observationTypes),
       },
       select: { id: true },
     })
@@ -169,6 +195,65 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
   } catch (error) {
     console.error('Erreur lors de la création du projet :', error)
     return { ok: false, error: 'Impossible de créer le projet. Réessayez.' }
+  }
+}
+
+/**
+ * Met à jour la liste des types d'observation proposés aux observateurs.
+ * Mutation réservée aux administrateurs ; le projet archivé est exclu.
+ */
+export async function updateProjectObservationTypes(
+  projectId: string,
+  observationTypes: string[],
+): Promise<ActionResult> {
+  if (!(await getCurrentAdmin())) {
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
+  }
+  try {
+    const id = typeof projectId === 'string' ? projectId.trim() : ''
+    if (!id) {
+      return { ok: false, error: 'Identifiant de projet invalide.' }
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id },
+      select: { isArchived: true },
+    })
+    if (!project) {
+      return { ok: false, error: 'Projet introuvable.' }
+    }
+    if (project.isArchived) {
+      return { ok: false, error: 'Ce projet est archivé : la configuration est figée.' }
+    }
+
+    const cleaned = sanitizeObservationTypes(observationTypes)
+
+    // Supprime les types obsolètes des observations passées (elles deviennent « sans type »)
+    // afin que la liste proposée reste toujours cohérente avec les données enregistrées.
+    await prisma.$transaction([
+      prisma.observation.updateMany({
+        where: {
+          projectId: id,
+          ...(cleaned.length > 0
+            ? { observationType: { notIn: cleaned } }
+            : { observationType: { not: null } }),
+        },
+        data: { observationType: null },
+      }),
+      prisma.project.update({
+        where: { id },
+        data: { observationTypes: cleaned },
+      }),
+    ])
+
+    revalidatePath('/admin/projects')
+    revalidatePath('/observe')
+    revalidatePath('/experience')
+    updateTag(BLIND_PROJECTS_TAG)
+    return { ok: true }
+  } catch (error) {
+    console.error('Erreur lors de la mise à jour des types d’observation :', error)
+    return { ok: false, error: 'Impossible d’enregistrer les types d’observation. Réessayez.' }
   }
 }
 

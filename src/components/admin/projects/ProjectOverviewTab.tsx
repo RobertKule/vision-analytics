@@ -3,11 +3,13 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Archive, Calendar, ChartColumn, Copy, Eye, Film, Microscope, Users } from 'lucide-react'
+import { Archive, Calendar, ChartColumn, Copy, Eye, FileDown, Film, Microscope, Tags, Users } from 'lucide-react'
 import type { AdminProjectDetailDto, ProjectPointDto } from '@/lib/types'
 import { archiveProject } from '@/app/actions/projectActions'
 import { ValidationWindowsPanel } from '@/components/admin/projects/PointWindows'
+import ProjectObservationTypesPanel from '@/components/admin/projects/ProjectObservationTypesPanel'
 import { copyToClipboard, formatDate, formatDateTime } from '@/components/admin/projects/projectFormat'
+import { friendlyActionError } from '@/lib/actionError'
 
 type ProjectOverviewTabProps = {
   project: AdminProjectDetailDto['project']
@@ -43,7 +45,10 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
   }
 
   const runArchive = async () => {
-    const result = await archiveProject(project.id)
+    const result = await archiveProject(project.id).catch((error: unknown) => ({
+      ok: false,
+      error: friendlyActionError(error, 'fr'),
+    }))
     if (result.ok) {
       toast.success('Projet archivé', {
         description: `« ${project.title} » est masqué de la liste active.`,
@@ -123,6 +128,28 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
             >
               <Copy aria-hidden="true" className="h-3.5 w-3.5" /> Copier le lien
             </button>
+            {project.observationCount > 0 ? (
+              <a
+                href={`/api/admin/projects/${project.id}/export-global`}
+                onClick={() =>
+                  toast.info('Préparation de l’Export Global…', {
+                    description: 'Le téléchargement démarre à la fin de la génération du ZIP.',
+                  })
+                }
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:border-gold-500/60 hover:bg-gold-500/5 hover:text-gold-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-gold-400/50 dark:hover:bg-gold-400/5 dark:hover:text-gold-200"
+                title="Export Global du Projet — relevé complet + données et images de chaque observateur (.zip)"
+              >
+                <FileDown aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
+                Export Global du Projet
+              </a>
+            ) : (
+              <span
+                className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-600"
+                title="Aucune observation à exporter pour le moment."
+              >
+                <FileDown aria-hidden="true" className="h-3.5 w-3.5" /> Export Global du Projet
+              </span>
+            )}
             {!project.isArchived ? (
               <button
                 type="button"
@@ -164,6 +191,31 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
           <div className="mt-4">
             <ValidationWindowsPanel projectId={project.id} points={points} />
           </div>
+        )}
+      </section>
+
+      {/* ——— Types d'observation (configuration observateurs) ——— */}
+      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+          <Tags aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
+          Types d’observation
+        </h3>
+        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+          Catégories que les observateurs choisissent pour qualifier chaque capture lors de leur
+          session (ex. « 100m oblique », « Faune détectée », « Bâtiment / Infrastructures »).
+        </p>
+
+        {project.isArchived ? (
+          <p className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-xs text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400">
+            Projet archivé : la liste des types d’observation est figée. Désarchivez (réactivation)
+            pour la modifier.
+          </p>
+        ) : (
+          <ProjectObservationTypesPanel
+            projectId={project.id}
+            observationTypes={project.observationTypes}
+            archived={false}
+          />
         )}
       </section>
 

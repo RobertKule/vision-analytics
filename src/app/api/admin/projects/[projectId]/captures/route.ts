@@ -4,69 +4,21 @@ import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { sanitizeBaseName } from '@/lib/exportHelpers'
+import {
+  buildObserverWorkbookBuffer,
+  fetchImage,
+  formatClock,
+  mapLimited,
+  MAX_CONCURRENCY,
+  mmssFileToken,
+  observerKeyName,
+  type CloudinaryImage,
+} from '@/lib/serverExport'
 
 export const dynamic = 'force-dynamic'
 
 type CapturesContext = {
   params: Promise<{ projectId: string }>
-}
-
-const MAX_CONCURRENCY = 6
-const FETCH_TIMEOUT_MS = 30_000
-
-type CloudinaryImage = { buffer: Buffer; extension: string }
-
-/** Télécharge une image distante avec délai d'abandon ; null si indisponible. */
-async function fetchImage(url: string): Promise<CloudinaryImage | null> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-  try {
-    const response = await fetch(url, { signal: controller.signal })
-    if (!response.ok) return null
-    const content = await response.arrayBuffer()
-    const mime = response.headers.get('content-type')?.toLowerCase() ?? ''
-    const extension = extensionFromMime(mime) ?? extensionFromPath(url) ?? 'png'
-    return { buffer: Buffer.from(content), extension }
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timeout)
-  }
-}
-
-function extensionFromMime(mime: string): string | null {
-  if (mime.includes('image/png')) return 'png'
-  if (mime.includes('image/jpeg') || mime.includes('image/jpg')) return 'jpg'
-  if (mime.includes('image/webp')) return 'webp'
-  if (mime.includes('image/gif')) return 'gif'
-  return null
-}
-
-function extensionFromPath(url: string): string | null {
-  const match = /\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(url.split('?')[0] ?? url)
-  return match?.[1]?.toLowerCase() ?? null
-}
-
-/** Exécute fn sur items avec au plus `limit` tâches simultanées. */
-async function mapLimited<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length)
-  let nextIndex = 0
-
-  async function worker(): Promise<void> {
-    while (nextIndex < items.length) {
-      const current = nextIndex
-      nextIndex += 1
-      results[current] = await fn(items[current], current)
-    }
-  }
-
-  const poolSize = Math.max(1, Math.min(limit, items.length))
-  await Promise.all(Array.from({ length: poolSize }, () => worker()))
-  return results
 }
 
 /**
@@ -110,6 +62,7 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
     },
     include: {
       user: { select: { username: true, email: true, anonymousId: true } },
+      point: { select: { pointName: true, trameDebut: true, trameFin: true } },
     },
     orderBy: { createdAt: 'asc' },
   })
@@ -122,13 +75,13 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
   }
 
   const title = sanitizeBaseName(project.title)
+  const firstUser = rows[0].user
   const zipBasename = observerId
-    ? `${title}_${sanitizeBaseName(
-        rows[0].user?.username?.trim() ||
-          rows[0].user?.email?.trim() ||
-          rows[0].user?.anonymousId ||
-          'observateur',
-      )}_captures`
+    ? `${title}_${observerKeyName({
+        username: firstUser?.username ?? null,
+        email: firstUser?.email ?? null,
+        anonymousId: firstUser?.anonymousId ?? null,
+      })}_captures`
     : `${title}_captures`
   const zipFilename = `${zipBasename}.zip`
 
@@ -149,11 +102,85 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
   }
 
   // ——— Assemblage du ZIP ———
+  // Structure : captures/<observateur>/<MM>m<SS>s.png + manifest.json (métadonnées).
+  // Les coordonnées spatiales (bounding boxes) et notes de capture ne sont PAS persistées
+  // (procédure d'observation indépendante) → elles sont volontairement null dans le manifest.
   const zip = new JSZip()
+  const frames: Array<Record<string, unknown>> = []
+  const usedPaths = new Set<string>()
+
   for (const { image, index } of successes) {
-    const sequence = String(index + 1).padStart(4, '0')
-    zip.file(`${sequence}-${sanitizeBaseName(rows[index].id)}.${image.extension}`, image.buffer)
+    const row = rows[index]
+    const folderName = observerKeyName({
+      username: row.user?.username ?? null,
+      email: row.user?.email ?? null,
+      anonymousId: row.user?.anonymousId ?? null,
+    })
+    const token = mmssFileToken(row.timestampTotal)
+    let fileName = `${token}.${image.extension}`
+    let suffix = 2
+    while (usedPaths.has(`${folderName}/${fileName}`)) {
+      fileName = `${token}_${suffix}.${image.extension}`
+      suffix += 1
+    }
+    usedPaths.add(`${folderName}/${fileName}`)
+    const path = `captures/${folderName}/${fileName}`
+    zip.file(path, image.buffer)
+
+    frames.push({
+      file: path,
+      frameTimestampSeconds: row.timestampTotal,
+      frameTimestampLabel: formatClock(row.timestampTotal),
+      observationType: row.observationType ?? null,
+      validationStatus: row.isGhostPoint ? 'POINT_FANTOME_FAUSSE_ALERTE' : 'VALIDEE',
+      windowLabel: row.point?.pointName ?? null,
+      observer: {
+        username: row.user?.username ?? null,
+        email: row.user?.email ?? null,
+        anonymousId: row.user?.anonymousId ?? null,
+      },
+      capturedAt: row.createdAt,
+      spatialBounds: { x: null, y: null, width: null, height: null }, // non persistées (observation indépendante)
+      frameNote: null, // notes de capture non enregistrées
+    })
   }
+
+  // ZIP individuel d'un observateur : le classeur « Données » accompagne ses images.
+  if (observerId) {
+    const observerUser = {
+      username: firstUser?.username ?? null,
+      email: firstUser?.email ?? null,
+      anonymousId: firstUser?.anonymousId ?? null,
+    }
+    const workbook = await buildObserverWorkbookBuffer(
+      rows.map((row) => ({
+        timestampTotal: row.timestampTotal,
+        observationType: row.observationType,
+        isGhostPoint: row.isGhostPoint,
+        createdAt: row.createdAt,
+      })),
+    )
+    zip.file(`Donnees_${observerKeyName(observerUser)}.xlsx`, workbook)
+  }
+
+  zip.file(
+    'manifest.json',
+    JSON.stringify(
+      {
+        project: { id: project.id, title: project.title },
+        exportedAt: new Date().toISOString(),
+        totalFrames: frames.length,
+        protocolNote:
+          'Coordonnées spatiales (X/Y), dimensions et notes de capture non enregistrées : ' +
+          'la procédure d’observation indépendante ne persiste aucune géométrie. Les images ' +
+          'annotées restent rattachées à leur horodatage vidéo et à leur statut de validation.',
+        frames,
+      },
+      null,
+      2,
+    ),
+  )
+
   const nodeBuffer = await zip.generateAsync({ type: 'nodebuffer' })
 
   const headers = new Headers({
