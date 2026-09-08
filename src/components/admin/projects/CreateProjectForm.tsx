@@ -6,9 +6,12 @@ import { toast } from 'sonner'
 import { CirclePlus, Film, X } from 'lucide-react'
 import { createProject } from '@/app/actions/projectActions'
 import type { ActionResult } from '@/lib/types'
+import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import { friendlyActionError } from '@/lib/actionError'
 import Sheet from '@/components/ui/Sheet'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
 import VideoUrlPicker, { type VideoUrlPickerText } from '@/components/ui/VideoUrlPicker'
+import ObservationTypesEditor from '@/components/admin/projects/ObservationTypesEditor'
 import { labelClass } from '@/components/admin/projects/projectFormat'
 
 type CreateProjectFormProps = {
@@ -55,15 +58,45 @@ export default function CreateProjectForm({ onCreated, onCancel }: CreateProject
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
+  const [observationTypes, setObservationTypes] = useState<string[]>([])
   const [isPending, startTransition] = useTransition()
+  // Le nom saisi par l'utilisateur ne doit jamais être écrasé par la suggestion auto.
+  const [titleTouchedByUser, setTitleTouchedByUser] = useState(false)
 
   const titleValid = title.trim().length > 0
+
+  /** Saisie utilisateur : on fige le nom (plus aucune suggestion automatique ensuite). */
+  const handleTitleChange = (value: string) => {
+    setTitleTouchedByUser(true)
+    setTitle(value)
+  }
+
+  /**
+   * Rattachement de la vidéo cible : si l'utilisateur n'a pas encore saisi de nom,
+   * on propose automatiquement le nom de session d'observation dérivé du fichier
+   * (ex. « 100m_oblique_2026_08_15.mp4 » → « 100m_oblique_2026_08_15 »).
+   */
+  const handleVideoChange = (value: string) => {
+    setVideoUrl(value)
+    if (!titleTouchedByUser) {
+      setTitle(deriveObservationNameFromVideo(value) ?? '')
+    }
+  }
+
+  const derivedSuggestion = titleTouchedByUser
+    ? null
+    : deriveObservationNameFromVideo(videoUrl)
 
   const doCreate = () => {
     if (!titleValid) return
     const trimmedTitle = title.trim()
     startTransition(async () => {
-      const result: ActionResult = await createProject({ title, description, videoUrl })
+      const result: ActionResult = await createProject({
+        title,
+        description,
+        videoUrl,
+        observationTypes,
+      }).catch((error: unknown) => ({ ok: false, error: friendlyActionError(error, 'fr') }))
       if (result.ok) {
         toast.success('Projet créé avec succès', {
           description: `« ${trimmedTitle} » est prêt. Ajoutez ses fenêtres de validation.`,
@@ -99,7 +132,7 @@ export default function CreateProjectForm({ onCreated, onCancel }: CreateProject
           {step < STEPS.length ? (
             <button
               type="button"
-              disabled={!titleValid || isPending}
+              disabled={isPending}
               onClick={() => setStep((current) => current + 1)}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
@@ -108,7 +141,7 @@ export default function CreateProjectForm({ onCreated, onCancel }: CreateProject
           ) : (
             <button
               type="button"
-              disabled={isPending}
+              disabled={isPending || !titleValid}
               onClick={doCreate}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
@@ -174,10 +207,14 @@ export default function CreateProjectForm({ onCreated, onCancel }: CreateProject
                 type="text"
                 autoFocus
                 value={title}
-                onChange={(event) => setTitle(event.target.value)}
+                onChange={(event) => handleTitleChange(event.target.value)}
                 placeholder="Ex. Observation nid de cigognes — juillet 2026"
                 className="h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-milk dark:focus:ring-milk/15"
               />
+              <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+                Laissez vide pour générer automatiquement le nom de la session d’observation
+                d’après le fichier vidéo (étape « Vidéo cible »).
+              </p>
               <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">
                 Les fenêtres de validation restent secrètes : vous les ajouterez ensuite sur la fiche
                 du projet.
@@ -204,14 +241,34 @@ export default function CreateProjectForm({ onCreated, onCancel }: CreateProject
             </div>
           ) : null}
 
+          {step === 2 ? (
+            <div className="mt-6 border-t border-zinc-100 pt-5 dark:border-white/10">
+              <ObservationTypesEditor
+                idPrefix="create-project"
+                value={observationTypes}
+                onChange={setObservationTypes}
+              />
+            </div>
+          ) : null}
+
           {step === 3 ? (
             <div className="flex flex-col gap-6">
               <VideoUrlPicker
                 inputId="project-video"
                 value={videoUrl}
-                onChange={setVideoUrl}
+                onChange={handleVideoChange}
                 text={VIDEO_TEXT}
               />
+
+              {derivedSuggestion && !titleTouchedByUser ? (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Nom de session proposé d’après le fichier vidéo :{' '}
+                  <span className="font-medium text-zinc-700 dark:text-zinc-200">
+                    « {derivedSuggestion} »
+                  </span>{' '}
+                  — modifiable à l’étape 1.
+                </p>
+              ) : null}
 
               {/* Aperçu de la fiche */}
               <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/5">

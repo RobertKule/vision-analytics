@@ -2,7 +2,9 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ChevronLeft } from 'lucide-react'
+import { getCurrentSession } from '@/lib/auth'
 import { getAdminProjectDetail } from '@/app/actions/projectActions'
+import { getProjectAnalytics } from '@/app/actions/analyticsActions'
 import ProjectDetailWorkspace from '@/components/admin/projects/ProjectDetailWorkspace'
 
 export const dynamic = 'force-dynamic'
@@ -35,6 +37,13 @@ export default async function AdminProjectDetailPage({ params }: PageProps) {
     notFound()
   }
 
+  // Données analytiques + auteur nécessaires au rapport scientifique imprimable.
+  const [analytics, session] = await Promise.all([
+    getProjectAnalytics(projectId),
+    getCurrentSession(),
+  ])
+  const authorName = session?.username?.trim() || session?.email || ''
+
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
       <nav className="mb-5" aria-label="Fil d’Ariane">
@@ -47,7 +56,11 @@ export default async function AdminProjectDetailPage({ params }: PageProps) {
         </Link>
       </nav>
 
-      <ProjectDetailWorkspace detail={detail} />
+      <ProjectDetailWorkspace
+        detail={detail}
+        analytics={analytics}
+        authorName={authorName}
+      />
     </div>
   )
 }

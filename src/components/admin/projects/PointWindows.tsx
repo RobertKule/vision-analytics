@@ -12,6 +12,7 @@ import {
   secondsToTimecode,
 } from '@/lib/timecode'
 import { formatWindow, labelClass } from '@/components/admin/projects/projectFormat'
+import { friendlyActionError } from '@/lib/actionError'
 import Sheet from '@/components/ui/Sheet'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
 
@@ -19,7 +20,10 @@ function PointRow({ point }: { point: ProjectPointDto }) {
   const router = useRouter()
 
   const runDelete = async () => {
-    const result = await deleteProjectPoint(point.id)
+    const result = await deleteProjectPoint(point.id).catch((error: unknown) => ({
+      ok: false,
+      error: friendlyActionError(error, 'fr'),
+    }))
     router.refresh()
     if (result.ok) {
       toast.success('Fenêtre supprimée', {
@@ -114,7 +118,7 @@ function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: 
         pointName: nextName,
         trameDebut: debut,
         trameFin: fin,
-      })
+      }).catch((error: unknown) => ({ ok: false, error: friendlyActionError(error, 'fr') }))
       if (result.ok) {
         toast.success('Fenêtre de validation ajoutée', {
           description: `« ${nextName} » — de ${secondsToTimecode(debut)} à ${secondsToTimecode(fin)}.`,
