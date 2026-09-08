@@ -3,9 +3,9 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Plus, X } from 'lucide-react'
+import { Film, Plus, X } from 'lucide-react'
 import { addProjectPoint, deleteProjectPoint } from '@/app/actions/projectActions'
-import type { ActionResult, ProjectPointDto } from '@/lib/types'
+import type { ActionResult, ProjectPointDto, VideoAdminDto } from '@/lib/types'
 import {
   isTimecodePairValid,
   parseTimecodeToSeconds,
@@ -77,8 +77,48 @@ const STEPS: StepperStep[] = [
 const BOUNDS_INPUT_CLASS =
   'h-11 w-full rounded-lg border border-zinc-300 bg-white px-3 font-mono text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:placeholder:text-zinc-600 dark:focus:border-milk dark:focus:ring-milk/15'
 
+/**
+ * Dernier segment d'une source (ou nom) pour étiqueter une passe sans type ni nom.
+ * Utilisé uniquement pour l'affichage admin — jamais transmis aux observateurs.
+ */
+function shortSourceLabel(video: VideoAdminDto): string {
+  const leaf = (video.source ?? '').split(/[\\/]/).pop()?.trim()
+  if (!leaf) return `Vidéo ${video.orderIndex + 1}`
+  return leaf.length > 46 ? `${leaf.slice(0, 45)}…` : leaf
+}
+
+/** Libellé principal d'une passe (type associé prioritaire, puis nom, puis source). */
+function videoLabel(video: VideoAdminDto): string {
+  return video.typeLabel?.trim() || video.name?.trim() || shortSourceLabel(video)
+}
+
+/** Pastille du contexte type d'une passe. */
+function TypeChip({ label }: { label: string }) {
+  const generic = label === 'Générique'
+  return (
+    <span
+      className={`inline-flex max-w-full items-center truncate rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+        generic
+          ? 'bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-300'
+          : 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200'
+      }`}
+    >
+      <span className="truncate">{label}</span>
+    </span>
+  )
+}
+
 /** Tiroir d'ajout d'une fenêtre : nom, puis bornes en MM:SS (début strictement avant fin). */
-function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+function PointWindowSheet({
+  projectId,
+  targetVideo,
+  onClose,
+}: {
+  projectId: string
+  /** Passe (donc type) à laquelle la fenêtre sera rattachée ; null = passe générique héritée. */
+  targetVideo: VideoAdminDto | null
+  onClose: () => void
+}) {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [pointName, setPointName] = useState('')
@@ -106,6 +146,11 @@ function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: 
       ? endSeconds - startSeconds
       : null
 
+  const targetLabel = targetVideo ? videoLabel(targetVideo) : 'Passe générique du projet'
+  const targetChip = targetVideo
+    ? targetVideo.typeLabel?.trim() || 'Générique'
+    : 'Générique'
+
   const doAdd = () => {
     if (!nameValid || !boundsValid) return
     const debut = parseTimecodeToSeconds(start)
@@ -118,10 +163,11 @@ function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: 
         pointName: nextName,
         trameDebut: debut,
         trameFin: fin,
+        videoId: targetVideo ? targetVideo.id : null,
       }).catch((error: unknown) => ({ ok: false, error: friendlyActionError(error, 'fr') }))
       if (result.ok) {
         toast.success('Fenêtre de validation ajoutée', {
-          description: `« ${nextName} » — de ${secondsToTimecode(debut)} à ${secondsToTimecode(fin)}.`,
+          description: `« ${nextName} » — de ${secondsToTimecode(debut)} à ${secondsToTimecode(fin)}${targetVideo ? ` (${targetLabel})` : ''}.`,
         })
         router.refresh()
         onClose()
@@ -213,6 +259,25 @@ function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: 
         </p>
 
         <div className="mt-5">
+          {/* Contexte type/vidéo — la fenêtre valide TOUJOURS une passe précise. */}
+          {targetVideo ? (
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950">
+              <Film aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
+              <TypeChip label={targetChip} />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-600 dark:text-zinc-300">
+                {targetVideo.name?.trim() || shortSourceLabel(targetVideo)}
+              </span>
+            </div>
+          ) : (
+            <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950">
+              <Film aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
+              <TypeChip label="Générique" />
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-600 dark:text-zinc-300">
+                {targetLabel}
+              </span>
+            </div>
+          )}
+
           {step === 1 ? (
             <div>
               <label htmlFor={`point-name-${projectId}`} className={labelClass}>
@@ -267,8 +332,9 @@ function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: 
               </div>
 
               <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
-                Format MM:SS (ou HH:MM:SS pour une durée supérieure à l’heure). Les fenêtres doivent
-                rester <strong>disjointes</strong> pour attribuer chaque observation.
+                Format MM:SS (ou HH:MM:SS pour une durée supérieure à l’heure). Les fenêtres d’une
+                même vidéo doivent rester <strong>disjointes</strong> pour attribuer chaque
+                observation.
               </p>
 
               {boundsError ? (
@@ -291,21 +357,51 @@ function PointWindowSheet({ projectId, onClose }: { projectId: string; onClose: 
   )
 }
 
-export function ValidationWindowsPanel({
+/** Sous-liste des fenêtres d'une même passe (donc d'un même type). */
+function VideoWindowGroup({
   projectId,
+  video,
   points,
+  emptyText,
 }: {
   projectId: string
+  /** null = passe générique héritée (aucune vidéo configurée). */
+  video: VideoAdminDto | null
   points: ProjectPointDto[]
+  emptyText: string
 }) {
   const [adding, setAdding] = useState(false)
+  const typeLabel = video
+    ? video.typeLabel?.trim() || 'Générique'
+    : 'Générique'
 
   return (
-    <div>
-      <div className="flex items-center justify-between gap-3">
-        <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-          Fenêtres de validation ({points.length})
-        </h4>
+    <div className="rounded-xl border border-zinc-200 bg-white p-3.5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {video ? (
+            <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-gold-500/15 font-mono text-[11px] font-bold text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
+              {video.orderIndex + 1}
+            </span>
+          ) : (
+            <Film aria-hidden="true" className="h-4 w-4 shrink-0 text-zinc-400" />
+          )}
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <TypeChip label={typeLabel} />
+              {video ? (
+                <span className="min-w-0 truncate text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                  {video.name?.trim() || shortSourceLabel(video)}
+                </span>
+              ) : null}
+            </div>
+            {points.length > 0 ? (
+              <p className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+                {points.length} fenêtre{points.length > 1 ? 's' : ''}
+              </p>
+            ) : null}
+          </div>
+        </div>
         <button
           type="button"
           onClick={() => setAdding(true)}
@@ -323,14 +419,138 @@ export function ValidationWindowsPanel({
           ))}
         </ul>
       ) : (
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Aucune fenêtre temporelle définie. Ajoutez-en une ci-dessus.
-        </p>
+        <p className="mt-2.5 text-xs text-zinc-500 dark:text-zinc-400">{emptyText}</p>
       )}
 
       {adding ? (
-        <PointWindowSheet projectId={projectId} onClose={() => setAdding(false)} />
+        <PointWindowSheet
+          projectId={projectId}
+          targetVideo={video}
+          onClose={() => setAdding(false)}
+        />
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Fenêtres de validation d'un projet, GROUPÉES PAR PASSE VIDÉO (donc par type
+ * d'observation). Chaque fenêtre valide la timeline d'UNE vidéo : sans rattachement,
+ * l'attribution point/fantôme serait ambiguë dès que plusieurs vidéos typées existent.
+ *
+ * — Projet multi-vidéos : une carte par vidéo (type associé affiché) + ajout scoped.
+ * — Projet à vidéo unique / hérité (aucune passe configurée) : liste plate générique.
+ */
+export function ValidationWindowsPanel({
+  projectId,
+  points,
+  videos,
+}: {
+  projectId: string
+  points: ProjectPointDto[]
+  videos: VideoAdminDto[]
+}) {
+  const ordered = [...videos].sort((a, b) => a.orderIndex - b.orderIndex)
+  const total = points.length
+
+  // Fenêtres sans vidéo rattachée (modèle hérité / « vidéo unique » du projet).
+  const legacyPoints = points.filter((point) => !point.videoId)
+
+  if (ordered.length === 0) {
+    // Aucune passe vidéo configurée : on conserve le flux générique historique.
+    return (
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+            Fenêtres de validation ({total})
+          </h4>
+          <AddGenericButton projectId={projectId} />
+        </div>
+        {total > 0 ? (
+          <ul className="mt-3 flex flex-col gap-2">
+            {points.map((point) => (
+              <PointRow key={point.id} point={point} />
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+            Aucune fenêtre temporelle définie. Ajoutez-en une ci-dessus.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+            Fenêtres de validation ({total})
+          </h4>
+          <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+            Chaque fenêtre est rattachée à la passe (et donc au type) qu’elle valide — les
+            observations d’une vidéo ne sont comparées qu’à ses propres fenêtres.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        {ordered.map((video) => {
+          const videoPoints = points.filter((point) => point.videoId === video.id)
+          return (
+            <VideoWindowGroup
+              key={video.id}
+              projectId={projectId}
+              video={video}
+              points={videoPoints}
+              emptyText="Aucune fenêtre pour cette passe pour l’instant — ajoutez la première ci-dessus."
+            />
+          )
+        })}
+
+        {/* Fenêtres héritées sans vidéo : préservées (lecture seule de rattachement). */}
+        {legacyPoints.length > 0 ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-3.5 py-3 dark:border-zinc-700 dark:bg-zinc-950">
+            <div className="flex flex-wrap items-center gap-2">
+              <Film aria-hidden="true" className="h-4 w-4 text-zinc-400" />
+              <TypeChip label="Sans vidéo (héritage)" />
+              <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">
+                {legacyPoints.length} fenêtre{legacyPoints.length > 1 ? 's' : ''} sans rattachement
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500">
+              Créées avant la configuration des passes vidéo : elles ne valident que les
+              observations génériques sans vidéo. Récréez-les sur la passe concernée puis retirez-les.
+            </p>
+            <ul className="mt-2 flex flex-col gap-2">
+              {legacyPoints.map((point) => (
+                <PointRow key={point.id} point={point} />
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/** Bouton « Ajouter une fenêtre » du flux générique hérité (aucune passe configurée). */
+function AddGenericButton({ projectId }: { projectId: string }) {
+  const [adding, setAdding] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setAdding(true)}
+        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-semibold text-zinc-600 transition-colors hover:border-gold-600/50 hover:bg-gold-500/10 hover:text-gold-800 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-gold-400/40 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
+      >
+        <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+        Ajouter une fenêtre
+      </button>
+      {adding ? (
+        <PointWindowSheet projectId={projectId} targetVideo={null} onClose={() => setAdding(false)} />
+      ) : null}
+    </>
   )
 }
