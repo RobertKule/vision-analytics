@@ -11,6 +11,8 @@ import {
   FolderKanban,
   History,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings,
   Users,
 } from 'lucide-react'
@@ -83,7 +85,7 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
 
   const items: Array<{ key: string; label: string; href: string; icon: typeof LayoutDashboard; visible: boolean }> = [
     { key: 'overview', label: t.overview, href: '/dashboard', icon: LayoutDashboard, visible: true },
-    { key: 'observe', label: t.observe, href: '/observe', icon: Eye, visible: true },
+    { key: 'observe', label: t.observe, href: '/experience', icon: Eye, visible: true },
     {
       key: 'history',
       label: t.history,
@@ -127,26 +129,47 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
       style={{ width: asideWidth }}
       className="relative flex shrink-0 flex-col border-r border-zinc-200 bg-white transition-[width] duration-200 dark:border-white/10 dark:bg-[#0d1117]"
     >
-      {/* ——— Entête de marque ——— */}
-      <div className="flex h-14 items-center gap-2.5 border-b border-zinc-100 px-3 dark:border-white/5">
-        <Link
-          href="/"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-forest-500/30"
-          aria-label="Vision Analytics"
-        >
-          <Image
-            src="/Parc National des Virunga.png"
-            alt="Parc National des Virunga"
-            width={40}
-            height={40}
-            className="h-7 w-7 object-contain"
-          />
-        </Link>
-        {!collapsed ? (
-          <span className="truncate text-sm font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Vision Analytics
-          </span>
-        ) : null}
+      {/* ——— Entête de marque + repli ——— */}
+      <div className="flex h-14 items-center gap-2 border-b border-zinc-100 px-2 dark:border-white/5">
+        {collapsed ? (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            aria-label={t.expand}
+            title={t.expand}
+            className="inline-flex h-10 w-full items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+          >
+            <PanelLeftOpen aria-hidden="true" className="h-4 w-4" />
+          </button>
+        ) : (
+          <>
+            <Link
+              href="/"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-forest-500/30"
+              aria-label="Vision Analytics"
+            >
+              <Image
+                src="/Parc National des Virunga.png"
+                alt="Parc National des Virunga"
+                width={40}
+                height={40}
+                className="h-7 w-7 object-contain"
+              />
+            </Link>
+            <span className="min-w-0 flex-1 truncate text-sm font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+              Vision Analytics
+            </span>
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              aria-label={t.collapse}
+              title={t.collapse}
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+            >
+              <PanelLeftClose aria-hidden="true" className="h-4 w-4" />
+            </button>
+          </>
+        )}
       </div>
 
       {/* ——— Navigation ——— */}

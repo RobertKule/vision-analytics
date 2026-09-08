@@ -43,7 +43,7 @@ export default async function HistoryPage() {
           <Ghost aria-hidden="true" className="h-8 w-8 text-zinc-300 dark:text-zinc-600" />
           <p className="max-w-sm text-sm text-zinc-600 dark:text-zinc-400">{t.statsEmpty}</p>
           <Link
-            href="/observe"
+            href="/experience"
             className="inline-flex h-10 items-center gap-2 rounded-lg bg-forest-600 px-5 text-sm font-semibold text-white transition-colors hover:bg-forest-500"
           >
             <Activity aria-hidden="true" className="h-4 w-4" />

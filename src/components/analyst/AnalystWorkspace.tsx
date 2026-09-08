@@ -388,7 +388,7 @@ function ProjectCard({
             {t.openStats}
           </Link>
           <Link
-            href={`/observe/${project.id}`}
+            href={`/experience/${project.id}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-forest-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-forest-500"
           >
             <Eye aria-hidden="true" className="h-3.5 w-3.5" />

@@ -11,7 +11,14 @@ export function homeForRole(role: SessionRole): string {
 }
 
 /** Destinations internes autorisées pour la redirection post-connexion (anti open-redirect). */
-const SAFE_INTERNAL_PREFIXES = ['/admin', '/analyst', '/dashboard', '/observe', '/register']
+const SAFE_INTERNAL_PREFIXES = [
+  '/admin',
+  '/analyst',
+  '/dashboard',
+  '/observe',
+  '/experience',
+  '/register',
+]
 
 export function resolvePostLoginRedirect(from: string | null, fallback: string): string {
   if (

@@ -1,31 +1,26 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
 import { Hourglass } from 'lucide-react'
 import { listBlindProjects } from '@/app/actions/observationActions'
 import ObserveWorkspace from '@/components/observe/ObserveWorkspace'
-import { getCurrentSession } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
+
+export const dynamic = 'force-dynamic'
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getLocale()
   return {
     title:
-      locale === 'en' ? 'Observation sessions' : 'Sessions d’observation',
+      locale === 'en' ? 'Experiments' : 'Expériences',
     description:
       locale === 'en'
-        ? 'Select an active double-blind experiment, load its video and capture your scientific observations.'
-        : 'Sélectionnez une expérience en double aveugle, chargez sa vidéo et capturez vos observations scientifiques.',
+        ? 'Run your double-blind video observation sessions, capture and submit your findings.'
+        : 'Menez vos sessions d’observation vidéo en double aveugle, capturez et soumettez vos observations.',
   }
 }
 
-export default async function ObservePage() {
-  // Les sessions connectées observent depuis la coquille applicative `/experience`.
-  if (await getCurrentSession()) {
-    redirect('/experience')
-  }
-
+export default async function ExperiencePage() {
   const locale = await getLocale()
   const projects = await listBlindProjects()
   const d = getDictionary(locale)
@@ -49,7 +44,10 @@ export default async function ObservePage() {
           <p className="mt-3 text-sm font-medium text-zinc-700 dark:text-zinc-200">{t.noActiveTitle}</p>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             {t.noActiveHint}{' '}
-            <Link href="/admin/projects" className="font-medium text-forest-600 underline dark:text-forest-400">
+            <Link
+              href="/admin/projects"
+              className="font-medium text-forest-600 underline dark:text-forest-400"
+            >
               {t.noActiveAdmin}
             </Link>{' '}
             {t.noActiveSuffix}
@@ -63,6 +61,7 @@ export default async function ObservePage() {
           annotator={d.annotator}
           stepper={d.stepper}
           completion={d.completion}
+          annotatorBackHref="/experience"
         />
       )}
     </div>

@@ -1,4 +1,8 @@
-import type { ProjectAnalyticsDto } from '@/lib/types'
+import type {
+  AdminProjectDetailDto,
+  ProjectAnalyticsDto,
+  ProjectObservationRowDto,
+} from '@/lib/types'
 
 function formatSeconds(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -157,7 +161,14 @@ export function generateScientificCsv(analytics: ProjectAnalyticsDto): string {
  * Télécharge un fichier CSV dans le navigateur de l'utilisateur.
  */
 export function triggerCsvDownload(filename: string, csvContent: string): void {
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  triggerFileDownload(filename, csvContent, 'text/csv;charset=utf-8;')
+}
+
+/**
+ * Télécharge un contenu texte (CSV, JSON…) dans le navigateur de l'utilisateur.
+ */
+export function triggerFileDownload(filename: string, content: BlobPart, mime: string): void {
+  const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.setAttribute('href', url)
@@ -166,4 +177,126 @@ export function triggerCsvDownload(filename: string, csvContent: string): void {
   link.click()
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
+}
+
+// ——— Exports « Espace Projet » (relevé d'observations : CSV + JSON) ———
+
+/** Nom de fichier sûr : minuscule accents supprimés, ASCII, sans espaces ni caractères hostiles. */
+export function sanitizeBaseName(value: string): string {
+  const ascii = value.normalize('NFD').replace(/[̀-ͯ]/g, '')
+  const cleaned = ascii
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80)
+  return cleaned || 'projet'
+}
+
+/** Libellé lisible d'un observateur (username → email → identifiant anonyme). */
+export function observerLabelOf(row: Pick<
+  ProjectObservationRowDto,
+  'observerUsername' | 'observerEmail' | 'observerAnonymousId'
+>): string {
+  return row.observerUsername?.trim() || row.observerEmail?.trim() || row.observerAnonymousId || '—'
+}
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = value === null || value === undefined ? '' : String(value)
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+/**
+ * Génère un CSV « relevé d'observations » compatible Excel (BOM UTF-8, séparateur « ; »).
+ * Colonnes = champs réellement persistés (aucune coordonnée ni annotation saisie en base).
+ */
+export function buildObservationCsv(detail: AdminProjectDetailDto): string {
+  const { project, rows } = detail
+  const lines: string[] = []
+
+  lines.push(
+    [
+      'Projet',
+      'Observateur',
+      'Horodatage_Sec',
+      'Point_Cible',
+      'URL_Capture',
+      'Date_Capture',
+    ].join(';'),
+  )
+
+  for (const row of rows) {
+    lines.push(
+      [
+        csvCell(project.title),
+        csvCell(observerLabelOf(row)),
+        row.timestampTotal,
+        csvCell(row.pointLabel ?? 'GHOST'),
+        csvCell(row.imageUrl),
+        csvCell(row.createdAt),
+      ].join(';'),
+    )
+  }
+
+  return '﻿' + lines.join('\r\n')
+}
+
+/**
+ * Génère un JSON hiérarchique par observateur, prêt pour des pipelines d'analyse.
+ */
+export function buildObservationJson(detail: AdminProjectDetailDto): string {
+  const { project, rows } = detail
+
+  const byObserver = new Map<
+    string,
+    {
+      observerId: string
+      label: string
+      email: string | null
+      anonymousId: string
+      observations: ProjectObservationRowDto[]
+    }
+  >()
+  for (const row of rows) {
+    if (!row.observerId) continue
+    const group = byObserver.get(row.observerId) ?? {
+      observerId: row.observerId,
+      label: observerLabelOf(row),
+      email: row.observerEmail,
+      anonymousId: row.observerAnonymousId,
+      observations: [],
+    }
+    group.observations.push(row)
+    byObserver.set(row.observerId, group)
+  }
+
+  const observers = Array.from(byObserver.values())
+    .map((group) => {
+      const timestamps = group.observations.map((row) => new Date(row.createdAt).getTime())
+      return {
+        observerId: group.observerId,
+        label: group.label,
+        email: group.email,
+        anonymousId: group.anonymousId,
+        count: group.observations.length,
+        firstCapturedAt:
+          timestamps.length > 0 ? new Date(Math.min(...timestamps)).toISOString() : null,
+        lastCapturedAt:
+          timestamps.length > 0 ? new Date(Math.max(...timestamps)).toISOString() : null,
+        observations: group.observations,
+      }
+    })
+    .sort((a, b) => b.count - a.count)
+
+  return JSON.stringify(
+    {
+      project: {
+        id: project.id,
+        title: project.title,
+        description: project.description,
+        exportedAt: new Date().toISOString(),
+      },
+      observers,
+    },
+    null,
+    2,
+  )
 }

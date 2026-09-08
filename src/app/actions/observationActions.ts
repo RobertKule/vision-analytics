@@ -273,6 +273,8 @@ export async function submitObservations(
 
     updateTag(BLIND_PROJECTS_TAG)
     revalidatePath(`/observe/${projectId}`)
+    revalidatePath(`/experience/${projectId}`)
+    revalidatePath('/experience')
     revalidatePath('/admin/projects')
 
     return {

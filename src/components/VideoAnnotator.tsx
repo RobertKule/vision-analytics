@@ -48,6 +48,8 @@ type VideoAnnotatorProps = {
     stepper: StepperText
     completion: CompletionText
   }
+  /** Destination du bouton « Retour » de l'écran de fin (défaut : page publique `/observe`). */
+  backHref?: string
 }
 
 function generateId(): string {
@@ -114,6 +116,7 @@ export default function VideoAnnotator({
   expectedVideoUrl,
   locale,
   t,
+  backHref,
 }: VideoAnnotatorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -612,7 +615,7 @@ export default function VideoAnnotator({
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <Link
-            href="/observe"
+            href={backHref ?? '/observe'}
             className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500"
           >
             <ArrowRight aria-hidden="true" className="h-4 w-4" />

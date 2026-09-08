@@ -132,7 +132,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
             <Download aria-hidden="true" className="h-3.5 w-3.5" /> Exporter CSV
           </button>
           <Link
-            href={`/observe/${project.id}`}
+            href={`/experience/${project.id}`}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-600 px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
           >
             <Eye aria-hidden="true" className="h-3.5 w-3.5" /> Tester la session

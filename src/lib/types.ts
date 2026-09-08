@@ -16,6 +16,8 @@ export type ProjectDto = {
   videoUrl: string | null
   createdAt: string
   points: ProjectPointDto[]
+  /** Nombre d'observations enregistrées (renseigné par la vue admin). */
+  observationCount?: number
 }
 
 /** Partage d'accès vers un collègue analyste. */
@@ -187,4 +189,43 @@ export type ProjectAnalyticsDto = {
   pointsAnalytics: PointConcordanceDto[]
   ghostPointsAnalytics: GhostPointAnalyticsDto
   observersMetrics: ObserverMetricDto[]
+}
+
+// ——— Types pour l'Espace Projet Admin & les Exports (Phase 6) ———
+
+/** Observation « à plat » d'un projet — alimente les onglets, filtres et exports. */
+export type ProjectObservationRowDto = {
+  id: string
+  /** Horodatage vidéo en secondes. */
+  timestampTotal: number
+  isGhostPoint: boolean
+  /** URL Cloudinary de la capture annotée. */
+  imageUrl: string
+  /** Date de soumission (ISO). */
+  createdAt: string
+  pointId: string | null
+  /** Nom du point de validation rattaché (null ⇒ fausse alerte / hors trame). */
+  pointLabel: string | null
+  observerId: string
+  observerUsername: string | null
+  observerEmail: string | null
+  observerAnonymousId: string
+}
+
+/** Données complètes d'un projet pour l'espace d'administration détaillé. */
+export type AdminProjectDetailDto = {
+  project: {
+    id: string
+    title: string
+    description: string | null
+    videoUrl: string | null
+    isArchived: boolean
+    createdAt: string
+    observationCount: number
+    observerCount: number
+    pointsCount: number
+  }
+  points: ProjectPointDto[]
+  /** Relevé complet des observations, plus récentes d'abord. */
+  rows: ProjectObservationRowDto[]
 }

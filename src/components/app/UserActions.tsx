@@ -286,7 +286,7 @@ export default function UserActions({
               <ul className="flex flex-col gap-1">
                 <li>
                   <Link
-                    href="/observe"
+                    href={session ? '/experience' : '/observe'}
                     onClick={() => setIsMenuOpen(false)}
                     className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-200 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
                   >

@@ -1,12 +1,13 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { notFound, redirect } from 'next/navigation'
+import { notFound } from 'next/navigation'
 import { ArrowLeft, EyeOff, Film, ShieldCheck } from 'lucide-react'
 import { getBlindProject } from '@/app/actions/observationActions'
 import VideoAnnotator from '@/components/VideoAnnotator'
-import { getCurrentSession } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
+
+export const dynamic = 'force-dynamic'
 
 type PageProps = {
   params: Promise<{ projectId: string }>
@@ -15,7 +16,7 @@ type PageProps = {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { projectId } = await params
   const locale = await getLocale()
-  const [project] = await Promise.all([getBlindProject(projectId)])
+  const project = await getBlindProject(projectId)
 
   if (!project) {
     return {
@@ -25,9 +26,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   return {
     title:
-      locale === 'en'
-        ? `Observe: ${project.title}`
-        : `Observation : ${project.title}`,
+      locale === 'en' ? `Observe: ${project.title}` : `Observation : ${project.title}`,
     description:
       locale === 'en'
         ? `Blind scientific observation session for the experiment “${project.title}”.`
@@ -35,14 +34,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   }
 }
 
-export default async function ObserveProjectPage({ params }: PageProps) {
+export default async function ExperienceProjectPage({ params }: PageProps) {
   const { projectId } = await params
-
-  // Les sessions connectées observent depuis la coquille applicative `/experience/[id]`.
-  if (await getCurrentSession()) {
-    redirect(`/experience/${projectId}`)
-  }
-
   const locale = await getLocale()
   const project = await getBlindProject(projectId)
 
@@ -84,7 +77,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         </div>
 
         <Link
-          href="/observe"
+          href="/experience"
           className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />
@@ -116,6 +109,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         projectTitle={project.title}
         expectedVideoUrl={project.videoUrl}
         locale={locale}
+        backHref="/experience"
         t={{
           annotator: d.annotator,
           stepper: d.stepper,

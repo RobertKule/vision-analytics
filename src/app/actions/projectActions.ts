@@ -3,7 +3,13 @@
 import { revalidatePath, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
-import type { ActionResult, ProjectDto } from '@/lib/types'
+import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import type {
+  ActionResult,
+  AdminProjectDetailDto,
+  ProjectDto,
+  ProjectObservationRowDto,
+} from '@/lib/types'
 
 /** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
 const BLIND_PROJECTS_TAG = 'blind-projects'
@@ -36,6 +42,9 @@ export async function listProjects(): Promise<ProjectDto[]> {
       points: {
         orderBy: { trameDebut: 'asc' },
       },
+      _count: {
+        select: { observations: true },
+      },
     },
     orderBy: { createdAt: 'desc' },
   })
@@ -46,6 +55,7 @@ export async function listProjects(): Promise<ProjectDto[]> {
     description: project.description,
     videoUrl: project.videoUrl,
     createdAt: project.createdAt.toISOString(),
+    observationCount: project._count.observations,
     points: project.points.map((point) => ({
       id: point.id,
       pointName: point.pointName,
@@ -53,6 +63,82 @@ export async function listProjects(): Promise<ProjectDto[]> {
       trameFin: point.trameFin,
     })),
   }))
+}
+
+/**
+ * Détail d'un projet pour l'espace administrateur (onglets + exports).
+ *
+ * Source unique des relevés « à plat » : les onglets Observations / Activité des
+ * observateurs et les exports CSV / JSON en dérivent tous. La liste des points
+ * (fenêtres secrètes) n'est renvoyée qu'aux profils autorisés (canManage) —
+ * jamais aux pages observateur, qui restent sur getBlindProject().
+ */
+export async function getAdminProjectDetail(
+  projectId: string,
+): Promise<AdminProjectDetailDto | null> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return null
+
+  const accessLevel = await getCurrentProjectAccess(id)
+  if (!canManage(accessLevel)) return null
+
+  const project = await prisma.project.findUnique({
+    where: { id },
+    include: {
+      points: {
+        orderBy: { trameDebut: 'asc' },
+      },
+    },
+  })
+  if (!project) return null
+
+  const observations = await prisma.observation.findMany({
+    where: { projectId: project.id },
+    include: {
+      user: {
+        select: { id: true, username: true, email: true, anonymousId: true },
+      },
+      point: {
+        select: { pointName: true },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  })
+
+  const rows: ProjectObservationRowDto[] = observations.map((obs) => ({
+    id: obs.id,
+    timestampTotal: obs.timestampTotal,
+    isGhostPoint: obs.isGhostPoint,
+    imageUrl: obs.imageUrl,
+    createdAt: obs.createdAt.toISOString(),
+    pointId: obs.pointId,
+    pointLabel: obs.point?.pointName ?? null,
+    observerId: obs.user.id,
+    observerUsername: obs.user.username,
+    observerEmail: obs.user.email,
+    observerAnonymousId: obs.user.anonymousId,
+  }))
+
+  return {
+    project: {
+      id: project.id,
+      title: project.title,
+      description: project.description,
+      videoUrl: project.videoUrl,
+      isArchived: project.isArchived,
+      createdAt: project.createdAt.toISOString(),
+      observationCount: rows.length,
+      observerCount: new Set(rows.map((row) => row.observerId)).size,
+      pointsCount: project.points.length,
+    },
+    points: project.points.map((point) => ({
+      id: point.id,
+      pointName: point.pointName,
+      trameDebut: point.trameDebut,
+      trameFin: point.trameFin,
+    })),
+    rows,
+  }
 }
 
 /** Crée un nouveau projet d'observation. */
@@ -77,6 +163,7 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
 
     revalidatePath('/admin/projects')
     revalidatePath('/observe')
+    revalidatePath('/experience')
     updateTag(BLIND_PROJECTS_TAG)
     return { ok: true, id: project.id }
   } catch (error) {
@@ -114,6 +201,7 @@ export async function archiveProject(projectId: string): Promise<ActionResult> {
 
     revalidatePath('/admin/projects')
     revalidatePath('/observe')
+    revalidatePath('/experience')
     updateTag(BLIND_PROJECTS_TAG)
     return { ok: true }
   } catch (error) {

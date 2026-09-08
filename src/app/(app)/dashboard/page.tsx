@@ -86,7 +86,7 @@ export default async function DashboardPage() {
             {/* Observateur : rejoindre une étude */}
             {session.role === 'OBSERVER' ? (
               <Link
-                href="/observe"
+                href="/experience"
                 className="group flex items-start justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-forest-500/40 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
               >
                 <div>

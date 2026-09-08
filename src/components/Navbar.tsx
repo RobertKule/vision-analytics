@@ -49,7 +49,7 @@ export default async function Navbar() {
         {/* ——— Liens centraux (desktop) ——— */}
         <div className="hidden items-center gap-1 md:flex">
           <Link
-            href="/observe"
+            href="/experience"
             className="rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-300 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
           >
             {t.observe}

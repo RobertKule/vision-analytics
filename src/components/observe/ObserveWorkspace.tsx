@@ -19,6 +19,8 @@ type ObserveWorkspaceProps = {
   annotator: AnnotatorText
   stepper: StepperText
   completion: CompletionText
+  /** Destination du bouton « Retour » de l'écran de fin (défaut : page publique `/observe`). */
+  annotatorBackHref?: string
 }
 
 /**
@@ -33,6 +35,7 @@ export default function ObserveWorkspace({
   annotator,
   stepper,
   completion,
+  annotatorBackHref,
 }: ObserveWorkspaceProps) {
   const [selectedId, setSelectedId] = useState<string>(projects[0]?.id ?? '')
   const selected = projects.find((project) => project.id === selectedId) ?? projects[0] ?? null
@@ -158,6 +161,7 @@ export default function ObserveWorkspace({
             expectedVideoUrl={selected.videoUrl}
             locale={locale}
             t={{ annotator, stepper, completion }}
+            backHref={annotatorBackHref}
           />
         </section>
       ) : null}
