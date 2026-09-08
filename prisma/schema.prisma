@@ -10,28 +10,49 @@ generator client {
 
 enum Role {
   ADMIN
+  ANALYST
   OBSERVER
 }
 
 model User {
-  id           String        @id @default(uuid())
-  email        String        @unique
-  password     String
-  role         Role          @default(OBSERVER)
-  anonymousId  String        @unique @default(uuid())
-  observations Observation[]
-  createdAt    DateTime      @default(now())
+  id            String          @id @default(uuid())
+  email         String          @unique
+  username      String?         @unique // Pseudonyme d'analyse (login lisible)
+  password      String
+  role          Role            @default(OBSERVER)
+  isActive      Boolean         @default(true) // Compte désactivable par un administrateur
+  anonymousId   String          @unique @default(uuid())
+  observations  Observation[]
+  ownedProjects Project[]       @relation("ProjectOwner")
+  grantedAccess ProjectAccess[]
+  createdAt     DateTime        @default(now())
 }
 
 model Project {
-  id           String         @id @default(uuid())
+  id           String          @id @default(uuid())
+  ownerId      String? // Créateur (ADMIN ou ANALYST) — null pour les projets hérités
+  owner        User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   title        String
   description  String?
-  videoUrl     String?        // Chemin ou nom du fichier vidéo local
-  isArchived   Boolean        @default(false)
+  videoUrl     String?         // Chemin ou nom du fichier vidéo local
+  isArchived   Boolean         @default(false)
   points       ProjectPoint[]
   observations Observation[]
-  createdAt    DateTime       @default(now())
+  accessList   ProjectAccess[] // Partage ANALYST → ANALYST (par username)
+  createdAt    DateTime        @default(now())
+}
+
+/// Partage d'un projet entre analystes (propriétaire + invités).
+model ProjectAccess {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
 }
 
 model ProjectPoint {

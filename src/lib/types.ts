@@ -18,6 +18,44 @@ export type ProjectDto = {
   points: ProjectPointDto[]
 }
 
+/** Partage d'accès vers un collègue analyste. */
+export type SharedAccessDto = {
+  userId: string
+  username: string | null
+  email: string
+}
+
+/** Projet vu depuis l'espace analyste (propriétaire ou partagé). */
+export type AnalystProjectDto = ProjectDto & {
+  ownerId: string | null
+  ownerUsername: string | null
+  isOwner: boolean
+  isShared: boolean
+  sharedWith: SharedAccessDto[]
+}
+
+/** Compte utilisateur vu depuis le portail d'administration. */
+export type UserAdminDto = {
+  id: string
+  email: string
+  username: string | null
+  role: string
+  isActive: boolean
+  createdAt: string
+  observationCount: number
+  ownedProjectsCount: number
+}
+
+/** Synthèse d'un historique d'observateur, groupée par projet. */
+export type ObserverSessionSummaryDto = {
+  projectId: string
+  projectTitle: string
+  count: number
+  valid: number
+  ghost: number
+  lastAt: string
+}
+
 /**
  * Projet en aveugle (Blind Testing) :
  * Ne contient JAMAIS la liste des points ou des trames pour préserver l'intégrité scientifique.

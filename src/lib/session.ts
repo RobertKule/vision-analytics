@@ -1,25 +1,33 @@
 /**
- * Gestion des sessions administrateur signées (HMAC-SHA256 via Web Crypto).
+ * Gestion des sessions signées (HMAC-SHA256 via Web Crypto) pour TOUS les rôles
+ * (ADMIN, ANALYST, OBSERVER).
  *
  * Aucune dépendance Node (« node:crypto ») : ce module est importable depuis le
  * Proxy (ex-middleware) ET depuis le code serveur classique (Server Actions).
  *
  * Format du jeton : `base64url(payload).base64url(hmac(payload))`
- * Payload JSON : { uid, email, role, iat, exp } (horodatages UNIX en secondes).
+ * Payload JSON : { uid, email, username, role, iat, exp } (horodatages UNIX en secondes).
  */
 
-export const SESSION_COOKIE_NAME = 'va_admin_session'
+export const SESSION_COOKIE_NAME = 'va_session'
 const SESSION_TTL_SECONDS = 60 * 60 * 12 // 12 heures
+
+export type SessionRole = 'ADMIN' | 'ANALYST' | 'OBSERVER'
 
 type SessionPayload = {
   uid: string
   email: string
-  role: 'ADMIN'
+  username: string | null
+  role: SessionRole
   iat: number
   exp: number
 }
 
-export type AdminSession = Pick<SessionPayload, 'uid' | 'email' | 'role'>
+/** Session décodée et vérifiée (exposée aux Server Components / Actions). */
+export type Session = Pick<SessionPayload, 'uid' | 'email' | 'username' | 'role'>
+
+/** Alias rétro-compatible pour les helpers « admin » existants. */
+export type AdminSession = Session
 
 function getSecret(): string {
   const secret = process.env.AUTH_SECRET
@@ -71,12 +79,18 @@ function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
 
 // ——— Création / vérification des jetons ———
 
-export async function createSessionToken(admin: AdminSession): Promise<string> {
+export async function createSessionToken(session: {
+  uid: string
+  email: string
+  username?: string | null
+  role: SessionRole
+}): Promise<string> {
   const now = Math.floor(Date.now() / 1000)
   const payload: SessionPayload = {
-    uid: admin.uid,
-    email: admin.email,
-    role: 'ADMIN',
+    uid: session.uid,
+    email: session.email,
+    username: session.username ?? null,
+    role: session.role,
     iat: now,
     exp: now + SESSION_TTL_SECONDS,
   }
@@ -86,7 +100,7 @@ export async function createSessionToken(admin: AdminSession): Promise<string> {
 }
 
 /** Vérifie la signature et la validité temporelle d'un jeton. Retourne la session ou null. */
-export async function parseSessionToken(token: string | undefined | null): Promise<AdminSession | null> {
+export async function parseSessionToken(token: string | undefined | null): Promise<Session | null> {
   if (!token) return null
   const dotIndex = token.indexOf('.')
   if (dotIndex <= 0) return null
@@ -100,9 +114,15 @@ export async function parseSessionToken(token: string | undefined | null): Promi
 
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(data))) as SessionPayload
     const now = Math.floor(Date.now() / 1000)
-    if (!payload.uid || !payload.exp || payload.exp <= now || payload.role !== 'ADMIN') return null
+    const isKnownRole = payload.role === 'ADMIN' || payload.role === 'ANALYST' || payload.role === 'OBSERVER'
+    if (!payload.uid || !payload.exp || payload.exp <= now || !isKnownRole) return null
 
-    return { uid: payload.uid, email: payload.email, role: 'ADMIN' }
+    return {
+      uid: payload.uid,
+      email: payload.email,
+      username: typeof payload.username === 'string' ? payload.username : null,
+      role: payload.role,
+    }
   } catch {
     return null
   }

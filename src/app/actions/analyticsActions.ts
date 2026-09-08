@@ -1,7 +1,7 @@
 'use server'
 
 import { prisma } from '@/lib/prisma'
-import { getCurrentAdmin } from '@/lib/auth'
+import { getCurrentSession } from '@/lib/auth'
 import type {
   GhostBucketDto,
   ObservationCaptureDto,
@@ -22,16 +22,15 @@ function formatSeconds(seconds: number): string {
 export async function getProjectAnalytics(
   projectId: string,
 ): Promise<ProjectAnalyticsDto | null> {
-  // Zone administrateur : toute lecture d'analyses exige une session valide.
-  if (!(await getCurrentAdmin())) {
-    return null
-  }
-  if (!projectId || typeof projectId !== 'string' || !projectId.trim()) {
-    return null
-  }
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return null
+
+  // Garde d'accès multi-rôles : ADMIN (tout), propriétaire, ou collègue partagé.
+  const session = await getCurrentSession()
+  if (!session) return null
 
   const project = await prisma.project.findUnique({
-    where: { id: projectId.trim() },
+    where: { id },
     include: {
       points: {
         orderBy: { trameDebut: 'asc' },
@@ -40,6 +39,16 @@ export async function getProjectAnalytics(
   })
 
   if (!project) return null
+
+  if (session.role !== 'ADMIN') {
+    if (project.ownerId !== session.uid) {
+      const shared = await prisma.projectAccess.findUnique({
+        where: { projectId_userId: { projectId: id, userId: session.uid } },
+        select: { id: true },
+      })
+      if (!shared) return null
+    }
+  }
 
   // Récupération de l'ensemble des observations liées au projet avec les données utilisateur
   const observations = await prisma.observation.findMany({
