@@ -79,6 +79,12 @@ export type CaptureRecord = {
   imageDataUrl: string
   /** Nombre de cercles d'intérêt portés par la capture. */
   circleCount: number
+  /**
+   * Position du foyer des cercles, normalisée 0–1 (axe x, axe y) par rapport à
+   * la zone vidéo. Optionnel : utilisé uniquement pour une étiquette de zone dans
+   * le carrousel, jamais transmis à la soumission.
+   */
+  centroid?: { x: number; y: number }
 }
 
 /** Données nécessaires pour soumettre les observations d'une session. */

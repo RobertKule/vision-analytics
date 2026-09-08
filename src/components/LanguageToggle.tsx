@@ -35,7 +35,7 @@ export default function LanguageToggle({ locale, variant = 'default' }: Language
         }`
       : `inline-flex h-7 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-bold uppercase tracking-wide transition-colors ${
           active
-            ? 'bg-forest-500 text-white shadow-sm'
+            ? 'bg-ink text-milk shadow-sm dark:bg-milk dark:text-ink'
             : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
         }`
 

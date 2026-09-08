@@ -273,7 +273,7 @@ export default function RegisterForm({ locale, t, roleName }: RegisterFormProps)
         {errorMessage ? (
           <p
             role="alert"
-            className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300"
+            className="mt-4 rounded-lg border border-clay-200 bg-clay-50 px-3 py-2.5 text-sm text-clay-700 dark:border-clay-800 dark:bg-clay-900/40 dark:text-clay-300"
           >
             {errorMessage}
           </p>

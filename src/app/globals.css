@@ -7,9 +7,9 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* Virunga palette — light */
-  --background: #f4f6f8;
-  --foreground: #161b22;
+  /* Palette éditoriale — clair (lait & crème chaudes) */
+  --background: #f4f0ea;
+  --foreground: #121417;
   color-scheme: light;
 }
 
@@ -23,17 +23,58 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  /* Virunga accents exposed to Tailwind utilities (emerald / amber / mist blue) */
-  --color-forest-300: #6ee7b7;
-  --color-forest-400: #34d399;
-  --color-forest-500: #10b981;
-  --color-forest-600: #059669;
-  --color-forest-700: #047857;
-  --color-mist-400: #22d3ee;
-  --color-mist-500: #06b6d4;
-  --color-mist-600: #0891b2;
+  /* Neutres éditoriaux — surfaces */
+  --color-milk: #fbf9f5;
+  --color-cream: #f4f0ea;
+  --color-line: #e5e0d8;
+  --color-ink: #121417;
+  --color-ink-soft: #2d3139;
+  --color-slate: #4a4e57;
+  --color-mute: #8c8275;
+  --color-card: #161b22;
+  /* Or chaud — accent unique (actif, focus, chips, icônes) */
+  --color-gold-50: #fbf6ea;
+  --color-gold-100: #f6ecd3;
+  --color-gold-200: #ecdca9;
+  --color-gold-300: #e0c577;
+  --color-gold-400: #d0a94e;
+  --color-gold-500: #bd8f2e;
+  --color-gold-600: #9c711b;
+  --color-gold-700: #7c5813;
+  --color-gold-800: #5e420e;
+  --color-gold-900: #463009;
+  /* Argile (rouille désaturée) — danger / erreur UNIQUEMENT */
+  --color-clay-50: #faf0ec;
+  --color-clay-100: #f3ded6;
+  --color-clay-200: #e4bba9;
+  --color-clay-300: #d0937a;
+  --color-clay-400: #b96e51;
+  --color-clay-500: #a15439;
+  --color-clay-600: #853d26;
+  --color-clay-700: #6b2f1d;
+  --color-clay-800: #522316;
+  --color-clay-900: #3e1a11;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+/* Apparition des panneaux coulissants (right sheets) */
+@keyframes sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 body {

@@ -48,11 +48,11 @@ export default function ProjectDetailWorkspace({ detail }: { detail: AdminProjec
       {/* ——— Barre d'actions (exports) ——— */}
       <div className="flex flex-wrap items-center justify-end gap-2">
         <button type="button" onClick={exportCsv} disabled={isEmpty} className={toolbarButton} title="Export CSV du relevé">
-          <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+          <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5 text-gold-600 dark:text-gold-400" />
           Exporter CSV
         </button>
         <button type="button" onClick={exportJson} disabled={isEmpty} className={toolbarButton} title="Export JSON du relevé">
-          <FileJson2 aria-hidden="true" className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />
+          <FileJson2 aria-hidden="true" className="h-3.5 w-3.5 text-gold-600 dark:text-gold-400" />
           Exporter JSON
         </button>
         {isEmpty ? (
@@ -64,7 +64,7 @@ export default function ProjectDetailWorkspace({ detail }: { detail: AdminProjec
           <a
             href={`/api/admin/projects/${project.id}/captures`}
             onClick={() => toast.info('Préparation du fichier ZIP…', { description: 'Le téléchargement démarre à la fin de la génération.' })}
-            className={`${toolbarButton} border-red-200 bg-red-600 text-white hover:bg-red-500 dark:border-red-500/40`}
+            className={`${toolbarButton} bg-ink text-milk hover:bg-ink-soft dark:border-white/20 dark:bg-milk dark:text-ink dark:hover:bg-white/90`}
           >
             <Download aria-hidden="true" className="h-3.5 w-3.5" />
             Télécharger toutes les images (.zip)

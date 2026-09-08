@@ -1,15 +1,18 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
   ArrowRight,
   Camera,
   CheckCircle,
+  ChevronLeft,
+  ChevronRight,
   Crosshair,
   Edit2,
   Film,
+  MapPin,
   Maximize2,
   Minimize2,
   Pause,
@@ -84,6 +87,19 @@ function pluralLabel(unit: { one: string; many: string }, count: number): string
 const BASE_COLOR = '#10b981'
 const SELECT_COLOR = '#22d3ee'
 
+/** Clés d'étiquette de zone (3×3) indexées en ordre « ligne majeure » (haut → bas). */
+const ZONE_KEYS = [
+  'topLeft',
+  'topCenter',
+  'topRight',
+  'middleLeft',
+  'center',
+  'middleRight',
+  'bottomLeft',
+  'bottomCenter',
+  'bottomRight',
+] as const
+
 function getLocalPoint(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
   const rect = canvas.getBoundingClientRect()
   return { x: clientX - rect.left, y: clientY - rect.top }
@@ -134,6 +150,7 @@ export default function VideoAnnotator({
   const scaleRef = useRef(1)
   const readyRef = useRef(false)
   const playingRef = useRef(false)
+  const controlsTimerRef = useRef<number | null>(null)
 
   /**
    * Vidéo distante référencée par URL (Cloudinary, S3, lecteur de flux…).
@@ -163,6 +180,10 @@ export default function VideoAnnotator({
   const [endPromptDismissed, setEndPromptDismissed] = useState(false)
   const [submittedCount, setSubmittedCount] = useState<number | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  /** Commandes plein écran : visibles quand on bouge la souris, masquées en lecture. */
+  const [controlsVisible, setControlsVisible] = useState(true)
+  /** Capture active du carrousel (null → dernière ajoutée, la plus récente). */
+  const [activeId, setActiveId] = useState<string | null>(null)
 
   /** Suit l'état du plein écran natif (bouton ou touche Échap) du lecteur. */
   useEffect(() => {
@@ -181,9 +202,36 @@ export default function VideoAnnotator({
     if (document.fullscreenElement) {
       void document.exitFullscreen()
     } else if (typeof scene.requestFullscreen === 'function') {
+      setControlsVisible(true)
       void scene.requestFullscreen()
     }
   }
+
+  /** Ré-affiche les commandes plein écran et reprogramme leur masquage. */
+  const pokeControls = useCallback(() => {
+    setControlsVisible(true)
+    if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current)
+    controlsTimerRef.current = window.setTimeout(() => {
+      if (playingRef.current) setControlsVisible(false)
+    }, 2500)
+  }, [])
+
+  // Masquage initial après quelques secondes de lecture plein écran (exécuté via le
+  // callback du minuteur, jamais synchroniquement dans le corps de l'effet).
+  useEffect(() => {
+    if (!isFullscreen) return
+    const id = window.setTimeout(() => {
+      if (playingRef.current) setControlsVisible(false)
+    }, 3200)
+    return () => window.clearTimeout(id)
+  }, [isFullscreen])
+
+  // Nettoie le minuteur de masquage au démontage.
+  useEffect(() => {
+    return () => {
+      if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current)
+    }
+  }, [])
 
   const canAnnotate = isReady && !isPlaying && videoUrl !== null
 
@@ -235,6 +283,8 @@ export default function VideoAnnotator({
 
   const handleDeleteCapture = useCallback((captureId: string) => {
     setObservations((prev) => prev.filter((item) => item.id !== captureId))
+    // La capture active disparaît : on revient à la dernière restante.
+    setActiveId((current) => (current === captureId ? null : current))
   }, [])
 
   /**
@@ -246,6 +296,7 @@ export default function VideoAnnotator({
     const capture = observations.find((item) => item.id === captureId)
     if (!capture) return
     setObservations((prev) => prev.filter((item) => item.id !== captureId))
+    setActiveId(null)
     clearDrawing()
     const video = videoRef.current
     if (video && Number.isFinite(video.duration)) {
@@ -537,11 +588,27 @@ export default function VideoAnnotator({
     // Restaurer le calque transparent pour poursuivre l'annotation.
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     redraw()
+    // Centre des cercles normalisé (0–1) : étiquette de zone du carrousel uniquement.
+    const cssWidth = canvas.width / dpr
+    const cssHeight = canvas.height / dpr
+    const n = circlesRef.current.length
+    const focus = circlesRef.current.reduce(
+      (sum, circle) => ({ x: sum.x + circle.x / cssWidth, y: sum.y + circle.y / cssHeight }),
+      { x: 0, y: 0 },
+    )
+    const centroid =
+      n > 0 && cssWidth > 0 && cssHeight > 0
+        ? {
+            x: Math.min(1, Math.max(0, focus.x / n)),
+            y: Math.min(1, Math.max(0, focus.y / n)),
+          }
+        : undefined
     const capture: CaptureRecord = {
       id: generateId(),
       timestamp: video.currentTime,
       imageDataUrl,
-      circleCount: circlesRef.current.length,
+      circleCount: n,
+      centroid,
     }
     setObservations((previous) => [capture, ...previous])
     // Les marqueurs restent affichés : l'observateur peut en ajuster sur la frame
@@ -571,6 +638,56 @@ export default function VideoAnnotator({
     [clearDrawing, t.annotator.toastSuccessDesc, t.annotator.toastSuccessTitle],
   )
 
+  /** « Lecture à cet instant » depuis une capture du carrousel. */
+  const handlePlayCapture = useCallback(
+    (capture: CaptureRecord) => {
+      const video = videoRef.current
+      if (!video || !Number.isFinite(video.duration)) return
+      video.currentTime = capture.timestamp
+      setCurrentTime(capture.timestamp)
+      clearDrawing()
+      void video.play().catch(() => {
+        /* Lecture refusée par le navigateur : rien à faire. */
+      })
+    },
+    [clearDrawing],
+  )
+
+  // ——— Carrousel : ordre chronologique (ancienne → récente) ———
+  const display = useMemo(() => [...observations].reverse(), [observations])
+
+  const activeIndex = useMemo(() => {
+    if (display.length === 0) return -1
+    if (activeId) {
+      const index = display.findIndex((item) => item.id === activeId)
+      if (index !== -1) return index
+    }
+    return display.length - 1
+  }, [activeId, display])
+
+  const activeCapture = activeIndex >= 0 ? display[activeIndex] : null
+
+  const stepCapture = useCallback(
+    (direction: 1 | -1) => {
+      setActiveId((current) => {
+        if (display.length === 0) return null
+        const from = current ? display.findIndex((item) => item.id === current) : -1
+        const base = from === -1 ? display.length - 1 : from
+        const target = Math.min(display.length - 1, Math.max(0, base + direction))
+        if (target === base) return current
+        return display[target]?.id ?? null
+      })
+    },
+    [display],
+  )
+
+  /** Libellé de zone (3×3) depuis le centroid normalisé d'une capture. */
+  const zoneLabel = (centroid: { x: number; y: number }): string => {
+    const col = centroid.x < 1 / 3 ? 0 : centroid.x > 2 / 3 ? 2 : 1
+    const row = centroid.y < 1 / 3 ? 0 : centroid.y > 2 / 3 ? 2 : 1
+    return t.annotator.zones[ZONE_KEYS[row * 3 + col]]
+  }
+
   const canvasPointerProps = canAnnotate
     ? {
         onPointerDown: handlePointerDown,
@@ -590,11 +707,11 @@ export default function VideoAnnotator({
   // ——— Écran de fin de session (après soumission réussie) ———
   if (projectId && submittedCount !== null && !isStepperOpen) {
     return (
-      <div className="rounded-2xl border border-forest-500/25 bg-white p-8 text-center shadow-sm sm:p-12 dark:border-forest-500/20 dark:bg-[#161b22]">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-forest-500/15 text-forest-600 dark:text-forest-400">
+      <div className="rounded-2xl border border-gold-500/30 bg-white p-8 text-center shadow-sm sm:p-12 dark:border-gold-400/20 dark:bg-[#161b22]">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gold-500/15 text-gold-700 dark:bg-gold-400/10 dark:text-gold-300">
           <CheckCircle aria-hidden="true" className="h-9 w-9" />
         </div>
-        <p className="mt-5 text-xs font-semibold uppercase tracking-widest text-forest-600 dark:text-forest-400">
+        <p className="mt-5 text-xs font-semibold uppercase tracking-widest text-gold-700 dark:text-gold-300">
           {t.completion.kicker}
         </p>
         <h2 className="mt-2 text-2xl font-bold text-zinc-900 dark:text-zinc-50">
@@ -605,7 +722,7 @@ export default function VideoAnnotator({
         </p>
 
         <div className="mx-auto mt-6 inline-flex items-center gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 px-6 py-4 dark:border-white/10 dark:bg-white/5">
-          <span className="font-mono text-3xl font-black tabular-nums text-forest-600 dark:text-forest-400">
+          <span className="font-mono text-3xl font-black tabular-nums text-gold-700 dark:text-gold-300">
             {submittedCount}
           </span>
           <span className="text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -616,7 +733,7 @@ export default function VideoAnnotator({
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <Link
             href={backHref ?? '/observe'}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-ink px-5 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
           >
             <ArrowRight aria-hidden="true" className="h-4 w-4" />
             {t.completion.back}
@@ -645,9 +762,9 @@ export default function VideoAnnotator({
         {/* Sélection du fichier vidéo */}
         <label
           htmlFor="video-upload"
-          className="flex cursor-pointer flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm shadow-sm transition-colors hover:border-forest-500/40 dark:border-white/10 dark:bg-[#161b22]"
+          className="flex cursor-pointer flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white px-4 py-3 text-sm shadow-sm transition-colors hover:border-gold-500/50 dark:border-white/10 dark:bg-[#161b22]"
         >
-          <span className="inline-flex h-9 items-center justify-center rounded-lg bg-forest-600 px-3 font-medium text-white">
+          <span className="inline-flex h-9 items-center justify-center rounded-lg bg-ink px-3 font-medium text-milk dark:bg-milk dark:text-ink">
             {t.annotator.chooseVideo}
           </span>
           <input
@@ -674,7 +791,7 @@ export default function VideoAnnotator({
         {errorMessage ? (
           <p
             role="alert"
-            className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
+            className="rounded-lg border border-clay-200 bg-clay-50 px-3 py-2 text-sm text-clay-700 dark:border-clay-800 dark:bg-clay-900/40 dark:text-clay-300"
           >
             {errorMessage}
           </p>
@@ -684,6 +801,9 @@ export default function VideoAnnotator({
         {videoUrl ? (
           <div
             ref={containerRef}
+            {...(isFullscreen
+              ? { onPointerMove: pokeControls, onTouchStart: pokeControls }
+              : {})}
             className={
               isFullscreen
                 ? 'relative flex h-full w-full items-center justify-center overflow-hidden bg-black'
@@ -724,11 +844,13 @@ export default function VideoAnnotator({
               onPause={() => {
                 playingRef.current = false
                 setIsPlaying(false)
+                setControlsVisible(true)
               }}
               onEnded={() => {
                 playingRef.current = false
                 setIsPlaying(false)
                 setEnded(true)
+                setControlsVisible(true)
               }}
             />
 
@@ -756,14 +878,18 @@ export default function VideoAnnotator({
 
             {/* Palet d'édition du marqueur sélectionné */}
             {selectedCircle && canAnnotate ? (
-              <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cyan-400/30 bg-black/75 px-3 py-2 text-xs text-white shadow-lg backdrop-blur">
+              <div
+                className={`absolute left-3 right-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gold-400/40 bg-black/75 px-3 py-2 text-xs text-white shadow-lg backdrop-blur ${
+                  isFullscreen ? 'top-3' : 'bottom-3'
+                }`}
+              >
                 <div className="flex min-w-0 items-center gap-2.5">
-                  <Crosshair aria-hidden="true" className="h-4 w-4 shrink-0 text-cyan-300" />
+                  <Crosshair aria-hidden="true" className="h-4 w-4 shrink-0 text-gold-300" />
                   <span className="truncate font-mono tabular-nums">
                     x {Math.round(selectedCircle.x)} · y {Math.round(selectedCircle.y)} · r{' '}
                     {Math.round(selectedCircle.r)}px
                   </span>
-                  <span className="hidden items-center gap-1 font-mono tabular-nums text-forest-300 sm:inline-flex">
+                  <span className="hidden items-center gap-1 font-mono tabular-nums text-gold-300 sm:inline-flex">
                     <Timer aria-hidden="true" className="h-3.5 w-3.5" />
                     T+ {formatTime(selectedCircle.placedAt)}
                   </span>
@@ -773,7 +899,7 @@ export default function VideoAnnotator({
                   <button
                     type="button"
                     onClick={() => handleDeleteSelected(selectedCircle.id)}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-red-500/90 px-2.5 font-medium text-white transition-colors hover:bg-red-500"
+                    className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-clay-600 px-2.5 font-medium text-white transition-colors hover:bg-clay-500"
                   >
                     <Trash aria-hidden="true" className="h-3.5 w-3.5" />
                     {t.annotator.selDelete}
@@ -786,6 +912,96 @@ export default function VideoAnnotator({
                   >
                     <X aria-hidden="true" className="h-3.5 w-3.5" />
                   </button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* ——— Surimpression plein écran : transport + capture toujours utilisables ——— */}
+            {isFullscreen ? (
+              <div
+                onPointerMove={pokeControls}
+                onTouchStart={pokeControls}
+                className={`absolute inset-x-0 bottom-0 z-10 px-3 pb-3 pt-12 transition-opacity duration-300 ${
+                  controlsVisible ? 'opacity-100' : 'pointer-events-none opacity-0'
+                }`}
+              >
+                <div className="rounded-xl border border-white/10 bg-black/75 p-3 shadow-2xl backdrop-blur">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={togglePlayback}
+                      disabled={!isReady}
+                      className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white/15 px-4 text-sm font-medium text-white transition-colors hover:bg-white/25 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {isPlaying ? (
+                        <>
+                          <Pause aria-hidden="true" className="h-4 w-4" /> {t.annotator.pause}
+                        </>
+                      ) : (
+                        <>
+                          <Play aria-hidden="true" className="h-4 w-4" /> {t.annotator.play}
+                        </>
+                      )}
+                    </button>
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <input
+                        type="range"
+                        min={0}
+                        max={duration || 0}
+                        step={0.05}
+                        value={currentTime}
+                        onChange={handleSeek}
+                        disabled={!isReady || duration <= 0}
+                        aria-label={t.annotator.seekAria}
+                        className="w-full accent-gold-400 disabled:opacity-40"
+                      />
+                      <div className="flex items-center justify-between font-mono text-xs tabular-nums text-white/75">
+                        <span className="inline-flex items-center gap-1">
+                          <Timer aria-hidden="true" className="h-3.5 w-3.5" />
+                          T+ {formatTime(currentTime)}
+                        </span>
+                        <span>
+                          {t.annotator.duration} {formatTime(duration)}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleFullscreen}
+                      disabled={!isReady}
+                      aria-label={t.annotator.fullscreenExit}
+                      title={t.annotator.fullscreenExit}
+                      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/20 text-zinc-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Minimize2 aria-hidden="true" className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleCapture}
+                      disabled={!canAnnotate || annotations.length === 0}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gold-500 px-4 text-sm font-semibold text-black transition-colors hover:bg-gold-400 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Camera aria-hidden="true" className="h-4 w-4" /> {t.annotator.capture}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearDrawing}
+                      disabled={annotations.length === 0}
+                      className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/20 px-3 text-sm font-medium text-zinc-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Trash aria-hidden="true" className="h-4 w-4" />
+                      {annotations.length > 0
+                        ? fill(t.annotator.clearWithCount, { n: annotations.length })
+                        : t.annotator.clearCircles}
+                    </button>
+                    <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-white">
+                      <Camera aria-hidden="true" className="h-3.5 w-3.5" />
+                      {observations.length} {pluralLabel(t.annotator.unitObservation, observations.length)}
+                    </span>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -813,12 +1029,12 @@ export default function VideoAnnotator({
                   onChange={(event) => setManualUrl(event.target.value)}
                   placeholder={t.annotator.urlPlaceholder}
                   aria-label={t.annotator.urlPlaceholder}
-                  className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-forest-500 focus:outline-none focus:ring-2 focus:ring-forest-500/30 dark:border-white/15 dark:bg-[#0d1117] dark:text-zinc-100 dark:placeholder:text-zinc-500"
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 dark:border-white/15 dark:bg-[#0d1117] dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-milk dark:focus:ring-milk/20"
                 />
                 <button
                   type="submit"
                   disabled={!manualUrl.trim()}
-                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-forest-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-forest-500 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-ink px-4 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                 >
                   <Play aria-hidden="true" className="h-4 w-4" />
                   {t.annotator.urlLoad}
@@ -835,7 +1051,7 @@ export default function VideoAnnotator({
               type="button"
               onClick={togglePlayback}
               disabled={!isReady}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-forest-600 px-4 text-sm font-medium text-white transition-colors hover:bg-forest-500 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-sm font-medium text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
               {isPlaying ? (
                 <>
@@ -858,7 +1074,7 @@ export default function VideoAnnotator({
                 onChange={handleSeek}
                 disabled={!isReady || duration <= 0}
                 aria-label={t.annotator.seekAria}
-                className="w-full accent-forest-500 disabled:opacity-40"
+                className="w-full accent-gold-600 disabled:opacity-40"
               />
               <div className="flex items-center justify-between font-mono text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
                 <span className="inline-flex items-center gap-1">
@@ -891,7 +1107,7 @@ export default function VideoAnnotator({
               type="button"
               onClick={handleCapture}
               disabled={!canAnnotate || annotations.length === 0}
-              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-forest-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-forest-500 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
               <Camera aria-hidden="true" className="h-4 w-4" /> {t.annotator.capture}
             </button>
@@ -918,9 +1134,9 @@ export default function VideoAnnotator({
 
         {/* ——— Invite de fin de vidéo ——— */}
         {showEndPrompt ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gold-500/40 bg-gold-500/10 px-4 py-3">
             <div className="flex items-center gap-2.5">
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gold-500/15 text-gold-700 dark:bg-gold-400/10 dark:text-gold-300">
                 <Timer aria-hidden="true" className="h-4 w-4" />
               </span>
               <div>
@@ -941,7 +1157,7 @@ export default function VideoAnnotator({
               <button
                 type="button"
                 onClick={openSubmitConfirm}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 text-xs font-semibold text-amber-950 shadow-sm transition-colors hover:bg-amber-400"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
               >
                 <Send aria-hidden="true" className="h-3.5 w-3.5" />
                 {t.annotator.endSubmit}
@@ -951,7 +1167,7 @@ export default function VideoAnnotator({
         ) : null}
       </div>
 
-      {/* ——— Panneau latéral : observations capturées ——— */}
+      {/* ——— Panneau latéral : observations capturées (carrousel) ——— */}
       <aside
         aria-label={t.annotator.panelTitle}
         className="flex w-full shrink-0 flex-col rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-white/10 dark:bg-[#161b22] lg:w-80"
@@ -967,7 +1183,7 @@ export default function VideoAnnotator({
           </p>
         </header>
 
-        {observations.length === 0 ? (
+        {observations.length === 0 || !activeCapture ? (
           <div className="grid flex-1 place-items-center px-4 py-10 text-center text-sm text-zinc-500 dark:text-zinc-400">
             <div>
               <Send aria-hidden="true" className="mx-auto h-6 w-6 text-zinc-300 dark:text-zinc-600" />
@@ -976,72 +1192,147 @@ export default function VideoAnnotator({
           </div>
         ) : (
           <>
-            <ol className="flex max-h-[26rem] flex-col gap-3 overflow-y-auto p-3">
-              {observations.map((observation, index) => (
-                <li
-                  key={observation.id}
-                  className="group relative overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-[#0d1117]"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={observation.imageDataUrl}
-                    alt=""
-                    className="block aspect-video w-full bg-black object-contain"
-                  />
-                  <div className="flex items-center justify-between gap-2 px-3 py-2">
-                    <span className="font-mono text-xs tabular-nums text-zinc-700 dark:text-zinc-200">
-                      T+ {formatTime(observation.timestamp)}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                        #{observations.length - index} · {observation.circleCount}{' '}
-                        {pluralLabel(t.annotator.unitCircle, observation.circleCount)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleEditCapture(observation.id)}
-                        className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-forest-500/10 hover:text-forest-600 dark:hover:text-forest-400"
-                        title={fill(t.annotator.editCaptureAria, {
-                          n: observations.length - index,
-                        })}
-                        aria-label={fill(t.annotator.editCaptureAria, {
-                          n: observations.length - index,
-                        })}
-                      >
-                        <Edit2 aria-hidden="true" className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteCapture(observation.id)}
-                        className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
-                        title={fill(t.annotator.deleteCaptureAria, {
-                          n: observations.length - index,
-                        })}
-                        aria-label={fill(t.annotator.deleteCaptureAria, {
-                          n: observations.length - index,
-                        })}
-                      >
-                        <Trash2 aria-hidden="true" className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            {/* Scène : capture active en plein format */}
+            <div className="relative border-b border-zinc-100 bg-black dark:border-white/10">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={activeCapture.imageDataUrl}
+                alt=""
+                className="block aspect-video w-full bg-black object-contain"
+              />
 
+              {/* Badge « Capture X sur Y » */}
+              <span className="absolute left-3 top-3 inline-flex items-center rounded-full bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-white">
+                {fill(t.annotator.captureBadge, {
+                  current: activeIndex + 1,
+                  total: display.length,
+                })}
+              </span>
+
+              {/* Navigation précédente / suivante */}
+              {display.length > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => stepCapture(-1)}
+                    disabled={activeIndex <= 0}
+                    aria-label={t.annotator.prevCaptureAria}
+                    title={t.annotator.prevCaptureAria}
+                    className="absolute left-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ChevronLeft aria-hidden="true" className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => stepCapture(1)}
+                    disabled={activeIndex >= display.length - 1}
+                    aria-label={t.annotator.nextCaptureAria}
+                    title={t.annotator.nextCaptureAria}
+                    className="absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80 disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    <ChevronRight aria-hidden="true" className="h-5 w-5" />
+                  </button>
+                </>
+              ) : null}
+
+              {/* Actions sur la capture (fond dégradé) */}
+              <div className="absolute inset-x-0 bottom-0 flex flex-wrap items-center gap-2 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pb-2.5 pt-8">
+                <button
+                  type="button"
+                  onClick={() => handlePlayCapture(activeCapture)}
+                  title={fill(t.annotator.playAt, {
+                    time: formatTime(activeCapture.timestamp),
+                  })}
+                  className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-lg bg-white/20 px-3 text-xs font-semibold text-white transition-colors hover:bg-white/30"
+                >
+                  <Play aria-hidden="true" className="h-3.5 w-3.5 shrink-0 fill-current" />
+                  <span className="truncate">
+                    {fill(t.annotator.playAt, {
+                      time: formatTime(activeCapture.timestamp),
+                    })}
+                  </span>
+                </button>
+                <span className="min-w-2 flex-1" />
+                <button
+                  type="button"
+                  onClick={() => handleEditCapture(activeCapture.id)}
+                  aria-label={fill(t.annotator.editCaptureAria, { n: activeIndex + 1 })}
+                  title={fill(t.annotator.editCaptureAria, { n: activeIndex + 1 })}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-black/40 text-white transition-colors hover:bg-black/60"
+                >
+                  <Edit2 aria-hidden="true" className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteCapture(activeCapture.id)}
+                  aria-label={fill(t.annotator.deleteCaptureAria, { n: activeIndex + 1 })}
+                  title={fill(t.annotator.deleteCaptureAria, { n: activeIndex + 1 })}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-black/40 text-white transition-colors hover:bg-clay-600"
+                >
+                  <Trash2 aria-hidden="true" className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Métadonnées : horodatage · cercles · zone */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-zinc-100 px-4 py-3 dark:border-white/10">
+              <span className="inline-flex items-center gap-1 font-mono text-xs tabular-nums text-zinc-700 dark:text-zinc-200">
+                <Timer aria-hidden="true" className="h-3.5 w-3.5 text-zinc-400" />
+                T+ {formatTime(activeCapture.timestamp)}
+              </span>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                {activeCapture.circleCount}{' '}
+                {pluralLabel(t.stepper.unitZone, activeCapture.circleCount)}
+              </span>
+              {activeCapture.centroid ? (
+                <span className="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  <MapPin aria-hidden="true" className="h-3 w-3 text-gold-600 dark:text-gold-400" />
+                  {zoneLabel(activeCapture.centroid)}
+                </span>
+              ) : null}
+            </div>
+
+            {/* Vignettes (ancienne → récente) */}
+            {display.length > 1 ? (
+              <div className="flex gap-2 overflow-x-auto border-b border-zinc-100 px-4 py-3 dark:border-white/10">
+                {display.map((observation, index) => (
+                  <button
+                    key={observation.id}
+                    type="button"
+                    onClick={() => setActiveId(observation.id)}
+                    aria-label={fill(t.annotator.captureBadge, {
+                      current: index + 1,
+                      total: display.length,
+                    })}
+                    className={`shrink-0 overflow-hidden rounded-lg transition-shadow ${
+                      index === activeIndex
+                        ? 'ring-2 ring-gold-500'
+                        : 'ring-1 ring-zinc-200 hover:ring-zinc-300 dark:ring-white/10'
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={observation.imageDataUrl}
+                      alt=""
+                      className="block aspect-video w-24 bg-black object-contain"
+                    />
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            {/* Pied ancré : envoi des observations */}
             {projectId && submittedCount === null ? (
-              <footer className="border-t border-zinc-100 p-3 dark:border-white/10">
+              <footer className="mt-auto border-t border-zinc-100 p-3 dark:border-white/10">
                 <button
                   type="button"
                   onClick={openSubmitConfirm}
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:from-forest-600 hover:to-forest-700"
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                 >
                   <Send aria-hidden="true" className="h-4 w-4" />
                   <span>
                     {t.annotator.sendObservations}{' '}
-                    <span className="font-normal opacity-80">
-                      ({observations.length})
-                    </span>
+                    <span className="font-normal opacity-80">({observations.length})</span>
                   </span>
                 </button>
               </footer>
@@ -1065,7 +1356,7 @@ export default function VideoAnnotator({
             className="absolute inset-0 cursor-default bg-black/50 backdrop-blur-sm"
           />
           <div className="relative w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#161b22]">
-            <p className="text-xs font-semibold uppercase tracking-widest text-forest-600 dark:text-forest-400">
+            <p className="text-xs font-semibold uppercase tracking-widest text-gold-700 dark:text-gold-300">
               {t.annotator.confirmKicker}
             </p>
             <h3
@@ -1093,7 +1384,7 @@ export default function VideoAnnotator({
                   setEndPromptDismissed(true)
                   setIsConfirmOpen(false)
                 }}
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-forest-600/30 bg-forest-500/10 px-4 text-sm font-semibold text-forest-700 transition-colors hover:bg-forest-500/20 dark:text-forest-400"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-gold-600/30 bg-gold-500/10 px-4 text-sm font-semibold text-gold-700 transition-colors hover:bg-gold-500/20 dark:text-gold-300"
               >
                 <Play aria-hidden="true" className="h-4 w-4" />
                 {t.annotator.confirmFollow}
@@ -1104,7 +1395,7 @@ export default function VideoAnnotator({
                   setIsConfirmOpen(false)
                   setIsStepperOpen(true)
                 }}
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:from-forest-600 hover:to-forest-700"
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-ink px-4 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
               >
                 <Send aria-hidden="true" className="h-4 w-4" />
                 {t.annotator.confirmSend}

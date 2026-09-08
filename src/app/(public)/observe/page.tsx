@@ -34,7 +34,7 @@ export default async function ObservePage() {
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
       <header className="mb-8">
-        <p className="text-xs font-semibold uppercase tracking-wider text-forest-600 dark:text-forest-400">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-400">
           {t.eyebrow}
         </p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-50">
@@ -49,7 +49,7 @@ export default async function ObservePage() {
           <p className="mt-3 text-sm font-medium text-zinc-700 dark:text-zinc-200">{t.noActiveTitle}</p>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
             {t.noActiveHint}{' '}
-            <Link href="/admin/projects" className="font-medium text-forest-600 underline dark:text-forest-400">
+            <Link href="/admin/projects" className="font-medium text-gold-700 underline dark:text-gold-400">
               {t.noActiveAdmin}
             </Link>{' '}
             {t.noActiveSuffix}

@@ -40,7 +40,7 @@ export default async function AdminProjectDetailPage({ params }: PageProps) {
       <nav className="mb-5" aria-label="Fil d’Ariane">
         <Link
           href="/admin/projects"
-          className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 transition-colors hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400"
+          className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 transition-colors hover:text-gold-600 dark:text-zinc-400 dark:hover:text-gold-300"
         >
           <ChevronLeft aria-hidden="true" className="h-4 w-4" />
           Projets

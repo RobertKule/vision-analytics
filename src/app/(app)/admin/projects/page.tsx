@@ -16,7 +16,7 @@ export default async function AdminProjectsPage() {
   return (
     <div className="mx-auto w-full max-w-4xl flex-1 px-4 py-8 sm:px-6">
       <header className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wide text-red-600 dark:text-red-400">
+        <p className="text-xs font-semibold uppercase tracking-wide text-gold-700 dark:text-gold-400">
           Administration
         </p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">

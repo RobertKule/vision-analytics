@@ -50,7 +50,7 @@ export default function ObserveWorkspace({
             id="observe-projects-title"
             className="inline-flex items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-100"
           >
-            <Microscope aria-hidden="true" className="h-4 w-4 text-forest-600 dark:text-forest-400" />
+            <Microscope aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
             {t.sectionHeading} ({projects.length})
           </h2>
           <span className="text-xs text-zinc-500 dark:text-zinc-400">{t.blindTag}</span>
@@ -67,15 +67,15 @@ export default function ObserveWorkspace({
                 role="radio"
                 aria-checked={isActive}
                 onClick={() => setSelectedId(project.id)}
-                className={`group flex w-full flex-col overflow-hidden rounded-2xl border bg-white text-left shadow-sm transition-all dark:bg-[#161b22] ${
+                className={`group flex w-full flex-col overflow-hidden rounded-2xl border bg-milk text-left shadow-sm transition-all dark:bg-[#161b22] ${
                   isActive
-                    ? 'border-forest-500 ring-2 ring-forest-500/20 dark:border-forest-500/60'
-                    : 'border-zinc-200 hover:-translate-y-0.5 hover:border-forest-500/40 hover:shadow-lg hover:shadow-forest-500/5 dark:border-white/10 dark:hover:border-forest-500/30'
+                    ? 'border-gold-500 ring-2 ring-gold-500/20 dark:border-gold-500/60'
+                    : 'border-line hover:-translate-y-0.5 hover:border-gold-500/50 hover:shadow-lg hover:shadow-gold-500/5 dark:border-white/10 dark:hover:border-gold-500/30'
                 }`}
               >
                 <span className="flex flex-1 flex-col p-5">
                   <span className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-forest-500/10 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-forest-700 dark:text-forest-400">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gold-500/15 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                       <EyeOff aria-hidden="true" className="h-3 w-3" />
                       {t.blindTag}
                     </span>
@@ -103,12 +103,12 @@ export default function ObserveWorkspace({
                       <span className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
                         <Film
                           aria-hidden="true"
-                          className="h-3.5 w-3.5 shrink-0 text-forest-600 dark:text-forest-400"
+                          className="h-3.5 w-3.5 shrink-0 text-gold-700 dark:text-gold-400"
                         />
                         <span className="truncate">{project.videoUrl}</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-gold-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                         <Hourglass aria-hidden="true" className="h-3.5 w-3.5" />
                         {t.awaitingVideoTag}
                       </span>
@@ -118,18 +118,18 @@ export default function ObserveWorkspace({
 
                 <span className="mt-auto flex items-center justify-between gap-2 border-t border-zinc-100 px-4 py-3 dark:border-white/10">
                   {isActive ? (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-forest-700 dark:text-forest-400">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-gold-700 dark:text-gold-400">
                       <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
                       {t.sessionActive}
                     </span>
                   ) : (
                     <>
-                      <span className="text-xs font-semibold text-zinc-600 transition-colors group-hover:text-forest-600 dark:text-zinc-300 dark:group-hover:text-forest-400">
+                      <span className="text-xs font-semibold text-zinc-600 transition-colors group-hover:text-gold-600 dark:text-zinc-300 dark:group-hover:text-gold-300">
                         {t.selectCta}
                       </span>
                       <ArrowRight
                         aria-hidden="true"
-                        className="h-4 w-4 text-zinc-400 transition-transform group-hover:translate-x-0.5 group-hover:text-forest-500"
+                        className="h-4 w-4 text-zinc-400 transition-transform group-hover:translate-x-0.5 group-hover:text-gold-600"
                       />
                     </>
                   )}
@@ -147,7 +147,7 @@ export default function ObserveWorkspace({
           className="border-t border-zinc-200 pt-8 dark:border-white/10"
         >
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="inline-flex items-center gap-2 rounded-full bg-forest-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-forest-700 dark:text-forest-400">
+            <div className="inline-flex items-center gap-2 rounded-full bg-gold-500/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
               <EyeOff aria-hidden="true" className="h-3 w-3" />
               {selected.title}
             </div>

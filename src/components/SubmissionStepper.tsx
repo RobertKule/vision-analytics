@@ -163,7 +163,7 @@ function SubmissionStepperModal({
         {/* ——— En-tête du modal ——— */}
         <header className="flex items-center justify-between border-b border-zinc-100 px-6 py-4 dark:border-white/10">
           <div>
-            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-forest-600 dark:text-forest-400">
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-400">
               <EyeOff aria-hidden="true" className="h-3.5 w-3.5" />
               {t.kicker}
             </span>
@@ -197,7 +197,7 @@ function SubmissionStepperModal({
                   key={step.num}
                   className={`flex flex-1 items-center gap-2 text-xs font-medium sm:text-sm ${
                     isActive
-                      ? 'text-forest-600 dark:text-forest-400'
+                      ? 'text-gold-700 dark:text-gold-400'
                       : isPast
                         ? 'text-zinc-900 dark:text-zinc-100'
                         : 'text-zinc-400 dark:text-zinc-600'
@@ -206,9 +206,9 @@ function SubmissionStepperModal({
                   <span
                     className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                       isActive
-                        ? 'bg-forest-600 text-white'
+                        ? 'bg-ink text-white'
                         : isPast
-                          ? 'bg-forest-600/80 text-white'
+                          ? 'bg-gold-600 text-white'
                           : 'bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
                     }`}
                   >
@@ -230,7 +230,7 @@ function SubmissionStepperModal({
           {errorNotice && (
             <div
               role="alert"
-              className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/60 dark:text-red-300"
+              className="mb-4 rounded-xl border border-clay-200 bg-clay-50 p-4 text-sm text-clay-700 dark:border-clay-800 dark:bg-clay-900/40 dark:text-clay-300"
             >
               {errorNotice}
             </div>
@@ -246,7 +246,7 @@ function SubmissionStepperModal({
                   </h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">{t.step1Hint}</p>
                 </div>
-                <span className="rounded-full bg-forest-500/10 px-3 py-1 font-mono text-xs font-bold text-forest-700 dark:text-forest-400">
+                <span className="rounded-full bg-gold-500/15 px-3 py-1 font-mono text-xs font-bold text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                   {fill(t.step1Count, { n: captures.length })}
                 </span>
               </div>
@@ -272,7 +272,7 @@ function SubmissionStepperModal({
                         <button
                           type="button"
                           onClick={() => onDeleteCapture(capture.id)}
-                          className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-red-600/90 text-white shadow-sm transition-transform hover:scale-105 hover:bg-red-600"
+                          className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg bg-clay-700/90 text-white shadow-sm transition-transform hover:scale-105 hover:bg-clay-600 dark:bg-clay-600/90 dark:hover:bg-clay-500"
                           title={t.deleteCapture}
                           aria-label={t.deleteCapture}
                         >
@@ -315,11 +315,11 @@ function SubmissionStepperModal({
                   onClick={() => setIdentityMode('anonymous')}
                   className={`flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-all ${
                     identityMode === 'anonymous'
-                      ? 'border-forest-600 bg-forest-500/[0.06] shadow-sm dark:border-forest-500 dark:bg-forest-500/10'
+                      ? 'border-gold-600 bg-gold-500/[0.06] shadow-sm dark:border-gold-500 dark:bg-gold-400/10'
                       : 'border-zinc-200 hover:border-zinc-300 dark:border-white/10 dark:hover:border-white/20'
                   }`}
                 >
-                  <span className="text-xs font-bold uppercase tracking-wide text-forest-600 dark:text-forest-400">
+                  <span className="text-xs font-bold uppercase tracking-wide text-gold-700 dark:text-gold-400">
                     {t.recommendedTag}
                   </span>
                   <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
@@ -333,7 +333,7 @@ function SubmissionStepperModal({
                   onClick={() => setIdentityMode('email')}
                   className={`flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-all ${
                     identityMode === 'email'
-                      ? 'border-forest-600 bg-forest-500/[0.06] shadow-sm dark:border-forest-500 dark:bg-forest-500/10'
+                      ? 'border-gold-600 bg-gold-500/[0.06] shadow-sm dark:border-gold-500 dark:bg-gold-400/10'
                       : 'border-zinc-200 hover:border-zinc-300 dark:border-white/10 dark:hover:border-white/20'
                   }`}
                 >
@@ -399,7 +399,7 @@ function SubmissionStepperModal({
             <div className="flex flex-col gap-5 text-center">
               {isSuccess ? (
                 <div className="py-6">
-                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-forest-500/15 text-forest-600 dark:text-forest-400">
+                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-gold-500/15 text-gold-700 dark:bg-gold-400/10 dark:text-gold-400">
                     <Check aria-hidden="true" className="h-7 w-7" strokeWidth={2.5} />
                   </div>
                   <h3 className="mt-4 text-xl font-bold text-zinc-900 dark:text-zinc-50">
@@ -424,7 +424,7 @@ function SubmissionStepperModal({
                 </div>
               ) : (
                 <div className="flex flex-col items-center py-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-forest-500/10 text-forest-600 dark:text-forest-400">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gold-500/10 text-gold-700 dark:bg-gold-400/10 dark:text-gold-400">
                     <CloudUpload aria-hidden="true" className="h-6 w-6" />
                   </div>
                   <h3 className="mt-3 text-lg font-bold text-zinc-900 dark:text-zinc-100">
@@ -457,7 +457,7 @@ function SubmissionStepperModal({
 
                   {isPending && (
                     <div className="mt-6 flex flex-col items-center gap-2">
-                      <div className="h-7 w-7 animate-spin rounded-full border-2 border-forest-600 border-t-transparent" />
+                      <div className="h-7 w-7 animate-spin rounded-full border-2 border-gold-600 border-t-transparent" />
                       <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
                         {t.uploading}
                       </p>
@@ -476,7 +476,7 @@ function SubmissionStepperModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="inline-flex h-10 items-center justify-center rounded-lg bg-forest-600 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500"
+                className="inline-flex h-10 items-center justify-center rounded-lg bg-ink px-5 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
               >
                 {t.finish}
               </button>
@@ -510,7 +510,7 @@ function SubmissionStepperModal({
                     type="button"
                     onClick={handleGoToStep2}
                     disabled={captures.length === 0}
-                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-forest-600 px-5 text-sm font-semibold text-white hover:bg-forest-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-ink px-5 text-sm font-semibold text-milk hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
                     {t.nextIdentification} <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </button>
@@ -521,7 +521,7 @@ function SubmissionStepperModal({
                     type="button"
                     onClick={handleGoToStep3}
                     disabled={!effectiveIdentifier}
-                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-forest-600 px-5 text-sm font-semibold text-white hover:bg-forest-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-ink px-5 text-sm font-semibold text-milk hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
                     {t.nextConfirmation} <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </button>
@@ -532,7 +532,7 @@ function SubmissionStepperModal({
                     type="button"
                     onClick={handleExecuteSubmission}
                     disabled={isPending || captures.length === 0}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 px-6 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
                     {isPending ? t.uploadingBtn : t.confirmUpload}
                   </button>

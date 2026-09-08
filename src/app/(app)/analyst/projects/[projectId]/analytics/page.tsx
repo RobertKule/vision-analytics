@@ -32,7 +32,7 @@ export default async function AnalystAnalyticsPage({ params }: Props) {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
       <header className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wider text-mist-600 dark:text-mist-400">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-400">
           {d.analytics.eyebrow}
         </p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-50">

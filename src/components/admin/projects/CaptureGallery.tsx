@@ -8,13 +8,13 @@ import { formatClock, formatDateTime } from '@/components/admin/projects/project
 function PointChip({ row }: { row: ProjectObservationRowDto }) {
   if (row.isGhostPoint || !row.pointLabel) {
     return (
-      <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+      <span className="inline-flex items-center rounded-full bg-zinc-200 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
         Fantôme
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700 dark:bg-red-900/40 dark:text-red-300">
+    <span className="inline-flex items-center rounded-full bg-gold-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
       {row.pointLabel}
     </span>
   )

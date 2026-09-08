@@ -73,7 +73,7 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
                 className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
                   project.isArchived
                     ? 'bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300'
-                    : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400'
+                    : 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200'
                 }`}
               >
                 {project.isArchived ? 'Archivé' : 'Actif'}
@@ -93,7 +93,7 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
             ) : null}
             {project.videoUrl ? (
               <p className="mt-3 inline-flex max-w-full items-center gap-1.5 truncate rounded-lg bg-zinc-100 px-3 py-1.5 font-mono text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
-                <Film aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />
+                <Film aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gold-700 dark:text-gold-400" />
                 <span className="truncate">{project.videoUrl}</span>
               </p>
             ) : (
@@ -106,7 +106,7 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Link
               href={`/experience/${project.id}`}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-600 px-3.5 text-xs font-semibold text-white transition-colors hover:bg-red-500"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
               <Eye aria-hidden="true" className="h-3.5 w-3.5" /> Session d’observation
             </Link>
@@ -127,7 +127,7 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
               <button
                 type="button"
                 onClick={askArchive}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-red-400 hover:text-red-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-500 dark:hover:text-red-400"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-600 transition-colors hover:border-clay-400 hover:text-clay-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-clay-500 dark:hover:text-clay-300"
               >
                 <Archive aria-hidden="true" className="h-3.5 w-3.5" />
                 <span>Archiver</span>
@@ -147,7 +147,7 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
       {/* ——— Fenêtres de validation (gestion) ——— */}
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          <Microscope aria-hidden="true" className="h-4 w-4 text-red-600 dark:text-red-400" />
+          <Microscope aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
           Vérité terrain — fenêtres temporelles secrètes
         </h3>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
@@ -170,7 +170,7 @@ export default function ProjectOverviewTab({ project, points }: ProjectOverviewT
       {/* ——— Activité ——— */}
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          <Users aria-hidden="true" className="h-4 w-4 text-red-600 dark:text-red-400" />
+          <Users aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
           Soumissions
         </h3>
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">

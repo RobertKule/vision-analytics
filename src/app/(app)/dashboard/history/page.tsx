@@ -29,7 +29,7 @@ export default async function HistoryPage() {
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
       <header className="mb-6">
-        <p className="text-xs font-semibold uppercase tracking-wider text-forest-600 dark:text-forest-400">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-400">
           {d.shell.history}
         </p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -44,7 +44,7 @@ export default async function HistoryPage() {
           <p className="max-w-sm text-sm text-zinc-600 dark:text-zinc-400">{t.statsEmpty}</p>
           <Link
             href="/experience"
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-forest-600 px-5 text-sm font-semibold text-white transition-colors hover:bg-forest-500"
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-5 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
           >
             <Activity aria-hidden="true" className="h-4 w-4" />
             {t.observerCta}
@@ -73,19 +73,19 @@ export default async function HistoryPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-forest-500/10 px-2.5 py-1 text-xs font-bold text-forest-700 dark:text-forest-400">
+                <span className="rounded-full bg-gold-500/15 px-2.5 py-1 text-xs font-bold text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                   {t.statValid} · {entry.valid}
                 </span>
-                <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-700 dark:text-amber-400">
+                <span className="rounded-full bg-zinc-200 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
                   {t.statGhost} · {entry.ghost}
                 </span>
-                <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+                <span className="rounded-full bg-zinc-200 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
                   {entry.count} {t.statObservations}
                 </span>
                 <Link
                   href={`/observe/${entry.projectId}`}
                   aria-label={`${entry.projectTitle}`}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 transition-colors hover:border-forest-400 hover:text-forest-600 dark:border-white/10 dark:text-zinc-300 dark:hover:text-forest-400"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-zinc-500 transition-colors hover:border-gold-500/50 hover:text-gold-600 dark:border-white/10 dark:text-zinc-300 dark:hover:text-gold-400"
                 >
                   <ArrowRight aria-hidden="true" className="h-4 w-4" />
                 </Link>

@@ -39,7 +39,7 @@ export default function ExecutiveReportModal({
         {/* Barre d'action supérieure (masquée à l'impression) */}
         <header className="flex items-center justify-between border-b border-zinc-100 bg-zinc-50 px-6 py-3 dark:border-zinc-800 dark:bg-zinc-950 print:hidden">
           <div className="flex items-center gap-2">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400">
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gold-500/15 text-gold-700 dark:bg-gold-400/10 dark:text-gold-300">
               <FileText aria-hidden="true" className="h-4 w-4" />
             </span>
             <h2 id="report-modal-title" className="text-sm font-bold text-zinc-900 dark:text-zinc-50">
@@ -68,10 +68,10 @@ export default function ExecutiveReportModal({
         {/* ——— CONTENU DU RAPPORT FORMEL (Imprimable) ——— */}
         <div className="flex-1 overflow-y-auto p-8 font-sans text-zinc-900 dark:text-zinc-100 print:overflow-visible print:p-0">
           {/* Entête institutionnelle */}
-          <div className="border-b-2 border-red-600 pb-6">
+          <div className="border-b-2 border-gold-600 pb-6">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-red-600">
+                <p className="text-xs font-bold uppercase tracking-widest text-gold-700">
                   Vision Analytics · Protocole Scientifique en Double Aveugle
                 </p>
                 <h1 className="mt-1 text-2xl font-black text-zinc-950 dark:text-white sm:text-3xl">
@@ -123,7 +123,7 @@ export default function ExecutiveReportModal({
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
                 <span className="text-[11px] text-zinc-500">Taux de Concordance</span>
-                <p className="mt-1 text-2xl font-black text-red-600 dark:text-red-400">
+                <p className="mt-1 text-2xl font-black text-gold-700 dark:text-gold-400">
                   {summary.overallConcordanceRate}%
                 </p>
                 <span className="text-[10px] text-zinc-400">Cohérence inter-observateurs</span>
@@ -141,7 +141,7 @@ export default function ExecutiveReportModal({
 
               <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
                 <span className="text-[11px] text-zinc-500">Fausses Alertes</span>
-                <p className="mt-1 text-2xl font-black text-amber-600 dark:text-amber-400">
+                <p className="mt-1 text-2xl font-black text-slate dark:text-zinc-300">
                   {summary.ghostPointsCount}
                 </p>
                 <span className="text-[10px] text-zinc-400">Points fantômes détectés</span>
@@ -149,7 +149,7 @@ export default function ExecutiveReportModal({
 
               <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
                 <span className="text-[11px] text-zinc-500">Temps de Réaction Moyen</span>
-                <p className="mt-1 text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                <p className="mt-1 text-2xl font-black text-gold-700 dark:text-gold-400">
                   {summary.averageDetectionDelay !== null ? `+${summary.averageDetectionDelay}s` : '—'}
                 </p>
                 <span className="text-[10px] text-zinc-400">Latence moyenne de saisie</span>
@@ -189,7 +189,7 @@ export default function ExecutiveReportModal({
                       <td className="px-4 py-3 font-bold text-zinc-900 dark:text-zinc-100">
                         {point.concordanceRate}%
                       </td>
-                      <td className="px-4 py-3 font-semibold text-emerald-600 dark:text-emerald-400">
+                      <td className="px-4 py-3 font-semibold text-gold-700 dark:text-gold-400">
                         {point.avgDelaySeconds !== null ? `+${point.avgDelaySeconds}s` : '—'}
                       </td>
                     </tr>
@@ -217,12 +217,12 @@ export default function ExecutiveReportModal({
                   .map((bucket) => (
                     <div
                       key={bucket.startSecond}
-                      className="rounded-lg border border-red-200 bg-red-50/50 p-2 text-center text-xs dark:border-red-900 dark:bg-red-950/20"
+                      className="rounded-lg border border-zinc-300 bg-zinc-50 p-2 text-center text-xs dark:border-zinc-700 dark:bg-zinc-900/40"
                     >
                       <span className="font-mono text-zinc-600 dark:text-zinc-400">
                         Tranche {bucket.intervalLabel}
                       </span>
-                      <p className="font-bold text-red-600 dark:text-red-400">
+                      <p className="font-bold text-slate dark:text-zinc-300">
                         {bucket.count} fausse{bucket.count > 1 ? 's' : ''} alerte{bucket.count > 1 ? 's' : ''}
                       </p>
                     </div>
@@ -253,10 +253,10 @@ export default function ExecutiveReportModal({
                     <tr key={obs.userId}>
                       <td className="px-4 py-3 font-mono font-medium">{obs.anonymousId}</td>
                       <td className="px-4 py-3">{obs.totalObservations}</td>
-                      <td className="px-4 py-3 font-semibold text-emerald-600 dark:text-emerald-400">
+                      <td className="px-4 py-3 font-semibold text-gold-700 dark:text-gold-400">
                         {obs.validObservationsCount} ({obs.pointsDetectedCount}/{project.totalDefinedPoints} cibles)
                       </td>
-                      <td className="px-4 py-3 font-semibold text-red-600 dark:text-red-400">
+                      <td className="px-4 py-3 font-semibold text-slate dark:text-zinc-300">
                         {obs.ghostPointsCount}
                       </td>
                       <td className="px-4 py-3 font-bold">{obs.precisionRate}%</td>

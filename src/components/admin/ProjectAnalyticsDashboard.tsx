@@ -20,6 +20,41 @@ import type { ObservationCaptureDto, ProjectAnalyticsDto } from '@/lib/types'
 import { generateScientificCsv, triggerCsvDownload } from '@/lib/exportHelpers'
 import Tabs from '@/components/ui/Tabs'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
+import ClientChart from '@/components/charts/ClientChart'
+import {
+  buildDetectionSeries,
+  buildSplitSlices,
+  buildWindowBars,
+  tickIntervalFor,
+} from '@/components/charts/chartData'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+
+/** Couleurs de la charte éditoriale : or = validé, ardoise = fantôme. */
+const COLOR_GOLD = '#BD8F2E'
+const COLOR_GOLD_STRONG = '#9C711B'
+const COLOR_SLATE = '#4A4E57'
+
+const TOOLTIP_STYLE = {
+  borderRadius: 10,
+  border: '1px solid #E5E0D8',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
+  fontSize: 12,
+}
+
+const AXIS_TICK = { fontSize: 10, fill: '#8C8275' }
 
 type ProjectAnalyticsDashboardProps = {
   analytics: ProjectAnalyticsDto
@@ -36,22 +71,22 @@ function formatSeconds(seconds: number): string {
 function getConcordanceBadge(rate: number) {
   if (rate >= 75) {
     return {
-      bg: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800',
+      bg: 'bg-gold-500/15 text-gold-800 border-gold-500/40 dark:bg-gold-400/10 dark:text-gold-200 dark:border-gold-500/30',
       label: 'Élevée',
-      dot: 'bg-emerald-500',
+      dot: 'bg-gold-500',
     }
   }
   if (rate >= 50) {
     return {
-      bg: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800',
+      bg: 'bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-800/60 dark:text-zinc-300 dark:border-zinc-700',
       label: 'Moyenne',
-      dot: 'bg-amber-500',
+      dot: 'bg-zinc-500',
     }
   }
   return {
-    bg: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/60 dark:text-red-300 dark:border-red-800',
+    bg: 'bg-clay-50 text-clay-700 border-clay-200 dark:bg-clay-900/40 dark:text-clay-300 dark:border-clay-800',
     label: 'Faible',
-    dot: 'bg-red-500',
+    dot: 'bg-clay-500',
   }
 }
 
@@ -73,6 +108,16 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
     ...pointsAnalytics.map((p) => p.trameFin),
     ...ghostPointsAnalytics.captures.map((c) => c.timestampTotal),
   )
+
+  // Séries Recharts pour le bloc « Visualisations » de l'onglet Vue d'ensemble
+  const hasObservations = summary.totalObservations > 0
+  const detectionSeries = buildDetectionSeries(pointsAnalytics, ghostPointsAnalytics)
+  const splitSlices = buildSplitSlices(summary.validObservationsCount, summary.ghostPointsCount, {
+    valid: 'Valides',
+    ghost: 'Fantômes',
+  })
+  const windowBars = buildWindowBars(pointsAnalytics)
+  const hasWindows = pointsAnalytics.length > 0
 
   // Exportation CSV scientifique complète
   const handleExportCsv = () => {
@@ -97,7 +142,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
       <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-red-700 dark:bg-red-950 dark:text-red-300">
+            <span className="inline-flex items-center rounded-full bg-gold-500/15 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
               Moteur Scientifique & Concordance
             </span>
             <span className="text-xs text-zinc-400">•</span>
@@ -133,7 +178,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
           </button>
           <Link
             href={`/experience/${project.id}`}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-600 px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft"
           >
             <Eye aria-hidden="true" className="h-3.5 w-3.5" /> Tester la session
           </Link>
@@ -210,7 +255,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
               </div>
               <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                 <div
-                  className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                  className="h-full rounded-full bg-gold-500 transition-all duration-500"
                   style={{ width: `${summary.overallConcordanceRate}%` }}
                 />
               </div>
@@ -240,7 +285,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                 <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
                   Précision Détection
                 </span>
-                <span className="font-mono text-xs font-bold text-red-600 dark:text-red-400">
+                <span className="font-mono text-xs font-bold text-slate dark:text-zinc-300">
                   {summary.ghostPointsCount} fausse{summary.ghostPointsCount > 1 ? 's' : ''} alerte{summary.ghostPointsCount > 1 ? 's' : ''}
                 </span>
               </div>
@@ -252,9 +297,9 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                   ({summary.validObservationsCount} validées)
                 </span>
               </div>
-              <div className="mt-3 flex h-2 w-full overflow-hidden rounded-full bg-red-100 dark:bg-red-950">
+              <div className="mt-3 flex h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                 <div
-                  className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                  className="h-full rounded-full bg-gold-500 transition-all duration-500"
                   style={{ width: `${summary.overallPrecisionRate}%` }}
                 />
               </div>
@@ -277,6 +322,208 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                 Écart moyen par rapport à `trameDebut`
               </p>
             </div>
+          </section>
+
+          {/* ——— Visualisations analytiques (Recharts) ——— */}
+          <section aria-labelledby="viz-title" className="flex flex-col gap-4">
+            <header className="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <h2 id="viz-title" className="text-base font-bold text-zinc-900 dark:text-zinc-100">
+                  Visualisations
+                </h2>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Répartition des détections dans le temps et ventilation des captures.
+                </p>
+              </div>
+            </header>
+
+            {!hasObservations ? (
+              <div className="grid place-items-center rounded-2xl border border-dashed border-zinc-300 bg-white px-6 py-12 text-center text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
+                <p>Aucune capture à afficher pour le moment.</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid gap-6 lg:grid-cols-2">
+                  {/* Détections dans le temps */}
+                  <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Détections dans le temps
+                    </h3>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Captures validées et points fantômes par intervalle de 10 secondes.
+                    </p>
+                    <div className="mt-2 flex items-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-300">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-sm bg-gold-500" />
+                        Valides
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-sm bg-slate" />
+                        Fantômes
+                      </span>
+                    </div>
+                    <ClientChart>
+                      <div className="h-56 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart
+                            data={detectionSeries}
+                            margin={{ top: 8, right: 4, left: -22, bottom: 0 }}
+                          >
+                            <defs>
+                              <linearGradient id="vizGradValid" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor={COLOR_GOLD} stopOpacity={0.3} />
+                                <stop offset="100%" stopColor={COLOR_GOLD} stopOpacity={0.02} />
+                              </linearGradient>
+                              <linearGradient id="vizGradGhost" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor={COLOR_SLATE} stopOpacity={0.3} />
+                                <stop offset="100%" stopColor={COLOR_SLATE} stopOpacity={0.02} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E5E0D8" strokeOpacity={0.6} />
+                            <XAxis
+                              dataKey="label"
+                              tick={AXIS_TICK}
+                              tickLine={false}
+                              axisLine={false}
+                              interval={tickIntervalFor(detectionSeries.length)}
+                              minTickGap={16}
+                            />
+                            <YAxis
+                              allowDecimals={false}
+                              tick={AXIS_TICK}
+                              tickLine={false}
+                              axisLine={false}
+                              width={34}
+                            />
+                            <Tooltip contentStyle={TOOLTIP_STYLE} />
+                            <Area
+                              name="Valides"
+                              type="monotone"
+                              dataKey="valid"
+                              stroke={COLOR_GOLD_STRONG}
+                              strokeWidth={2}
+                              fill="url(#vizGradValid)"
+                              isAnimationActive={false}
+                            />
+                            <Area
+                              name="Fantômes"
+                              type="monotone"
+                              dataKey="ghost"
+                              stroke={COLOR_SLATE}
+                              strokeWidth={2}
+                              fill="url(#vizGradGhost)"
+                              isAnimationActive={false}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </ClientChart>
+                  </section>
+
+                  {/* Valides vs Fantômes */}
+                  <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Valides vs Fantômes
+                    </h3>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Taux de précision globale de la session d’observation.
+                    </p>
+                    <div className="mt-2 flex items-center justify-center gap-6">
+                      <div className="h-48 w-full max-w-[15rem]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Tooltip contentStyle={TOOLTIP_STYLE} />
+                            <Pie
+                              data={splitSlices}
+                              dataKey="value"
+                              nameKey="name"
+                              innerRadius="58%"
+                              outerRadius="85%"
+                              paddingAngle={3}
+                              strokeWidth={1}
+                              isAnimationActive={false}
+                            >
+                              {splitSlices.map((slice) => (
+                                <Cell
+                                  key={slice.id}
+                                  fill={slice.id === 'valid' ? COLOR_GOLD : COLOR_SLATE}
+                                />
+                              ))}
+                            </Pie>
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <ul className="flex flex-col gap-2 text-xs">
+                        {splitSlices.map((slice) => (
+                          <li key={slice.id} className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{
+                                backgroundColor: slice.id === 'valid' ? COLOR_GOLD : COLOR_SLATE,
+                              }}
+                            />
+                            <span className="text-zinc-600 dark:text-zinc-300">{slice.name}</span>
+                            <span className="font-bold tabular-nums text-zinc-900 dark:text-zinc-100">
+                              {slice.value}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </section>
+                </div>
+
+                {/* Captures par fenêtre cible (pleine largeur) */}
+                {hasWindows ? (
+                  <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Captures par fenêtre cible
+                    </h3>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Volume de captures validées pour chaque fenêtre définie par l’admin.
+                    </p>
+                    <ClientChart>
+                      <div className="h-56 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart
+                            data={windowBars}
+                            margin={{ top: 8, right: 4, left: -22, bottom: 0 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="#E5E0D8" strokeOpacity={0.6} />
+                            <XAxis
+                              dataKey="name"
+                              tick={AXIS_TICK}
+                              tickLine={false}
+                              axisLine={false}
+                              interval={0}
+                              tickFormatter={(value: string) =>
+                                value.length > 18 ? `${value.slice(0, 17)}…` : value
+                              }
+                            />
+                            <YAxis
+                              allowDecimals={false}
+                              tick={AXIS_TICK}
+                              tickLine={false}
+                              axisLine={false}
+                              width={34}
+                            />
+                            <Tooltip contentStyle={TOOLTIP_STYLE} />
+                            <Bar
+                              dataKey="captures"
+                              name="Captures"
+                              fill={COLOR_GOLD}
+                              radius={[6, 6, 0, 0]}
+                              maxBarSize={52}
+                              isAnimationActive={false}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </ClientChart>
+                  </section>
+                ) : null}
+              </>
+            )}
           </section>
 
           {/* Matrice de performance des observateurs */}
@@ -314,10 +561,10 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                         <td className="px-6 py-4 text-zinc-700 dark:text-zinc-300">
                           {obs.totalObservations}
                         </td>
-                        <td className="px-6 py-4 font-semibold text-emerald-600 dark:text-emerald-400">
+                        <td className="px-6 py-4 font-semibold text-gold-700 dark:text-gold-400">
                           {obs.validObservationsCount} ({obs.pointsDetectedCount}/{project.totalDefinedPoints} cibles)
                         </td>
-                        <td className="px-6 py-4 font-semibold text-red-600 dark:text-red-400">
+                        <td className="px-6 py-4 font-semibold text-slate dark:text-zinc-300">
                           {obs.ghostPointsCount}
                         </td>
                         <td className="px-6 py-4">
@@ -327,7 +574,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                             </span>
                             <div className="h-1.5 w-16 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                               <div
-                                className="h-full rounded-full bg-emerald-500"
+                                className="h-full rounded-full bg-gold-500"
                                 style={{ width: `${obs.precisionRate}%` }}
                               />
                             </div>
@@ -359,20 +606,20 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                   Cartographie Temporelle des Détections
                 </h2>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Comparaison visuelle entre les fenêtres cibles prédéfinies (vert) et les captures réelles des observateurs.
+                  Comparaison visuelle entre les fenêtres cibles prédéfinies (or) et les captures réelles des observateurs.
                 </p>
               </div>
               <div className="flex items-center gap-3 text-xs">
                 <span className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                  <span className="h-3 w-3 rounded bg-emerald-500/30 border border-emerald-500" />
+                  <span className="h-3 w-3 rounded bg-gold-500/30 border border-gold-500" />
                   Fenêtre Cible Admin
                 </span>
                 <span className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-300" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-gold-500 ring-2 ring-gold-300" />
                   Capture Validée
                 </span>
                 <span className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
-                  <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-red-300" />
+                  <span className="h-2.5 w-2.5 rounded-full bg-slate ring-2 ring-zinc-300 dark:ring-zinc-500" />
                   Point Fantôme (Fausse alerte)
                 </span>
               </div>
@@ -391,9 +638,9 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                       key={point.pointId}
                       style={{ left: `${leftPercent}%`, width: `${widthPercent}%` }}
                       title={`${point.pointName} (${formatSeconds(point.trameDebut)} - ${formatSeconds(point.trameFin)}) : ${point.concordanceRate}% concordance`}
-                      className="absolute top-0 bottom-0 flex items-center justify-center overflow-hidden rounded-lg bg-emerald-500/20 border border-emerald-500/50 hover:bg-emerald-500/30 transition-colors"
+                      className="absolute top-0 bottom-0 flex items-center justify-center overflow-hidden rounded-lg bg-gold-500/20 border border-gold-500/50 hover:bg-gold-500/30 transition-colors"
                     >
-                      <span className="truncate px-1 font-mono text-[10px] font-bold text-emerald-800 dark:text-emerald-300">
+                      <span className="truncate px-1 font-mono text-[10px] font-bold text-gold-800 dark:text-gold-300">
                         {point.pointName}
                       </span>
                     </div>
@@ -410,7 +657,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                         onClick={() => setSelectedCapture(cap)}
                         style={{ left: `${leftPercent}%` }}
                         title={`Capture ${formatSeconds(cap.timestampTotal)} par ${cap.observerAnonymousId} (Délai : +${cap.delaySeconds}s)`}
-                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3.5 w-3.5 rounded-full bg-emerald-500 border-2 border-white shadow-md ring-2 ring-emerald-400 hover:scale-125 transition-transform dark:border-zinc-900"
+                        className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3.5 w-3.5 rounded-full bg-gold-500 border-2 border-white shadow-md ring-2 ring-gold-400 hover:scale-125 transition-transform dark:border-zinc-900"
                       />
                     )
                   }),
@@ -425,7 +672,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                       onClick={() => setSelectedCapture(cap)}
                       style={{ left: `${leftPercent}%` }}
                       title={`Point Fantôme ${formatSeconds(cap.timestampTotal)} par ${cap.observerAnonymousId}`}
-                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3.5 w-3.5 rounded-full bg-red-500 border-2 border-white shadow-md ring-2 ring-red-400 hover:scale-125 transition-transform dark:border-zinc-900"
+                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 h-3.5 w-3.5 rounded-full bg-slate border-2 border-white shadow-md ring-2 ring-zinc-400 hover:scale-125 transition-transform dark:ring-zinc-500 dark:border-zinc-900"
                     />
                   )
                 })}
@@ -461,7 +708,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                       onClick={() => setSelectedPointId(point.pointId)}
                       className={`flex flex-col items-start gap-2 rounded-xl border p-4 text-left transition-all ${
                         isSelected
-                          ? 'border-red-600 bg-red-50/50 shadow-sm dark:border-red-500 dark:bg-red-950/20'
+                          ? 'border-gold-600 bg-gold-500/10 shadow-sm dark:border-gold-500 dark:bg-gold-500/15'
                           : 'border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700'
                       }`}
                     >
@@ -487,7 +734,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                       </div>
 
                       {point.avgDelaySeconds !== null && (
-                        <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="text-[11px] font-medium text-gold-700 dark:text-gold-400">
                           Délai moyen : +{point.avgDelaySeconds}s
                         </span>
                       )}
@@ -548,7 +795,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                               <User aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                               {capture.observerAnonymousId.slice(0, 16)}…
                             </span>
-                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                            <span className="font-semibold text-gold-700 dark:text-gold-400">
                               +{capture.delaySeconds}s
                             </span>
                           </div>
@@ -584,7 +831,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                   key={bucket.startSecond}
                   className={`flex flex-col items-center rounded-xl border p-3 text-center ${
                     bucket.count > 0
-                      ? 'border-red-300 bg-red-50/50 dark:border-red-900 dark:bg-red-950/20'
+                      ? 'border-zinc-300 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800/60'
                       : 'border-zinc-100 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950'
                   }`}
                 >
@@ -593,7 +840,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                   </span>
                   <span
                     className={`mt-1 text-lg font-bold ${
-                      bucket.count > 0 ? 'text-red-600 dark:text-red-400' : 'text-zinc-300 dark:text-zinc-700'
+                      bucket.count > 0 ? 'text-slate dark:text-zinc-300' : 'text-zinc-300 dark:text-zinc-700'
                     }`}
                   >
                     {bucket.count}
@@ -626,7 +873,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                   <article
                     key={capture.id}
                     onClick={() => setSelectedCapture(capture)}
-                    className="group cursor-pointer overflow-hidden rounded-xl border border-red-200 bg-zinc-50 transition-all hover:border-red-400 hover:shadow-md dark:border-red-900 dark:bg-zinc-950"
+                    className="group cursor-pointer overflow-hidden rounded-xl border border-zinc-300 bg-zinc-50 transition-all hover:border-zinc-400 hover:shadow-md dark:border-zinc-700 dark:bg-zinc-950"
                   >
                     <div className="relative aspect-video w-full bg-black">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -635,7 +882,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                         alt={`Point fantôme à ${formatSeconds(capture.timestampTotal)}`}
                         className="h-full w-full object-contain"
                       />
-                      <span className="absolute top-2 left-2 rounded bg-red-600 px-2 py-0.5 text-[10px] font-bold text-white uppercase">
+                      <span className="absolute top-2 left-2 rounded bg-slate px-2 py-0.5 text-[10px] font-bold text-white uppercase">
                         Fausse Alerte
                       </span>
                       <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded bg-black/70 px-2 py-0.5 font-mono text-[10px] text-white">
@@ -676,7 +923,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
               <div className="flex items-center gap-3">
                 <span
                   className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
-                    selectedCapture.isGhostPoint ? 'bg-red-600 text-white' : 'bg-emerald-600 text-white'
+                    selectedCapture.isGhostPoint ? 'bg-slate text-white' : 'bg-gold-700 text-white'
                   }`}
                 >
                   {selectedCapture.isGhostPoint ? 'Point Fantôme (Fausse Alerte)' : 'Capture Validée'}
@@ -713,7 +960,7 @@ export default function ProjectAnalyticsDashboard({ analytics }: ProjectAnalytic
                 href={selectedCapture.imageUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="font-medium text-red-400 hover:underline"
+                className="font-medium text-gold-400 hover:underline"
               >
                 Ouvrir l’image originale Cloudinary
                 <ExternalLink aria-hidden="true" className="ml-1 inline h-3.5 w-3.5" />

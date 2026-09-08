@@ -7,7 +7,7 @@ import CaptureGallery from '@/components/admin/projects/CaptureGallery'
 import { observerLabelOf } from '@/lib/exportHelpers'
 
 const selectClass =
-  'h-9 rounded-lg border border-zinc-300 bg-white px-2.5 text-sm text-zinc-700 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/30 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200'
+  'h-9 rounded-lg border border-zinc-300 bg-white px-2.5 text-sm text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-milk dark:focus:ring-milk/15'
 
 type ObservationsTabProps = {
   rows: ProjectObservationRowDto[]

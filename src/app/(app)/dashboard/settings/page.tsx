@@ -31,7 +31,7 @@ export default async function SettingsPage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
       <header className="mb-6">
-        <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-forest-600 dark:text-forest-400">
+        <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-400">
           <SettingsIcon aria-hidden="true" className="h-3.5 w-3.5" />
           {t.settings}
         </p>
@@ -44,7 +44,7 @@ export default async function SettingsPage() {
         {/* ——— Profil ——— */}
         <section className={cardClass}>
           <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-            <UserRound aria-hidden="true" className="h-4 w-4 text-forest-600 dark:text-forest-400" />
+            <UserRound aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
             {locale === 'en' ? 'Account' : 'Compte'}
           </h2>
           <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
@@ -79,7 +79,7 @@ export default async function SettingsPage() {
         {/* ——— Apparence ——— */}
         <section className={cardClass}>
           <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-            <Moon aria-hidden="true" className="h-4 w-4 text-mist-600 dark:text-mist-400" />
+            <Moon aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
             {nav.themeAria}
           </h2>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 px-4 py-3 dark:border-white/10">
@@ -94,7 +94,7 @@ export default async function SettingsPage() {
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200 px-4 py-3 dark:border-white/10">
             <p className="flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-200">
-              <Languages aria-hidden="true" className="h-4 w-4 text-forest-600 dark:text-forest-400" />
+              <Languages aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
               Language
             </p>
             <LanguageToggle locale={locale} />

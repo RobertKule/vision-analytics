@@ -15,7 +15,7 @@ import { formatDate } from '@/components/admin/projects/projectFormat'
  * donne accès à la fiche, aux statistiques et à l'ouverture de la session.
  */
 export default function ProjectsManager({ projects }: { projects: ProjectDto[] }) {
-  const [view, setView] = useState<'list' | 'create'>('list')
+  const [creating, setCreating] = useState(false)
   const totalObservations = projects.reduce(
     (sum, project) => sum + (project.observationCount ?? 0),
     0,
@@ -34,11 +34,11 @@ export default function ProjectsManager({ projects }: { projects: ProjectDto[] }
             observation{totalObservations > 1 ? 's' : ''} au total
           </p>
         </div>
-        {view === 'list' ? (
+        {!creating ? (
           <button
             type="button"
-            onClick={() => setView('create')}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-red-500"
+            onClick={() => setCreating(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
           >
             <CirclePlus aria-hidden="true" className="h-4 w-4" />
             Nouveau projet
@@ -46,16 +46,16 @@ export default function ProjectsManager({ projects }: { projects: ProjectDto[] }
         ) : null}
       </div>
 
-      {/* ——— Formulaire de création ——— */}
-      {view === 'create' ? (
+      {/* ——— Assistant création (tiroir) ——— */}
+      {creating ? (
         <CreateProjectForm
-          onCreated={() => setView('list')}
-          onCancel={() => setView('list')}
+          onCreated={() => setCreating(false)}
+          onCancel={() => setCreating(false)}
         />
       ) : null}
 
       {/* ——— État vide ——— */}
-      {view === 'list' && projects.length === 0 ? (
+      {!creating && projects.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-900">
           <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-zinc-400 dark:bg-zinc-800">
             <FolderKanban aria-hidden="true" className="h-6 w-6" />
@@ -66,8 +66,8 @@ export default function ProjectsManager({ projects }: { projects: ProjectDto[] }
           </p>
           <button
             type="button"
-            onClick={() => setView('create')}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-red-600 px-5 text-sm font-semibold text-white transition-colors hover:bg-red-500"
+            onClick={() => setCreating(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-ink px-5 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
           >
             <CirclePlus aria-hidden="true" className="h-4 w-4" />
             Créer un projet
@@ -76,7 +76,7 @@ export default function ProjectsManager({ projects }: { projects: ProjectDto[] }
       ) : null}
 
       {/* ——— Tableau maître ——— */}
-      {view === 'list' && projects.length > 0 ? (
+      {!creating && projects.length > 0 ? (
         <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[52rem] text-left text-sm">
@@ -99,11 +99,11 @@ export default function ProjectsManager({ projects }: { projects: ProjectDto[] }
                       <div className="flex items-center gap-2">
                         <Link
                           href={`/admin/projects/${project.id}`}
-                          className="max-w-xs truncate font-semibold text-zinc-900 underline-offset-2 transition-colors hover:text-red-600 hover:underline dark:text-zinc-50 dark:hover:text-red-400"
+                          className="max-w-xs truncate font-semibold text-zinc-900 underline-offset-2 transition-colors hover:text-gold-600 hover:underline dark:text-zinc-50 dark:hover:text-gold-300"
                         >
                           {project.title}
                         </Link>
-                        <span className="inline-flex shrink-0 items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+                        <span className="inline-flex shrink-0 items-center rounded-full bg-gold-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                           Actif
                         </span>
                       </div>
@@ -134,7 +134,7 @@ export default function ProjectsManager({ projects }: { projects: ProjectDto[] }
                       <div className="flex items-center justify-end gap-1.5">
                         <Link
                           href={`/admin/projects/${project.id}`}
-                          className="inline-flex h-8 items-center rounded-lg bg-red-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-red-500"
+                          className="inline-flex h-8 items-center rounded-lg bg-ink px-3 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                         >
                           Gérer
                         </Link>

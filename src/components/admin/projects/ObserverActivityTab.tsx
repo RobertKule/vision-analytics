@@ -13,7 +13,7 @@ type ObserverActivityTabProps = {
   rows: ProjectObservationRowDto[]
 }
 
-const GOLD_LABEL = 'font-mono text-[11px] font-bold uppercase tracking-wide text-amber-600 dark:text-amber-400'
+const GOLD_LABEL = 'font-mono text-[11px] font-bold uppercase tracking-wide text-gold-600 dark:text-gold-400'
 
 /**
  * Onglet « Activité des observateurs » : liste des observateurs, sélection,
@@ -62,7 +62,7 @@ export default function ObserverActivityTab({ projectId, projectTitle, rows }: O
                   aria-pressed={isActive}
                   className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${
                     isActive
-                      ? 'border-red-600 bg-red-50 dark:border-red-500 dark:bg-red-900/20'
+                      ? 'border-gold-600 bg-gold-500/10 dark:border-gold-400/60 dark:bg-gold-400/10'
                       : 'border-zinc-200 bg-white hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800'
                   }`}
                 >
@@ -79,7 +79,7 @@ export default function ObserverActivityTab({ projectId, projectTitle, rows }: O
                       <span className={GOLD_LABEL}>{group.ghostCount} fantôme{group.ghostCount > 1 ? 's' : ''}</span>
                     ) : null}
                     <span className="inline-flex items-center gap-1">
-                      <Trophy aria-hidden="true" className="h-3 w-3 text-emerald-500" />
+                      <Trophy aria-hidden="true" className="h-3 w-3 text-gold-600" />
                       {group.validCount} validée{group.validCount > 1 ? 's' : ''}
                     </span>
                     <span>dernier {formatDate(group.lastAt)}</span>

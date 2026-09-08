@@ -19,9 +19,9 @@ type UserActionsProps = {
 }
 
 const ROLE_BADGE: Record<SessionRole, string> = {
-  ADMIN: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-  ANALYST: 'bg-mist-500/15 text-mist-700 dark:text-mist-400',
-  OBSERVER: 'bg-forest-500/15 text-forest-700 dark:text-forest-400',
+  ADMIN: 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200',
+  ANALYST: 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200',
+  OBSERVER: 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200',
 }
 
 function displayName(username: string | null, email: string): string {
@@ -91,7 +91,7 @@ export default function UserActions({
 
   const avatar = (sizeClass: string) => (
     <span
-      className={`inline-flex shrink-0 select-none items-center justify-center rounded-full bg-gradient-to-br from-forest-500 to-forest-700 font-bold text-white ${sizeClass}`}
+      className={`inline-flex shrink-0 select-none items-center justify-center rounded-full bg-ink font-bold text-milk dark:bg-milk dark:text-ink ${sizeClass}`}
       aria-hidden="true"
     >
       {userInitials}
@@ -132,7 +132,7 @@ export default function UserActions({
             aria-label={t.profileAria}
             aria-haspopup="menu"
             aria-expanded={isProfileOpen}
-            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-zinc-200 bg-white py-0.5 pl-1 pr-2 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:border-forest-500/50 hover:text-zinc-900 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:border-forest-500/40"
+            className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line bg-milk py-0.5 pl-1 pr-2 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:border-gold-500/50 hover:text-zinc-900 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:border-gold-500/40"
           >
             {avatar('h-7 w-7 text-[11px]')}
             <span className="hidden max-w-[10rem] truncate lg:inline">{userName}</span>
@@ -173,7 +173,7 @@ export default function UserActions({
                 <Link
                   href={workspaceHref}
                   onClick={() => setIsProfileOpen(false)}
-                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-200 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
+                  className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-200 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
                 >
                   <LayoutDashboard
                     aria-hidden="true"
@@ -190,10 +190,10 @@ export default function UserActions({
                   role="menuitem"
                   onClick={handleLogout}
                   disabled={isPending}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-500/10"
+                  className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-semibold text-clay-600 transition-colors hover:bg-clay-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-clay-400 dark:hover:bg-clay-500/10"
                 >
                   {isPending ? (
-                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-clay-600 border-t-transparent dark:border-clay-400" />
                   ) : (
                     <LogOut aria-hidden="true" className="h-4 w-4 shrink-0" />
                   )}
@@ -206,7 +206,7 @@ export default function UserActions({
       ) : (
         <Link
           href="/login"
-          className="hidden h-9 items-center justify-center gap-1.5 rounded-lg bg-forest-600 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500 md:inline-flex"
+          className="hidden h-9 items-center justify-center gap-1.5 rounded-lg bg-ink px-4 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft md:inline-flex dark:bg-milk dark:text-ink dark:hover:bg-white/90"
         >
           <LogIn aria-hidden="true" className="h-4 w-4 shrink-0" />
           <span>{t.login}</span>
@@ -273,7 +273,7 @@ export default function UserActions({
                 <Link
                   href="/login"
                   onClick={() => setIsMenuOpen(false)}
-                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-forest-600 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500"
+                  className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-ink text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                 >
                   <LogIn aria-hidden="true" className="h-4 w-4 shrink-0" />
                   {t.login}
@@ -288,7 +288,7 @@ export default function UserActions({
                   <Link
                     href={session ? '/experience' : '/observe'}
                     onClick={() => setIsMenuOpen(false)}
-                    className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-200 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
+                    className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-200 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
                   >
                     <Eye aria-hidden="true" className="h-4 w-4 shrink-0 text-zinc-400" />
                     {t.observe}
@@ -299,7 +299,7 @@ export default function UserActions({
                     <Link
                       href={workspaceHref}
                       onClick={() => setIsMenuOpen(false)}
-                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-200 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
+                      className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-200 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
                     >
                       <LayoutDashboard aria-hidden="true" className="h-4 w-4 shrink-0 text-zinc-400" />
                       {t.myWorkspace}
@@ -333,10 +333,10 @@ export default function UserActions({
                   type="button"
                   onClick={handleLogout}
                   disabled={isPending}
-                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-red-50 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/15"
+                  className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-clay-50 text-sm font-semibold text-clay-700 transition-colors hover:bg-clay-100 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-clay-500/10 dark:text-clay-300 dark:hover:bg-clay-500/20"
                 >
                   {isPending ? (
-                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-clay-600 border-t-transparent dark:border-clay-400" />
                   ) : (
                     <LogOut aria-hidden="true" className="h-4 w-4 shrink-0" />
                   )}

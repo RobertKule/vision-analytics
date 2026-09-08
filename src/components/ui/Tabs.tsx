@@ -56,7 +56,7 @@ export default function Tabs({
             title={item.hint}
             className={`inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 font-semibold transition-colors ${padding} ${
               isActive
-                ? 'border-red-600 text-red-600 dark:border-red-500 dark:text-red-400'
+                ? 'border-gold-600 text-gold-700 dark:text-gold-400'
                 : 'border-transparent text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
             }`}
           >
@@ -66,7 +66,7 @@ export default function Tabs({
               <span
                 className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums ${
                   isActive
-                    ? 'bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300'
+                    ? 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200'
                     : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300'
                 }`}
               >

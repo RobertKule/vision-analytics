@@ -51,15 +51,15 @@ export default async function ExperienceProjectPage({ params }: PageProps) {
       <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded-full bg-forest-500/10 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-forest-700 dark:bg-forest-500/10 dark:text-forest-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-gold-500/15 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wider text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
               <EyeOff aria-hidden="true" className="h-3 w-3" />
               {t.blindBadge}
             </span>
             <span className="text-xs text-zinc-400 dark:text-zinc-500">•</span>
             <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-forest-500 opacity-60" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-forest-500" />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gold-500 opacity-60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-gold-500" />
               </span>
               {t.activeLabel}
             </span>
@@ -86,9 +86,9 @@ export default async function ExperienceProjectPage({ params }: PageProps) {
       </header>
 
       {/* Bannière de rigueur scientifique */}
-      <div className="mb-6 rounded-xl border border-forest-500/20 bg-gradient-to-r from-forest-500/[0.07] to-transparent p-4 text-xs leading-relaxed text-zinc-600 dark:border-forest-500/15 dark:from-forest-500/10 dark:to-transparent dark:text-zinc-400">
+      <div className="mb-6 rounded-xl border border-gold-500/20 bg-gradient-to-r from-gold-500/[0.07] to-transparent p-4 text-xs leading-relaxed text-zinc-600 dark:border-gold-500/15 dark:from-gold-500/10 dark:to-transparent dark:text-zinc-400">
         <p className="inline-flex items-center gap-1.5 font-semibold text-zinc-900 dark:text-zinc-100">
-          <ShieldCheck aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
+          <ShieldCheck aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
           {t.guidelinesTitle}
         </p>
         <p className="mt-1.5">{t.guidelines}</p>
@@ -96,7 +96,7 @@ export default async function ExperienceProjectPage({ params }: PageProps) {
 
       {project.videoUrl && (
         <div className="mb-4 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-white/10 dark:bg-[#161b22] dark:text-zinc-300">
-          <Film aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
+          <Film aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
           <span>{t.targetVideoLabel}</span>
           <code className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{project.videoUrl}</code>
         </div>

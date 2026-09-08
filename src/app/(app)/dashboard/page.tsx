@@ -54,7 +54,7 @@ export default async function DashboardPage() {
           {label}
         </p>
         <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${accent}`}>
-          <Icon aria-hidden="true" className="h-4 w-4 text-white" />
+          <Icon aria-hidden="true" className="h-4 w-4 text-milk dark:text-ink" />
         </span>
       </div>
       <p className="mt-1.5 text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -67,7 +67,7 @@ export default async function DashboardPage() {
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
       {/* ——— En-tête ——— */}
       <header className="mb-8">
-        <p className="text-xs font-semibold uppercase tracking-wider text-forest-600 dark:text-forest-400">
+        <p className="text-xs font-semibold uppercase tracking-wider text-gold-700 dark:text-gold-400">
           {t.eyebrow}
         </p>
         <h1 className="mt-1 text-2xl font-bold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-50">
@@ -87,11 +87,11 @@ export default async function DashboardPage() {
             {session.role === 'OBSERVER' ? (
               <Link
                 href="/experience"
-                className="group flex items-start justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-forest-500/40 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
+                className="group flex items-start justify-between gap-3 rounded-2xl border border-line bg-milk p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-gold-500/50 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
               >
                 <div>
                   <p className="inline-flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-forest-500/10 text-forest-600 dark:text-forest-400">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                       <Eye aria-hidden="true" className="h-4 w-4" />
                     </span>
                     {t.observerCardTitle}
@@ -100,7 +100,7 @@ export default async function DashboardPage() {
                     {t.observerCardDesc}
                   </p>
                 </div>
-                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-forest-600 text-white transition-transform group-hover:translate-x-0.5">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-milk transition-transform group-hover:translate-x-0.5 dark:bg-milk dark:text-ink">
                   <ArrowRight aria-hidden="true" className="h-4 w-4" />
                 </span>
               </Link>
@@ -110,11 +110,11 @@ export default async function DashboardPage() {
             {session.role === 'ANALYST' ? (
               <Link
                 href="/analyst/projects"
-                className="group flex items-start justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-mist-500/40 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
+                className="group flex items-start justify-between gap-3 rounded-2xl border border-line bg-milk p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-gold-500/50 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
               >
                 <div>
                   <p className="inline-flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-mist-500/10 text-mist-600 dark:text-mist-400">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                       <FolderKanban aria-hidden="true" className="h-4 w-4" />
                     </span>
                     {t.analystCardTitle}
@@ -123,7 +123,7 @@ export default async function DashboardPage() {
                     {t.analystCardDesc}
                   </p>
                 </div>
-                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-mist-600 text-white transition-transform group-hover:translate-x-0.5">
+                <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-milk transition-transform group-hover:translate-x-0.5 dark:bg-milk dark:text-ink">
                   <ArrowRight aria-hidden="true" className="h-4 w-4" />
                 </span>
               </Link>
@@ -134,11 +134,11 @@ export default async function DashboardPage() {
               <>
                 <Link
                   href="/admin/projects"
-                  className="group flex items-start justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-amber-500/40 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
+                  className="group flex items-start justify-between gap-3 rounded-2xl border border-line bg-milk p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-gold-500/50 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
                 >
                   <div>
                     <p className="inline-flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                         <LayoutDashboard aria-hidden="true" className="h-4 w-4" />
                       </span>
                       {t.adminCardTitle}
@@ -147,23 +147,23 @@ export default async function DashboardPage() {
                       {t.adminCardDesc}
                     </p>
                   </div>
-                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white transition-transform group-hover:translate-x-0.5">
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-milk transition-transform group-hover:translate-x-0.5 dark:bg-milk dark:text-ink">
                     <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </span>
                 </Link>
                 <Link
                   href="/admin/users"
-                  className="group flex items-start justify-between gap-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-forest-500/40 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
+                  className="group flex items-start justify-between gap-3 rounded-2xl border border-line bg-milk p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-gold-500/50 hover:shadow-lg dark:border-white/10 dark:bg-[#161b22]"
                 >
                   <div>
                     <p className="inline-flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-forest-500/10 text-forest-600 dark:text-forest-400">
+                      <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                         <Users aria-hidden="true" className="h-4 w-4" />
                       </span>
                       {s.users}
                     </p>
                   </div>
-                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-forest-600 text-white transition-transform group-hover:translate-x-0.5">
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-ink text-milk transition-transform group-hover:translate-x-0.5 dark:bg-milk dark:text-ink">
                     <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </span>
                 </Link>
@@ -175,8 +175,8 @@ export default async function DashboardPage() {
         {/* ——— Compteurs par rôle ——— */}
         {session.role === 'ANALYST' ? (
           <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {statCard(t.statProjects, ownedCount, FolderKanban, 'bg-mist-500')}
-            {statCard(t.statShared, sharedCount, Users, 'bg-forest-500')}
+            {statCard(t.statProjects, ownedCount, FolderKanban, 'bg-ink dark:bg-milk')}
+            {statCard(t.statShared, sharedCount, Users, 'bg-ink dark:bg-milk')}
           </section>
         ) : null}
 
@@ -185,12 +185,12 @@ export default async function DashboardPage() {
           <section aria-labelledby="history-title">
             <div className="mb-4 flex items-center justify-between">
               <h2 id="history-title" className="inline-flex items-center gap-2 text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                <Activity aria-hidden="true" className="h-4 w-4 text-forest-600 dark:text-forest-400" />
+                <Activity aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
                 {t.statsTitle}
               </h2>
               <Link
                 href="/dashboard/history"
-                className="inline-flex items-center gap-1 text-xs font-medium text-forest-600 hover:text-forest-500 dark:text-forest-400"
+                className="inline-flex items-center gap-1 text-xs font-medium text-gold-700 hover:text-gold-600 dark:text-gold-400"
               >
                 {s.history}
                 <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
@@ -223,13 +223,13 @@ export default async function DashboardPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="rounded-full bg-forest-500/10 px-2.5 py-1 text-xs font-bold text-forest-700 dark:text-forest-400">
+                      <span className="rounded-full bg-gold-500/15 px-2.5 py-1 text-xs font-bold text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
                         {t.statValid} · {entry.valid}
                       </span>
-                      <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-700 dark:text-amber-400">
+                      <span className="rounded-full bg-zinc-200 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
                         {t.statGhost} · {entry.ghost}
                       </span>
-                      <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+                      <span className="rounded-full bg-zinc-200 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
                         {t.statObservations} · {entry.count}
                       </span>
                     </div>
@@ -242,8 +242,8 @@ export default async function DashboardPage() {
 
         {/* ——— Bandeau de rôle (autre que pur observateur) ——— */}
         {session.role !== 'OBSERVER' ? (
-          <section className="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-gradient-to-br from-forest-500/10 to-mist-500/5 p-5 dark:border-white/10">
-            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-forest-600 text-white">
+          <section className="flex items-center gap-3 rounded-2xl border border-line bg-gradient-to-br from-gold-500/10 to-gold-500/5 p-5 dark:border-white/10">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-ink text-milk dark:bg-milk dark:text-ink">
               {session.role === 'ADMIN' ? (
                 <ShieldCheck aria-hidden="true" className="h-5 w-5" />
               ) : (

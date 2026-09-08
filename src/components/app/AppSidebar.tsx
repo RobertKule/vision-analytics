@@ -145,7 +145,7 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
           <>
             <Link
               href="/"
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-forest-500/30"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-milk shadow-sm ring-1 ring-gold-500/30"
               aria-label="Vision Analytics"
             >
               <Image
@@ -185,13 +185,13 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
                   title={item.label}
                   className={`group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
                     active
-                      ? 'bg-forest-600 text-white shadow-sm'
-                      : 'text-zinc-600 hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-300 dark:hover:bg-forest-500/10 dark:hover:text-forest-400'
+                      ? 'bg-ink text-milk shadow-sm dark:bg-milk dark:text-ink'
+                      : 'text-zinc-600 hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-300 dark:hover:bg-gold-400/10 dark:hover:text-gold-200'
                   }`}
                 >
                   <Icon
                     aria-hidden="true"
-                    className={`h-4 w-4 shrink-0 ${active ? 'text-white' : 'text-zinc-400 group-hover:text-forest-600 dark:group-hover:text-forest-400'}`}
+                    className={`h-4 w-4 shrink-0 ${active ? 'text-milk dark:text-ink' : 'text-zinc-400 group-hover:text-gold-600 dark:group-hover:text-gold-300'}`}
                   />
                   {!collapsed ? <span className="truncate">{item.label}</span> : null}
                 </Link>
@@ -219,12 +219,12 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
           </button>
           {!collapsed ? (
             <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-zinc-50 px-2 py-1.5 dark:bg-white/5">
-              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-forest-500 to-forest-700 text-[10px] font-bold text-white">
+              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-ink text-[10px] font-bold text-milk dark:bg-milk dark:text-ink">
                 {(userName[0] ?? '?').toUpperCase()}
               </span>
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-zinc-800 dark:text-zinc-100">{userName}</p>
-                <p className="truncate text-[10px] font-medium uppercase tracking-wide text-forest-600 dark:text-forest-400">
+                <p className="truncate text-[10px] font-medium uppercase tracking-wide text-gold-700 dark:text-gold-400">
                   {roleName}
                 </p>
               </div>
@@ -241,9 +241,9 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
           aria-label={t.resizeHint}
           title={t.resizeHint}
           onPointerDown={beginDrag}
-          className="absolute -right-0.5 top-0 hidden h-full w-1.5 cursor-col-resize select-none items-center justify-center hover:bg-forest-500/20 md:flex"
+          className="absolute -right-0.5 top-0 hidden h-full w-1.5 cursor-col-resize select-none items-center justify-center hover:bg-gold-500/20 md:flex"
         >
-          <span className="h-8 w-0.5 rounded-full bg-zinc-200 transition-colors group-hover:bg-forest-400 dark:bg-white/10" />
+          <span className="h-8 w-0.5 rounded-full bg-zinc-200 transition-colors group-hover:bg-gold-400 dark:bg-white/10" />
         </div>
       ) : null}
     </aside>

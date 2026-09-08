@@ -30,9 +30,9 @@ export default async function Navbar() {
         {/* ——— Marque ——— */}
         <Link
           href="/"
-          className="group inline-flex shrink-0 items-center gap-2.5 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-forest-500/60"
+          className="group inline-flex shrink-0 items-center gap-2.5 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/60"
         >
-          <span className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-forest-500/30 transition-transform group-hover:scale-105">
+          <span className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-milk shadow-sm ring-1 ring-gold-500/30 transition-transform group-hover:scale-105">
             <Image
               src="/Parc National des Virunga.png"
               alt="Parc National des Virunga"
@@ -50,14 +50,14 @@ export default async function Navbar() {
         <div className="hidden items-center gap-1 md:flex">
           <Link
             href="/experience"
-            className="rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-300 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
+            className="rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-300 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
           >
             {t.observe}
           </Link>
           {session && workspaceHref ? (
             <Link
               href={workspaceHref}
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-forest-50 hover:text-forest-700 dark:text-zinc-300 dark:hover:bg-forest-500/10 dark:hover:text-forest-400"
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-300 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
             >
               <LayoutDashboard aria-hidden="true" className="h-3.5 w-3.5" />
               {t.dashboard}
