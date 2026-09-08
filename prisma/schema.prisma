@@ -113,10 +113,18 @@ model Observation {
   observationType String?      // Type d'observation choisi par l'observateur (issu de Project.observationTypes)
   isGhostPoint   Boolean       @default(false) // Indique si hors-trame / fausse alerte
   isVerified     Boolean       @default(true)
+  /// Jeton de « session » logique (une soumission, toutes passes confondues) — sert au
+  /// comptage de sessions par observateur et à la traçabilité (jamais exposé à l'observateur).
+  sessionRunId   String?
+  /// Clé de déduplication émise par le client, stable pour une capture donnée (son `id`
+  /// local). Le couple (projet, clé) est unique : re-soumettre une capture déjà enregistrée
+  /// est sans effet (idempotence locale + reprise après échec partiel).
+  clientKey      String?
   createdAt      DateTime      @default(now())
 
   @@index([projectId])
   @@index([userId])
   @@index([pointId])
   @@index([videoId])
+  @@unique([projectId, clientKey])
 }
