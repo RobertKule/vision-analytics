@@ -1,26 +1,149 @@
 @import "tailwindcss";
 
+/*
+  Mode sombre piloté par la classe `.dark` posée sur <html> (next-themes),
+  au lieu du `prefers-color-scheme` par défaut de Tailwind v4.
+*/
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Palette éditoriale — clair (lait & crème chaudes) */
+  --background: #f4f0ea;
+  --foreground: #121417;
+  color-scheme: light;
+}
+
+.dark {
+  /* Virunga palette — dark (volcanic charcoal) */
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  color-scheme: dark;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* Neutres éditoriaux — surfaces */
+  --color-milk: #fbf9f5;
+  --color-cream: #f4f0ea;
+  --color-line: #e5e0d8;
+  --color-ink: #121417;
+  --color-ink-soft: #2d3139;
+  --color-slate: #4a4e57;
+  --color-mute: #8c8275;
+  --color-card: #161b22;
+  /* Or chaud — accent unique (actif, focus, chips, icônes) */
+  --color-gold-50: #fbf6ea;
+  --color-gold-100: #f6ecd3;
+  --color-gold-200: #ecdca9;
+  --color-gold-300: #e0c577;
+  --color-gold-400: #d0a94e;
+  --color-gold-500: #bd8f2e;
+  --color-gold-600: #9c711b;
+  --color-gold-700: #7c5813;
+  --color-gold-800: #5e420e;
+  --color-gold-900: #463009;
+  /* Argile (rouille désaturée) — danger / erreur UNIQUEMENT */
+  --color-clay-50: #faf0ec;
+  --color-clay-100: #f3ded6;
+  --color-clay-200: #e4bba9;
+  --color-clay-300: #d0937a;
+  --color-clay-400: #b96e51;
+  --color-clay-500: #a15439;
+  --color-clay-600: #853d26;
+  --color-clay-700: #6b2f1d;
+  --color-clay-800: #522316;
+  --color-clay-900: #3e1a11;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* Apparition des panneaux coulissants (right sheets) */
+@keyframes sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Blocs à ne jamais scinder sur deux pages à l'impression */
+.avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* ——— Impression du rapport scientifique (PDF propre, sans chrome ni rognage) ———
+   Le rapport est rendu dans un PORTAL en fin de <body> (`#va-report-portal`).
+   À l'impression on masque toute l'application sauf ce portail, on neutralise ses
+   conteneurs (overlay fixe → statique, feuille/scroll non rognés) et on force la
+   palette claire pour un rendu papier fidèle. */
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Ne masquer l'application que si un rapport est effectivement ouvert (portail présent) */
+  body:has(#va-report-portal) > *:not(#va-report-portal) {
+    display: none !important;
+  }
+
+  #va-report-portal {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #fff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  #va-report-portal .va-report-sheet {
+    max-height: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  #va-report-portal .va-report-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 12mm;
 }

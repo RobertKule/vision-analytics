@@ -1,7 +1,10 @@
 'use server'
 
 import { prisma } from '@/lib/prisma'
+import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import type {
+  AnalyticsFilter,
+  AnalyticsVideoContextDto,
   GhostBucketDto,
   ObservationCaptureDto,
   ObserverMetricDto,
@@ -9,36 +12,86 @@ import type {
   ProjectAnalyticsDto,
 } from '@/lib/types'
 
+/** Passe générique héritée représentée par l'absence de `videoId` ('' côté client). */
+const LEGACY_GENERIC_VIDEO_ID = ''
+
 function formatSeconds(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+/** Normalise le filtre envoyé par le client : vide / espaces ⇒ « tous ». */
+function normalizeFilter(filter: unknown): AnalyticsFilter {
+  const value = (key: keyof AnalyticsFilter): string | undefined => {
+    if (!filter || typeof filter !== 'object') return undefined
+    const raw = (filter as Record<string, unknown>)[key]
+    if (typeof raw !== 'string') return undefined
+    const trimmed = raw.trim()
+    return trimmed.length > 0 ? trimmed : undefined
+  }
+  const normalized: AnalyticsFilter = {
+    observationType: value('observationType'),
+    observerId: value('observerId'),
+  }
+  // '' est un marqueur RÉSERVÉ pour la passe générique héritée (videoId null).
+  const rawVideo = (filter as Record<string, unknown>)?.videoId
+  if (typeof rawVideo === 'string') {
+    const trimmed = rawVideo.trim()
+    normalized.videoId = trimmed
+  }
+  return normalized
+}
+
 /**
- * Calcule et extrait l'ensemble des métriques scientifiques et de concordance pour un projet.
+ * Calcule et extrait l'ensemble des métriques scientifiques et de concordance d'un
+ * projet, pour un contexte éventuellement filtré (type / vidéo / observateur).
+ *
+ * Les filtres sont appliqués CÔTÉ SERVEUR : toutes les métriques (précision,
+ * validées, fantômes, concordance, observateurs, délais, timeline) sont recalculées
+ * sur le sous-ensemble réellement sélectionné — jamais une simple coupe frontend.
  */
 export async function getProjectAnalytics(
   projectId: string,
+  filter?: AnalyticsFilter | null,
 ): Promise<ProjectAnalyticsDto | null> {
-  if (!projectId || typeof projectId !== 'string' || !projectId.trim()) {
-    return null
-  }
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return null
+
+  // Garde d'accès multi-rôles unifiée (ADMIN / propriétaire / analyste partagé).
+  const accessLevel = await getCurrentProjectAccess(id)
+  if (!canManage(accessLevel)) return null
 
   const project = await prisma.project.findUnique({
-    where: { id: projectId.trim() },
+    where: { id },
     include: {
       points: {
         orderBy: { trameDebut: 'asc' },
+      },
+      videos: {
+        orderBy: { orderIndex: 'asc' },
+        include: { _count: { select: { observations: true, points: true } } },
       },
     },
   })
 
   if (!project) return null
 
-  // Récupération de l'ensemble des observations liées au projet avec les données utilisateur
+  const appliedFilter = normalizeFilter(filter)
+
+  // Construction du prédicat d'observations aligné sur le filtre.
+  const where: { projectId: string; observationType?: string; userId?: string; videoId?: string | null } = {
+    projectId: project.id,
+  }
+  if (appliedFilter.observationType) where.observationType = appliedFilter.observationType
+  if (appliedFilter.observerId) where.userId = appliedFilter.observerId
+  if (appliedFilter.videoId !== undefined) {
+    where.videoId = appliedFilter.videoId === LEGACY_GENERIC_VIDEO_ID ? null : appliedFilter.videoId
+  }
+
+  // Récupération des observations du contexte filtré.
   const observations = await prisma.observation.findMany({
-    where: { projectId: project.id },
+    where,
     include: {
       user: {
         select: {
@@ -51,7 +104,17 @@ export async function getProjectAnalytics(
     orderBy: { timestampTotal: 'asc' },
   })
 
-  // Ensemble des observateurs distincts ayant soumis des données
+  // Fenêtres pertinentes : toutes, ou uniquement celles de la vidéo filtrée.
+  const relevantPoints =
+    appliedFilter.videoId === undefined
+      ? project.points
+      : project.points.filter((point) =>
+          appliedFilter.videoId === LEGACY_GENERIC_VIDEO_ID
+            ? point.videoId === null
+            : point.videoId === appliedFilter.videoId,
+        )
+
+  // Ensemble des observateurs distincts ayant soumis des données dans le contexte
   const observerMap = new Map<string, { id: string; anonymousId: string; email: string }>()
   for (const obs of observations) {
     if (obs.user && !observerMap.has(obs.user.id)) {
@@ -68,7 +131,7 @@ export async function getProjectAnalytics(
   const ghostPointsCount = ghostObservations.length
 
   // ——— 1. Analyse par Point Cible (Concordance & Délais) ———
-  const pointsAnalytics: PointConcordanceDto[] = project.points.map((point) => {
+  const pointsAnalytics: PointConcordanceDto[] = relevantPoints.map((point) => {
     const matching = observations.filter((o) => o.pointId === point.id)
     const distinctObserversOnPoint = new Set(matching.map((o) => o.userId)).size
     const concordanceRate =
@@ -215,6 +278,18 @@ export async function getProjectAnalytics(
 
   observersMetrics.sort((a, b) => b.totalObservations - a.totalObservations)
 
+  const videosContext: AnalyticsVideoContextDto[] = project.videos.map((video) => ({
+    id: video.id,
+    typeLabel: video.typeLabel,
+    name: video.name,
+    source: video.source,
+    orderIndex: video.orderIndex,
+    projectId: project.id,
+    benchmarkSeconds: video.benchmarkSeconds,
+    captureCount: video._count.observations,
+    pointCount: video._count.points,
+  }))
+
   return {
     project: {
       id: project.id,
@@ -223,6 +298,8 @@ export async function getProjectAnalytics(
       videoUrl: project.videoUrl,
       createdAt: project.createdAt.toISOString(),
       totalDefinedPoints: project.points.length,
+      observationTypes: project.observationTypes,
+      videos: videosContext,
     },
     summary: {
       totalObservers,
@@ -232,6 +309,7 @@ export async function getProjectAnalytics(
       overallConcordanceRate,
       overallPrecisionRate,
       averageDetectionDelay,
+      appliedFilter,
     },
     pointsAnalytics,
     ghostPointsAnalytics,

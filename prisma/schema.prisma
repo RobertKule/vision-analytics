@@ -10,40 +10,92 @@ generator client {
 
 enum Role {
   ADMIN
+  ANALYST
   OBSERVER
 }
 
 model User {
-  id           String        @id @default(uuid())
-  email        String        @unique
-  password     String
-  role         Role          @default(OBSERVER)
-  anonymousId  String        @unique @default(uuid())
-  observations Observation[]
-  createdAt    DateTime      @default(now())
+  id            String          @id @default(uuid())
+  email         String          @unique
+  username      String?         @unique // Pseudonyme d'analyse (login lisible)
+  password      String
+  role          Role            @default(OBSERVER)
+  isActive      Boolean         @default(true) // Compte désactivable par un administrateur
+  anonymousId   String          @unique @default(uuid())
+  observations  Observation[]
+  ownedProjects Project[]       @relation("ProjectOwner")
+  grantedAccess ProjectAccess[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @default(now()) @updatedAt
 }
 
 model Project {
-  id           String         @id @default(uuid())
-  title        String
-  description  String?
-  videoUrl     String?        // Chemin ou nom du fichier vidéo local
-  isArchived   Boolean        @default(false)
-  points       ProjectPoint[]
+  id               String          @id @default(uuid())
+  ownerId          String? // Créateur (ADMIN ou ANALYST) — null pour les projets hérités
+  owner            User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  title            String
+  description      String?
+  videoUrl         String?         // Chemin ou nom du fichier vidéo local (vidéo « générique » héritée)
+  observationTypes String[]        @default([]) // Types d'observation configurables proposés aux observateurs (ex: « 100m oblique », « Faune détectée »)
+  isArchived       Boolean         @default(false)
+  points           ProjectPoint[]
+  observations     Observation[]
+  videos           Video[]         // Passes vidéo du projet (multi-vidéo : chaque vidéo peut être rattachée à un type d'observation)
+  accessList       ProjectAccess[] // Partage ANALYST → ANALYST (par username)
+  createdAt        DateTime        @default(now())
+}
+
+/// Passe vidéo d'un projet. Une vidéo peut être rattachée à UN type d'observation
+/// (pass « typée » : l'observateur y travaille uniquement ce type) ou rester
+/// générique (`typeLabel = null` : l'observateur y capture n'importe quel type
+/// proposé — comportement historique du projet à vidéo unique).
+model Video {
+  id        String    @id @default(uuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Libellé exact (issu de Project.observationTypes) auquel cette vidéo est rattachée ; null = vidéo générique.
+  typeLabel String?
+  /// Libellé humain affiché (ex. nom de fichier) ; null = généré depuis `source`.
+  name      String?
+  /// Source de la vidéo (URL distante ou nom de fichier chargé par l'observateur).
+  source    String
+  /// Ordre d'affichage des onglets dans l'annotateur.
+  orderIndex Int @default(0)
+  /// Point réel / vérité terrain (en secondes) pour cette passe — CONFIDENTIEL, jamais transmis à l'observateur.
+  benchmarkSeconds Int?
+  points      ProjectPoint[]
   observations Observation[]
-  createdAt    DateTime       @default(now())
+  createdAt   DateTime   @default(now())
+
+  @@index([projectId])
+}
+
+/// Partage d'un projet entre analystes (propriétaire + invités).
+model ProjectAccess {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
 }
 
 model ProjectPoint {
   id             String        @id @default(uuid())
   projectId      String
   project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  videoId        String?       // Fenêtre rattachée à une passe vidéo précise ; null = fenêtre « générique » (projet à vidéo unique)
+  video          Video?        @relation(fields: [videoId], references: [id], onDelete: Cascade)
   pointName      String        // ex: "Point 2"
   trameDebut     Int           // Trame début en secondes
   trameFin       Int           // Trame fin en secondes
   observations   Observation[]
 
   @@index([projectId])
+  @@index([videoId])
 }
 
 model Observation {
@@ -52,15 +104,27 @@ model Observation {
   project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId         String
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId        String?       // Passe vidéo d'origine ; null = vidéo générique historique
+  video          Video?        @relation(fields: [videoId], references: [id], onDelete: SetNull)
   pointId        String?       // Auto-assigné si dans [trameDebut, trameFin]
   point          ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
   timestampTotal Int           // Horodatage saisi en secondes
   imageUrl       String        // URL Cloudinary de la capture annotée
+  observationType String?      // Type d'observation choisi par l'observateur (issu de Project.observationTypes)
   isGhostPoint   Boolean       @default(false) // Indique si hors-trame / fausse alerte
   isVerified     Boolean       @default(true)
+  /// Jeton de « session » logique (une soumission, toutes passes confondues) — sert au
+  /// comptage de sessions par observateur et à la traçabilité (jamais exposé à l'observateur).
+  sessionRunId   String?
+  /// Clé de déduplication émise par le client, stable pour une capture donnée (son `id`
+  /// local). Le couple (projet, clé) est unique : re-soumettre une capture déjà enregistrée
+  /// est sans effet (idempotence locale + reprise après échec partiel).
+  clientKey      String?
   createdAt      DateTime      @default(now())
 
   @@index([projectId])
   @@index([userId])
   @@index([pointId])
+  @@index([videoId])
+  @@unique([projectId, clientKey])
 }
