@@ -2,6 +2,7 @@
 
 import { revalidatePath, unstable_cache, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
+import { getCurrentSession } from '@/lib/auth'
 import { uploadAnnotationToCloudinary } from '@/lib/cloudinary'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
@@ -218,7 +219,7 @@ export async function submitObservations(
 
   try {
     const projectId = (input?.projectId ?? '').trim()
-    const identifier = (input?.observerIdentifier ?? '').trim()
+    let identifier = (input?.observerIdentifier ?? '').trim()
     const observations = input?.observations
 
     if (!projectId) {
@@ -284,6 +285,34 @@ export async function submitObservations(
           'This project is archived. Submissions are closed.',
           'Ce projet est archivé. Les soumissions sont clôturées.',
         ),
+      }
+    }
+
+    // ——— Attribution d'identité (anti-impersonation) ———
+    // Session ouverte (zone connectée /experience) : l'observateur est rattaché à
+    // SON compte ; un identifiant arbitraire ne peut pas être revendiqué pour
+    // attribuer des observations à un autre utilisateur de la plateforme.
+    // Parcours public anonyme (/observe) : l'identifiant reste libre (code anonyme
+    // ou email d'un observateur indépendant), mais il ne peut jamais cibler un
+    // compte de gestion ADMIN/ANALYST existant — cela reviendrait à usurper un
+    // responsable de l'étude.
+    const session = await getCurrentSession()
+    const isEmailIdentifier = identifier.includes('@')
+    if (session?.email) {
+      identifier = session.email
+    } else if (isEmailIdentifier) {
+      const manager = await prisma.user.findFirst({
+        where: { email: identifier.toLowerCase(), role: { in: [Role.ADMIN, Role.ANALYST] } },
+        select: { id: true },
+      })
+      if (manager) {
+        return {
+          ok: false,
+          error: msg(
+            'This observer identifier matches a management account and cannot be used to submit.',
+            'Cet identifiant correspond à un compte de gestion ; il ne peut pas être utilisé pour soumettre.',
+          ),
+        }
       }
     }
 
@@ -360,6 +389,36 @@ export async function submitObservations(
       }
     }
 
+    // Déduplication par clé client (idempotence des brouillons relancés / reprise après
+    // échec partiel) : une capture déjà persistée (même projet + même `clientKey`) n'est
+    // NI retéléversée NI recréée. Les captures jamais envoyées partent telles quelles.
+    const runId =
+      typeof input?.runId === 'string' && input.runId.trim()
+        ? input.runId.trim().slice(0, 120)
+        : null
+    const clientKeyOf = (obs: SubmitObservationsInput['observations'][number]): string | null => {
+      const raw = obs?.clientKey
+      if (typeof raw !== 'string') return null
+      const trimmed = raw.trim()
+      return trimmed ? trimmed.slice(0, 200) : null
+    }
+    const clientKeys = observations.map(clientKeyOf)
+    const dedupeKeys = Array.from(
+      new Set(clientKeys.filter((key): key is string => key !== null)),
+    )
+    const persistedKeys = new Set<string>()
+    if (dedupeKeys.length > 0) {
+      const already = await prisma.observation.findMany({
+        where: { projectId, clientKey: { in: dedupeKeys } },
+        select: { clientKey: true },
+      })
+      for (const row of already) if (row.clientKey) persistedKeys.add(row.clientKey)
+    }
+    const isDuplicate = (index: number): boolean => {
+      const key = clientKeys[index]
+      return key !== null && persistedKeys.has(key)
+    }
+
     // Téléversement asynchrone des images vers Cloudinary
     const uploadedRecords: Array<{
       timestampTotal: number
@@ -368,9 +427,12 @@ export async function submitObservations(
       isGhostPoint: boolean
       observationType: string | null
       videoId: string | null
+      clientKey: string | null
     }> = []
 
-    for (const obs of observations) {
+    for (let index = 0; index < observations.length; index++) {
+      const obs = observations[index]
+      if (isDuplicate(index)) continue
       const imageUrl = await uploadAnnotationToCloudinary(obs.imageDataUrl)
       const timestampTotal = Math.round(obs.timestamp)
       const observationType =
@@ -398,23 +460,30 @@ export async function submitObservations(
         isGhostPoint: !matchedPoint, // Si aucune fenêtre ne correspond => Point Fantôme (fausse alerte)
         observationType,
         videoId,
+        clientKey: clientKeys[index],
       })
     }
 
-    // Insertion en masse dans Neon PostgreSQL
-    await prisma.observation.createMany({
-      data: uploadedRecords.map((record) => ({
-        projectId,
-        userId: user.id,
-        videoId: record.videoId,
-        pointId: record.pointId,
-        timestampTotal: record.timestampTotal,
-        imageUrl: record.imageUrl,
-        observationType: record.observationType,
-        isGhostPoint: record.isGhostPoint,
-        isVerified: true,
-      })),
-    })
+    // Insertion en masse dans Neon PostgreSQL. `skipDuplicates` protège l'idempotence si
+    // deux lots concurrents portaient la même clé client (jamais d'erreur de contrainte).
+    if (uploadedRecords.length > 0) {
+      await prisma.observation.createMany({
+        data: uploadedRecords.map((record) => ({
+          projectId,
+          userId: user.id,
+          videoId: record.videoId,
+          pointId: record.pointId,
+          timestampTotal: record.timestampTotal,
+          imageUrl: record.imageUrl,
+          observationType: record.observationType,
+          isGhostPoint: record.isGhostPoint,
+          isVerified: true,
+          sessionRunId: runId,
+          clientKey: record.clientKey,
+        })),
+        skipDuplicates: true,
+      })
+    }
 
     updateTag(BLIND_PROJECTS_TAG)
     revalidatePath(`/observe/${projectId}`)
