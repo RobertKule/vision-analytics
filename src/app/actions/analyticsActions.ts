@@ -1,7 +1,7 @@
 'use server'
 
 import { prisma } from '@/lib/prisma'
-import { getCurrentSession } from '@/lib/auth'
+import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import type {
   AnalyticsFilter,
   AnalyticsVideoContextDto,
@@ -58,9 +58,9 @@ export async function getProjectAnalytics(
   const id = typeof projectId === 'string' ? projectId.trim() : ''
   if (!id) return null
 
-  // Garde d'accès multi-rôles : ADMIN (tout), propriétaire, ou collègue partagé.
-  const session = await getCurrentSession()
-  if (!session) return null
+  // Garde d'accès multi-rôles unifiée (ADMIN / propriétaire / analyste partagé).
+  const accessLevel = await getCurrentProjectAccess(id)
+  if (!canManage(accessLevel)) return null
 
   const project = await prisma.project.findUnique({
     where: { id },
@@ -76,16 +76,6 @@ export async function getProjectAnalytics(
   })
 
   if (!project) return null
-
-  if (session.role !== 'ADMIN') {
-    if (project.ownerId !== session.uid) {
-      const shared = await prisma.projectAccess.findUnique({
-        where: { projectId_userId: { projectId: id, userId: session.uid } },
-        select: { id: true },
-      })
-      if (!shared) return null
-    }
-  }
 
   const appliedFilter = normalizeFilter(filter)
 
