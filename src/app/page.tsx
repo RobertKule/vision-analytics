@@ -1,10 +1,9 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { EyeOff, FileDown, Leaf, LogIn, ShieldCheck, Timer, Users } from 'lucide-react'
+import { ArrowUpRight, Eye, Lock, Sparkles } from 'lucide-react'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
-
-const featureIcons = [Timer, EyeOff, Users, FileDown]
+import LanguageToggle from '@/components/LanguageToggle'
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getLocale()
@@ -12,10 +11,10 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     title:
-      locale === 'en'
-        ? 'Vision Analytics — Double-blind scientific video observation'
-        : 'Vision Analytics — Observation vidéo scientifique en double aveugle',
-    description: t.lead,
+      locale === 'fr'
+        ? 'Vision Analytics — Laboratoire d’observation en double aveugle'
+        : 'Vision Analytics — Double-blind observation laboratory',
+    description: t.heroSub,
   }
 }
 
@@ -24,107 +23,148 @@ export default async function Home() {
   const t = getDictionary(locale).home
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 sm:px-6">
-      {/* ——— Héros Virunga ——— */}
-      <section className="relative flex flex-1 flex-col justify-center overflow-hidden py-16 sm:py-24">
-        {/* Halo décoratif (emeraude / ambre) */}
-        <div aria-hidden="true" className="pointer-events-none absolute -right-32 -top-24 h-80 w-80 rounded-full bg-forest-500/15 blur-3xl dark:bg-forest-500/20" />
-        <div aria-hidden="true" className="pointer-events-none absolute -bottom-32 -left-24 h-72 w-72 rounded-full bg-mist-500/10 blur-3xl dark:bg-mist-500/15" />
-
-        <div className="relative">
-          <p className="inline-flex items-center gap-2 self-start rounded-full border border-forest-500/30 bg-forest-500/10 px-3 py-1 text-xs font-semibold text-forest-700 dark:text-forest-400">
-            <Leaf aria-hidden="true" className="h-3.5 w-3.5" />
-            {t.eyebrow}
-          </p>
-
-          <h1 className="mt-6 max-w-3xl text-4xl font-black leading-[1.08] tracking-tight text-zinc-900 sm:text-5xl lg:text-6xl dark:text-zinc-50">
-            {t.h1Lead}{' '}
-            <span className="bg-gradient-to-r from-forest-500 via-forest-600 to-mist-500 bg-clip-text text-transparent">
-              {t.h1Accent}
+    <div className="flex min-h-screen flex-col justify-between bg-[#FBF9F5] text-[#121417] selection:bg-[#121417] selection:text-[#FBF9F5]">
+      {/* ——— 1. HEADER / NAVBAR éditorial ——— */}
+      <header className="sticky top-0 z-50 w-full border-b border-[#E5E0D8] bg-[#FBF9F5]/80 backdrop-blur-md">
+        <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+          {/* Marque */}
+          <Link href="/" className="group flex items-center gap-3">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#121417]/10 bg-[#121417]/5 transition-colors group-hover:border-[#121417]/30">
+              <Eye aria-hidden="true" className="h-4 w-4 text-[#121417]" />
             </span>
-          </h1>
+            <span className="flex items-center gap-2 text-base font-bold tracking-tight text-[#121417]">
+              Vision Analytics
+              <span className="rounded border border-[#121417]/10 bg-[#121417]/5 px-1.5 py-0.5 font-mono text-[10px] font-medium text-[#4A4E57]">
+                LAB
+              </span>
+            </span>
+          </Link>
 
-          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-zinc-600 dark:text-zinc-400">
-            {t.lead}
-          </p>
-
-          <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:items-stretch">
+          {/* Liens centraux (desktop) */}
+          <nav className="hidden items-center gap-8 text-sm font-medium text-[#4A4E57] md:flex">
+            <Link href="/" className="transition-colors hover:text-[#121417]">
+              {t.navHome}
+            </Link>
             <Link
               href="/observe"
-              className="group inline-flex h-auto flex-1 items-center justify-center gap-3 rounded-2xl bg-gradient-to-br from-forest-500 to-forest-700 px-6 py-3.5 text-left shadow-lg shadow-forest-500/20 transition-all hover:shadow-forest-500/30 sm:flex-none"
+              className="flex items-center gap-1.5 transition-colors hover:text-[#121417]"
             >
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15 text-white backdrop-blur-sm transition-transform group-hover:scale-105">
-                <Leaf aria-hidden="true" className="h-5 w-5" />
-              </span>
-              <span className="flex flex-col">
-                <span className="text-base font-bold leading-tight text-white">{t.ctaParticipate}</span>
-                <span className="text-xs font-medium text-forest-100/90">{t.ctaParticipateHint}</span>
-              </span>
+              <span className="h-2 w-2 animate-pulse rounded-full bg-[#121417]" aria-hidden="true" />
+              {t.navExperiments}
+            </Link>
+          </nav>
+
+          {/* Actions (droite) */}
+          <div className="flex shrink-0 items-center gap-3">
+            <LanguageToggle locale={locale} variant="mono" />
+            <Link
+              href="/login"
+              className="hidden items-center gap-2 rounded-lg border border-[#121417]/15 px-3.5 py-2 text-sm font-medium text-[#121417] transition-all hover:bg-[#121417]/5 sm:inline-flex"
+            >
+              <Lock aria-hidden="true" className="h-3.5 w-3.5 text-[#4A4E57]" />
+              <span>{t.loginCta}</span>
+            </Link>
+            <Link
+              href="/observe"
+              className="inline-flex items-center gap-2 rounded-lg bg-[#121417] px-4 py-2 text-sm font-semibold text-[#FBF9F5] shadow-md transition-all hover:scale-[1.02] hover:bg-[#2D3139]"
+            >
+              <Sparkles aria-hidden="true" className="h-4 w-4 text-[#FBF9F5]" />
+              <span>{t.participateCta}</span>
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      {/* ——— 2. HERO (fond chaud + dégradé crème) ——— */}
+      <section className="relative flex min-h-[80vh] items-center justify-center overflow-hidden border-b border-[#E5E0D8] px-6">
+        {/* Texture de fond pure CSS — tons sable / ardoise très diffus */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 opacity-90"
+          style={{
+            backgroundImage: [
+              'radial-gradient(58% 52% at 74% 16%, rgba(212, 163, 89, 0.30), transparent 62%)',
+              'radial-gradient(46% 42% at 14% 82%, rgba(45, 49, 57, 0.10), transparent 60%)',
+              'radial-gradient(42% 46% at 30% 24%, rgba(212, 163, 89, 0.12), transparent 58%)',
+              'radial-gradient(60% 60% at 50% 55%, rgba(244, 240, 234, 0.85), transparent 72%)',
+            ].join(', '),
+          }}
+        />
+        {/* Dégradé crème doux par-dessus */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-gradient-to-b from-[#FBF9F5]/95 via-[#FBF9F5]/80 to-[#FBF9F5]"
+        />
+
+        <div className="relative z-10 mx-auto flex w-full max-w-4xl flex-col items-center gap-8 py-16 text-center">
+          <p className="inline-flex items-center gap-2 rounded-full border border-[#121417]/10 bg-[#121417]/5 px-3.5 py-1.5 font-mono text-xs tracking-wide text-[#4A4E57]">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[#121417]" aria-hidden="true" />
+            {t.badge}
+          </p>
+
+          <h1 className="text-4xl font-extrabold leading-[1.1] tracking-tight text-[#121417] sm:text-6xl lg:text-7xl">
+            {t.heroTitleLead} <br />
+            <span className="text-[#8C8275]">{t.heroTitleAccent}</span>
+          </h1>
+
+          <p className="max-w-2xl text-base font-normal leading-relaxed text-[#4A4E57] sm:text-lg">
+            {t.heroSub}
+          </p>
+
+          <div className="flex w-full flex-col items-center gap-4 pt-2 sm:w-auto sm:flex-row">
+            <Link
+              href="/observe"
+              className="group flex w-full items-center justify-center gap-2 rounded-xl bg-[#121417] px-8 py-4 text-base font-semibold text-[#FBF9F5] shadow-lg transition-all hover:bg-[#2D3139] sm:w-auto"
+            >
+              <Sparkles aria-hidden="true" className="h-5 w-5 text-[#FBF9F5]" />
+              <span>{t.heroCtaPrimary}</span>
+              <ArrowUpRight
+                aria-hidden="true"
+                className="h-4 w-4 text-[#FBF9F5] transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+              />
             </Link>
 
             <Link
               href="/login"
-              className="group inline-flex h-auto flex-1 items-center justify-center gap-3 rounded-2xl border border-zinc-300 bg-white/80 px-6 py-3.5 text-left shadow-sm backdrop-blur transition-all hover:border-forest-500/50 hover:shadow-md sm:flex-none dark:border-white/10 dark:bg-white/5"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#E5E0D8] bg-white px-8 py-4 text-base font-medium text-[#121417] transition-all hover:bg-[#F4F0EA] sm:w-auto"
             >
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-900/5 text-zinc-600 transition-colors group-hover:bg-forest-500/10 group-hover:text-forest-700 dark:bg-white/10 dark:text-zinc-300 dark:group-hover:text-forest-400">
-                <LogIn aria-hidden="true" className="h-5 w-5" />
-              </span>
-              <span className="flex flex-col">
-                <span className="text-base font-bold leading-tight text-zinc-900 dark:text-zinc-50">
-                  {t.ctaSignIn}
-                </span>
-                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{t.ctaSignInHint}</span>
-              </span>
+              <Lock aria-hidden="true" className="h-4 w-4 text-[#4A4E57]" />
+              <span>{t.heroCtaSecondary}</span>
             </Link>
           </div>
-
-          <p className="mt-5 inline-flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-            <ShieldCheck aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
-            {t.note}
-          </p>
         </div>
       </section>
 
-      {/* ——— Fonctionnalités ——— */}
-      <section aria-labelledby="features-title" className="pb-16 sm:pb-20">
-        <div className="mb-6 flex flex-col gap-1">
-          <p className="text-xs font-semibold uppercase tracking-widest text-forest-600 dark:text-forest-400">
-            {t.featuresEyebrow}
-          </p>
-          <h2 id="features-title" className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-            {t.featuresTitle}
-          </h2>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {t.features.map((feature, index) => {
-            const Icon = featureIcons[index] ?? Leaf
-            return (
-              <article
-                key={feature.title}
-                className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-forest-500/40 hover:shadow-lg hover:shadow-forest-500/5 dark:border-white/10 dark:bg-[#161b22] dark:hover:border-forest-500/30"
-              >
-                <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-forest-500/10 text-forest-600 dark:text-forest-400">
-                  <Icon aria-hidden="true" className="h-5 w-5" />
-                </span>
-                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{feature.title}</h3>
-                <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">{feature.desc}</p>
-              </article>
-            )
-          })}
-        </div>
+      {/* ——— 3. BANDEAU MONOCHROME ANTI-GRAVITY ——— */}
+      <section className="flex select-none items-center justify-center overflow-hidden border-b border-[#E5E0D8] bg-[#F4F0EA] px-4 py-24 sm:py-32">
+        <h2 className="text-center text-[13vw] font-black uppercase leading-none tracking-tighter text-[#121417] sm:text-[14vw]">
+          {t.brandLead}
+          <span className="text-[#8C8275]">{t.brandAccent}</span>
+        </h2>
       </section>
 
-      {/* ——— Pied de page minimal ——— */}
-      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 py-8 text-xs text-zinc-400 dark:border-white/10 dark:text-zinc-500">
-        <span>{t.footerTagline}</span>
-        <Link
-          href="/observe"
-          className="font-medium text-zinc-500 underline-offset-2 transition-colors hover:text-forest-600 hover:underline dark:text-zinc-400 dark:hover:text-forest-400"
-        >
-          {t.footerCta}
-        </Link>
+      {/* ——— 4. PIED DE PAGE ——— */}
+      <footer className="bg-[#FBF9F5] px-6 py-10 text-sm text-[#4A4E57] sm:px-12">
+        <div className="mx-auto flex w-full max-w-7xl flex-col items-center justify-between gap-6 sm:flex-row">
+          <div className="flex items-center gap-3">
+            <span className="text-base font-bold tracking-tight text-[#121417]">Vision Analytics</span>
+            <span className="text-xs text-[#8C8275]">| {t.protocolLabel}</span>
+          </div>
+
+          <div className="flex items-center gap-8 text-xs font-medium text-[#4A4E57]">
+            <Link href="/observe" className="transition-colors hover:text-[#121417]">
+              {t.footerExperiments}
+            </Link>
+            <Link href="/login" className="transition-colors hover:text-[#121417]">
+              {t.footerSignIn}
+            </Link>
+            <span className="text-[#E5E0D8]" aria-hidden="true">
+              •
+            </span>
+            <span>{t.rightsLabel}</span>
+          </div>
+        </div>
       </footer>
-    </main>
+    </div>
   )
 }

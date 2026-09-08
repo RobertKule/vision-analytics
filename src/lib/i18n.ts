@@ -10,7 +10,7 @@
 export const locales = ['en', 'fr'] as const
 export type Locale = (typeof locales)[number]
 
-export const defaultLocale: Locale = 'en'
+export const defaultLocale: Locale = 'fr'
 export const LOCALE_COOKIE = 'va_locale'
 
 export function isLocale(value: unknown): value is Locale {
@@ -68,6 +68,24 @@ const en = {
     ],
     footerTagline: 'Vision Analytics — scientific video observation, double-blind.',
     footerCta: 'Explore the experiments',
+    // ——— Éditorial « milk cream », sans vert ———
+    navHome: 'Home',
+    navExperiments: 'Experiments',
+    loginCta: 'Sign in',
+    participateCta: 'Participate',
+    badge: 'DOUBLE-BLIND OBSERVATION LABORATORY',
+    heroTitleLead: 'Scientific precision &',
+    heroTitleAccent: 'visual analysis',
+    heroSub:
+      'Join blind observation sessions, or open the real-time statistical analytics dashboard for your studies.',
+    heroCtaPrimary: 'Start the experiment',
+    heroCtaSecondary: 'Analyst space / Sign in',
+    brandLead: 'VISION',
+    brandAccent: 'ANALYTICS',
+    protocolLabel: 'Protocol 2026',
+    rightsLabel: '© 2026 All rights reserved',
+    footerExperiments: 'Experiments',
+    footerSignIn: 'Sign in',
   },
   observe: {
     eyebrow: 'Observer space',
@@ -446,6 +464,24 @@ const fr: typeof en = {
     ],
     footerTagline: 'Vision Analytics — observation vidéo scientifique, en double aveugle.',
     footerCta: 'Explorer les expériences',
+    // ——— Éditorial « milk cream », sans vert ———
+    navHome: 'Accueil',
+    navExperiments: 'Expériences',
+    loginCta: 'Connexion',
+    participateCta: 'Participer',
+    badge: 'LABORATOIRE D’OBSERVATION EN DOUBLE AVEUGLE',
+    heroTitleLead: 'Précision Scientifique &',
+    heroTitleAccent: 'Analyse Visuelle',
+    heroSub:
+      'Participez aux sessions d’observation aveugles ou accédez au tableau de bord d’analyse statistique en temps réel.',
+    heroCtaPrimary: 'Commencer l’expérience',
+    heroCtaSecondary: 'Espace Analyste / Connexion',
+    brandLead: 'VISION',
+    brandAccent: 'ANALYTICS',
+    protocolLabel: 'Protocole 2026',
+    rightsLabel: '© 2026 Tous droits réservés',
+    footerExperiments: 'Expériences',
+    footerSignIn: 'Connexion',
   },
   observe: {
     eyebrow: 'Espace observateur',

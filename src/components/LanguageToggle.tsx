@@ -10,7 +10,13 @@ import { LOCALE_COOKIE, type Locale } from '@/lib/i18n'
  * Components relisent la langue et retransmettent les dictionnaires traduits
  * aux composants clients (qui conservent leur état local).
  */
-export default function LanguageToggle({ locale }: { locale: Locale }) {
+type LanguageToggleProps = {
+  locale: Locale
+  /** `mono` : variante monochrome écrue / ardoise pour les pages éditoriales. */
+  variant?: 'default' | 'mono'
+}
+
+export default function LanguageToggle({ locale, variant = 'default' }: LanguageToggleProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
 
@@ -21,19 +27,28 @@ export default function LanguageToggle({ locale }: { locale: Locale }) {
   }
 
   const buttonClass = (active: boolean) =>
-    `inline-flex h-7 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-bold uppercase tracking-wide transition-colors ${
-      active
-        ? 'bg-forest-500 text-white shadow-sm'
-        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-    }`
+    variant === 'mono'
+      ? `inline-flex h-7 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-bold uppercase tracking-wide transition-colors ${
+          active
+            ? 'bg-[#121417] text-[#FBF9F5] shadow-sm'
+            : 'text-[#4A4E57] hover:text-[#121417]'
+        }`
+      : `inline-flex h-7 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-bold uppercase tracking-wide transition-colors ${
+          active
+            ? 'bg-forest-500 text-white shadow-sm'
+            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+        }`
+
+  const containerClass =
+    variant === 'mono'
+      ? 'inline-flex items-center gap-0.5 rounded-lg border border-[#121417]/15 bg-white/50 p-0.5'
+      : 'inline-flex items-center gap-0.5 rounded-lg border border-zinc-300 bg-white p-0.5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900'
 
   return (
     <div
       role="group"
       aria-label="Language / Langue"
-      className={`inline-flex items-center gap-0.5 rounded-lg border border-zinc-300 bg-white p-0.5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900 ${
-        isPending ? 'opacity-70' : ''
-      }`}
+      className={`${containerClass} ${isPending ? 'opacity-70' : ''}`}
     >
       <button type="button" onClick={() => applyLocale('en')} className={buttonClass(locale === 'en')}>
         EN

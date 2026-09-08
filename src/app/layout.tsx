@@ -3,7 +3,6 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import ThemeProvider from "@/components/theme-provider";
 import Toaster from "@/components/Toaster";
-import Navbar from "@/components/Navbar";
 import { getLocale } from "@/lib/i18n-server";
 
 const geistSans = Geist({
@@ -36,7 +35,6 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider>
-          <Navbar />
           {children}
           <Toaster />
         </ThemeProvider>
