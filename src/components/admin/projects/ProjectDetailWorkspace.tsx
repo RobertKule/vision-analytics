@@ -43,7 +43,7 @@ export default function ProjectDetailWorkspace({
   analytics,
   authorName = '',
 }: ProjectDetailWorkspaceProps) {
-  const { project, rows, points } = detail
+  const { project, rows, points, videos } = detail
   const [activeTab, setActiveTab] = useState<'overview' | 'observations' | 'activity'>('overview')
   const [isReportOpen, setIsReportOpen] = useState(false)
 
@@ -135,7 +135,7 @@ export default function ProjectDetailWorkspace({
       {/* ——— Panneau actif ——— */}
       <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="min-w-0">
         {activeTab === 'overview' ? (
-          <ProjectOverviewTab project={project} points={points} />
+          <ProjectOverviewTab project={project} points={points} videos={videos} />
         ) : null}
         {activeTab === 'observations' ? <ObservationsTab rows={rows} points={points} /> : null}
         {activeTab === 'activity' ? (
