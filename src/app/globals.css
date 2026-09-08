@@ -83,3 +83,67 @@ body {
   font-family: var(--font-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Blocs à ne jamais scinder sur deux pages à l'impression */
+.avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+/* ——— Impression du rapport scientifique (PDF propre, sans chrome ni rognage) ———
+   Le rapport est rendu dans un PORTAL en fin de <body> (`#va-report-portal`).
+   À l'impression on masque toute l'application sauf ce portail, on neutralise ses
+   conteneurs (overlay fixe → statique, feuille/scroll non rognés) et on force la
+   palette claire pour un rendu papier fidèle. */
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* Ne masquer l'application que si un rapport est effectivement ouvert (portail présent) */
+  body:has(#va-report-portal) > *:not(#va-report-portal) {
+    display: none !important;
+  }
+
+  #va-report-portal {
+    position: static !important;
+    inset: auto !important;
+    display: block !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #fff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  #va-report-portal .va-report-sheet {
+    max-height: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  #va-report-portal .va-report-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 12mm;
+}

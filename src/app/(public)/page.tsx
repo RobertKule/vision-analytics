@@ -11,8 +11,8 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title:
       locale === 'fr'
-        ? 'Laboratoire d’observation en double aveugle'
-        : 'Double-blind observation laboratory',
+        ? 'Laboratoire d’observation indépendante'
+        : 'Independent observation laboratory',
     description: t.heroSub,
   }
 }

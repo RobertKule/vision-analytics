@@ -41,25 +41,25 @@ const en = {
   home: {
     eyebrow: 'Scientific video observation',
     h1Lead: 'Turn every detection into',
-    h1Accent: 'rigorous, blind data.',
+    h1Accent: 'rigorous, independent data.',
     lead: 'Observers annotate and capture events on live video without ever seeing the exact '
       + 'time windows that count. On submission, concordance between observers is computed '
       + 'automatically — anonymous, private, ready for publication.',
     ctaParticipate: 'Participate in an Experiment',
-    ctaParticipateHint: 'Join a live double-blind study',
+    ctaParticipateHint: 'Join a live independent-observation study',
     ctaSignIn: 'Sign In / Create Account',
     ctaSignInHint: 'Researchers & analysts',
     note: 'No account required to observe — a pseudonymous identifier stays in your browser.',
     featuresEyebrow: 'Why researchers trust it',
-    featuresTitle: 'Blind by design, rigorous by default',
+    featuresTitle: 'Independence by design, rigorous by default',
     features: [
       {
         title: 'Temporal blindness',
         desc: 'Validation windows stay secret: observers watch the video without knowing the exact seconds that make the verdict.',
       },
       {
-        title: 'Double masking',
-        desc: 'Pseudonymous observers and a strictly blind protocol — no crossed information can bias detection.',
+        title: 'Scientific cross-validation',
+        desc: 'Pseudonymous observers and an independent observation procedure — no crossed information can bias detection.',
       },
       {
         title: 'Inter-observer concordance',
@@ -70,18 +70,18 @@ const en = {
         desc: 'A printable executive report and raw CSV export of every measure, ready to archive and publish.',
       },
     ],
-    footerTagline: 'Vision Analytics — scientific video observation, double-blind.',
+    footerTagline: 'Vision Analytics — scientific video observation with cross-validated review.',
     footerCta: 'Explore the experiments',
     // ——— Éditorial « milk cream », sans vert ———
     navHome: 'Home',
     navExperiments: 'Experiments',
     loginCta: 'Sign in',
     participateCta: 'Participate',
-    badge: 'DOUBLE-BLIND OBSERVATION LABORATORY',
+    badge: 'INDEPENDENT OBSERVATION LABORATORY',
     heroTitleLead: 'Scientific precision &',
     heroTitleAccent: 'visual analysis',
     heroSub:
-      'Join blind observation sessions, or open the real-time statistical analytics dashboard for your studies.',
+      'Join independent observation sessions, or open the real-time statistical analytics dashboard for your studies.',
     heroCtaPrimary: 'Start the experiment',
     heroCtaSecondary: 'Analyst space / Sign in',
     brandLead: 'VISION',
@@ -98,7 +98,7 @@ const en = {
     subtitle:
       'Select an active experiment below, load its video, capture your observations and submit.',
     sectionHeading: 'Active experiments',
-    blindTag: 'Blind',
+    blindTag: 'Independent observation',
     awaitingVideoTag: 'Awaiting video',
     noActiveTitle: 'No active experiments yet.',
     noActiveHint: 'Researchers can launch one from the',
@@ -111,7 +111,7 @@ const en = {
     switchHint: 'Pick another experiment above to switch video.',
   },
   session: {
-    blindBadge: 'Double-blind scientific validation protocol',
+    blindBadge: 'Independent observation procedure with cross-validated review',
     activeLabel: 'Active observation session',
     changeProject: 'Change experiment',
     guidelinesTitle: 'Observer guidelines',
@@ -159,7 +159,7 @@ const en = {
     selMoveHint: 'Drag the marker to fine-tune its position.',
     submit: 'Complete Session ({{n}})',
     endTitle: 'You have reached the end of the video.',
-    endBody: 'Submit your observations now to lock in this blind session.',
+    endBody: 'Submit your observations now to complete this independent observation session.',
     endSubmit: 'Submit now',
     endLater: 'Review first',
     toastSuccessTitle: 'Session submitted',
@@ -172,12 +172,18 @@ const en = {
     confirmKicker: 'Final review',
     confirmTitle: 'Send your observations?',
     confirmBody:
-      'Your {{n}} annotated capture(s) will be recorded and validated against the study’s blind windows.',
+      'Your {{n}} annotated capture(s) will be recorded and submitted to the study’s cross-validated scientific review.',
     confirmCancel: 'Cancel',
     confirmFollow: 'Continue observing',
     confirmSend: 'Confirm & send',
     fullscreenEnter: 'Enter fullscreen',
     fullscreenExit: 'Exit fullscreen',
+    // — Types d'observation configurables par l'administrateur —
+    obsTypeLabel: 'Observation type',
+    obsTypePlaceholder: 'Select a type…',
+    obsTypeMissing: 'Select the observation type of this capture.',
+    // — Raccourcis clavier du lecteur —
+    shortcutsHelp: 'Keyboard — Space: play / pause · C or Enter: capture',
     // — Carrousel des captures (zone de prévisualisation) —
     captureBadge: 'Capture {{current}} of {{total}}',
     prevCaptureAria: 'Previous capture',
@@ -242,12 +248,24 @@ const en = {
     errorIdentifier: 'Please provide or generate an anonymous identifier.',
     errorEmailInvalid: 'The email address entered is invalid.',
     errorEmailRequired: 'Please enter a valid email address.',
+    errorNetwork:
+      'The server could not be reached. Check your connection and try again — your captures are still here.',
     unitCapture: { one: 'capture', many: 'captures' },
     unitZone: { one: 'zone', many: 'zones' },
     timePrefix: 'T+',
+    typeCoverTitle: 'Required types coverage',
+    typeCoverProgress: '{{done}} of {{total}} required types covered',
+    typeAllCovered: 'Each required type has at least one capture — you can submit directly.',
+    typeStateCovered: 'Covered',
+    typeStatePending: 'Not captured yet',
+    typePendingIntro: 'No capture yet for these required types:',
+    typeContinueButton: 'Pass to next type',
+    typeGapTitle: 'Incomplete coverage',
+    typeGapAcknowledge:
+      'I confirm that I still want to submit without any observation for the missing required types.',
   },
   completion: {
-    kicker: 'Blind observation session',
+    kicker: 'Independent observation session',
     title: 'Observation session complete',
     body:
       'Your annotated observations are now recorded in the secure scientific database. '
@@ -279,7 +297,7 @@ const en = {
     hidePassword: 'Hide password',
     roleLabel: 'I want to…',
     roleObserver: 'Observe experiments',
-    roleObserverHint: 'Participate in double-blind studies and track your history.',
+    roleObserverHint: 'Participate in independent-observation studies and track your history.',
     roleAnalyst: 'Create & analyze experiments',
     roleAnalystHint: 'Manage your own projects, share them, and read the analytics.',
     roleAdminDesc: 'This profile cannot be created by registration.',
@@ -320,7 +338,7 @@ const en = {
     overviewHint: 'Everything you need for your observation studies, in one place.',
     quickTitle: 'Quick access',
     observerCardTitle: 'Join an experiment',
-    observerCardDesc: 'Participate in an active double-blind study as an observer.',
+    observerCardDesc: 'Participate in an active independent-observation study as an observer.',
     observerCta: 'Browse experiments',
     analystCardTitle: 'My projects',
     analystCardDesc: 'Open your observation projects, read concordance and export results.',
@@ -343,7 +361,7 @@ const en = {
     eyebrow: 'Analyst space',
     title: 'My observation projects',
     subtitle:
-      'Create your double-blind experiments, share them with colleagues and read the analytics.',
+      'Create your independent-observation experiments, share them with colleagues and read the analytics.',
     createCta: 'New project',
     createPanel: 'Create a project',
     titleLabel: 'Project title',
@@ -382,7 +400,7 @@ const en = {
     openBlind: 'Open the observation session',
     copySessionLink: 'Copy session link',
     emptyTitle: 'No project yet.',
-    emptyHint: 'Create your first double-blind observation project to begin.',
+    emptyHint: 'Create your first independent-observation project to begin.',
     notAllowed: 'You do not have access to this project.',
     sharedBy: 'Shared by',
     legacy: 'Platform project',
@@ -507,6 +525,12 @@ const en = {
     chartSplitAllTitle: 'Validated vs ghost — all observers',
     chartWindowTitle: 'Captures per target window',
     chartWindowsEmpty: 'Define target windows to display this chart.',
+    exportJson: 'Export JSON',
+    exportZip: 'Images (.zip)',
+    exportExcel: 'Global export (Excel)',
+    exportExcelHint:
+      '3 sheets — Project summary · Observers × types matrix · Full raw ledger',
+    exportReport: 'Printable scientific report',
   },
 }
 
@@ -530,26 +554,26 @@ const fr: typeof en = {
   home: {
     eyebrow: 'Observation scientifique de vidéos',
     h1Lead: 'Transformez chaque détection en',
-    h1Accent: 'donnée fiable, en aveugle.',
+    h1Accent: 'donnée fiable et indépendante.',
     lead:
       'Les observateurs annotent et capturent des événements sur la vidéo sans jamais connaître les '
       + 'fenêtres temporelles qui feront foi. À la soumission, la concordance inter-observateurs est '
       + 'calculée automatiquement — anonyme, confidentielle et prête pour la publication.',
     ctaParticipate: 'Participer à une expérience',
-    ctaParticipateHint: 'Rejoindre une étude en double aveugle',
+    ctaParticipateHint: 'Rejoindre une étude en observation indépendante',
     ctaSignIn: 'Se connecter / Créer un compte',
     ctaSignInHint: 'Chercheurs & analystes',
     note: 'Aucun compte requis pour observer — un identifiant pseudonymisé est conservé dans votre navigateur.',
     featuresEyebrow: 'Pourquoi la recherche lui fait confiance',
-    featuresTitle: 'En aveugle par conception, rigoureux par défaut',
+    featuresTitle: 'Indépendance par conception, rigueur par défaut',
     features: [
       {
         title: 'Incertitude temporelle',
         desc: 'Les fenêtres de validation restent confidentielles : les observateurs visionnent sans connaître les secondes qui feront foi.',
       },
       {
-        title: 'Masquage double aveugle',
-        desc: 'Observateurs pseudonymisés et protocole strictement aveugle — aucune information croisée ne peut biaiser la détection.',
+        title: 'Validation scientifique croisée',
+        desc: 'Observateurs pseudonymisés et procédure d’observation indépendante — aucune information croisée ne peut biaiser la détection.',
       },
       {
         title: 'Concordance inter-observateurs',
@@ -560,18 +584,18 @@ const fr: typeof en = {
         desc: 'Un rapport exécutif imprimable et un export CSV brut de toutes les mesures, prêts à archiver et publier.',
       },
     ],
-    footerTagline: 'Vision Analytics — observation vidéo scientifique, en double aveugle.',
+    footerTagline: 'Vision Analytics — observation vidéo scientifique en validation croisée.',
     footerCta: 'Explorer les expériences',
     // ——— Éditorial « milk cream », sans vert ———
     navHome: 'Accueil',
     navExperiments: 'Expériences',
     loginCta: 'Connexion',
     participateCta: 'Participer',
-    badge: 'LABORATOIRE D’OBSERVATION EN DOUBLE AVEUGLE',
+    badge: 'LABORATOIRE D’OBSERVATION INDÉPENDANTE',
     heroTitleLead: 'Précision Scientifique &',
     heroTitleAccent: 'Analyse Visuelle',
     heroSub:
-      'Participez aux sessions d’observation aveugles ou accédez au tableau de bord d’analyse statistique en temps réel.',
+      'Participez aux sessions d’observation indépendantes ou accédez au tableau de bord d’analyse statistique en temps réel.',
     heroCtaPrimary: 'Commencer l’expérience',
     heroCtaSecondary: 'Espace Analyste / Connexion',
     brandLead: 'VISION',
@@ -588,7 +612,7 @@ const fr: typeof en = {
     subtitle:
       'Sélectionnez une expérience active ci-dessous, chargez sa vidéo, capturez vos observations puis soumettez-les.',
     sectionHeading: 'Expériences actives',
-    blindTag: 'En aveugle',
+    blindTag: 'Observation indépendante',
     awaitingVideoTag: 'Vidéo en attente',
     noActiveTitle: 'Aucune expérience active pour le moment.',
     noActiveHint: 'Les chercheurs peuvent en lancer une depuis l’espace',
@@ -601,7 +625,7 @@ const fr: typeof en = {
     switchHint: 'Choisissez une autre expérience ci-dessus pour changer de vidéo.',
   },
   session: {
-    blindBadge: 'Protocole de validation scientifique en double aveugle',
+    blindBadge: 'Procédure d’observation indépendante à validation croisée',
     activeLabel: 'Session d’observation active',
     changeProject: 'Changer d’expérience',
     guidelinesTitle: 'Directives de l’observateur',
@@ -649,7 +673,7 @@ const fr: typeof en = {
     selMoveHint: 'Glissez le marqueur pour affiner sa position.',
     submit: 'Terminer la session ({{n}})',
     endTitle: 'Vous êtes arrivé(e) à la fin de la vidéo.',
-    endBody: 'Soumettez vos observations maintenant pour valider cette session en aveugle.',
+    endBody: 'Soumettez vos observations maintenant pour clôturer cette session d’observation indépendante.',
     endSubmit: 'Soumettre maintenant',
     endLater: 'Revue d’abord',
     toastSuccessTitle: 'Session soumise avec succès',
@@ -662,12 +686,18 @@ const fr: typeof en = {
     confirmKicker: 'Revue finale',
     confirmTitle: 'Envoyer vos observations ?',
     confirmBody:
-      'Vos {{n}} capture(s) annotée(s) seront enregistrées et validées contre les fenêtres aveugles de l’étude.',
+      'Vos {{n}} capture(s) annotée(s) seront enregistrées et soumises à la validation scientifique croisée de l’étude.',
     confirmCancel: 'Annuler',
     confirmFollow: 'Suivre',
     confirmSend: 'Confirmer & envoyer',
     fullscreenEnter: 'Plein écran',
     fullscreenExit: 'Quitter le plein écran',
+    // — Types d'observation configurables par l'administrateur —
+    obsTypeLabel: 'Type d’observation',
+    obsTypePlaceholder: 'Sélectionnez un type…',
+    obsTypeMissing: 'Sélectionnez le type d’observation de cette capture.',
+    // — Raccourcis clavier du lecteur —
+    shortcutsHelp: 'Clavier — Espace : lecture / pause · C ou Entrée : capturer',
     // — Carrousel des captures (zone de prévisualisation) —
     captureBadge: 'Capture {{current}} sur {{total}}',
     prevCaptureAria: 'Capture précédente',
@@ -732,12 +762,24 @@ const fr: typeof en = {
     errorIdentifier: 'Veuillez renseigner ou générer un identifiant anonyme.',
     errorEmailInvalid: 'L’adresse email saisie est invalide.',
     errorEmailRequired: 'Veuillez renseigner une adresse email valide.',
+    errorNetwork:
+      'Le serveur est injoignable. Vérifiez votre connexion et réessayez — vos captures sont toujours là.',
     unitCapture: { one: 'capture', many: 'captures' },
     unitZone: { one: 'zone', many: 'zones' },
     timePrefix: 'T+',
+    typeCoverTitle: 'Couverture des types requis',
+    typeCoverProgress: '{{done}} types sur {{total}} complétés',
+    typeAllCovered: 'Chaque type requis possède au moins une capture : vous pouvez soumettre directement.',
+    typeStateCovered: 'Couvert',
+    typeStatePending: 'En attente',
+    typePendingIntro: 'Aucune capture pour ces types requis :',
+    typeContinueButton: 'Passer au type suivant',
+    typeGapTitle: 'Couverture incomplète',
+    typeGapAcknowledge:
+      'Je confirme vouloir soumettre malgré l’absence d’observation pour les types requis manquants.',
   },
   completion: {
-    kicker: 'Session d’observation à l’aveugle',
+    kicker: 'Session d’observation indépendante',
     title: 'Session d’observation terminée',
     body:
       'Vos observations annotées sont désormais enregistrées dans la base scientifique sécurisée. '
@@ -770,7 +812,7 @@ const fr: typeof en = {
     hidePassword: 'Masquer le mot de passe',
     roleLabel: 'Je souhaite…',
     roleObserver: 'Observer des expériences',
-    roleObserverHint: 'Participer aux études en double aveugle et suivre mon historique.',
+    roleObserverHint: 'Participer aux études en observation indépendante et suivre mon historique.',
     roleAnalyst: 'Créer et analyser des expériences',
     roleAnalystHint: 'Gérer mes propres projets, les partager et consulter les analyses.',
     roleAdminDesc: 'Ce profil ne peut pas être créé par inscription.',
@@ -811,7 +853,7 @@ const fr: typeof en = {
     overviewHint: 'Tout ce qu’il faut pour vos études d’observation, au même endroit.',
     quickTitle: 'Accès rapide',
     observerCardTitle: 'Rejoindre une expérience',
-    observerCardDesc: 'Participez à une étude active en double aveugle comme observateur.',
+    observerCardDesc: 'Participez à une étude active en observation indépendante comme observateur.',
     observerCta: 'Voir les expériences',
     analystCardTitle: 'Mes projets',
     analystCardDesc: 'Ouvrez vos projets d’observation, lisez les concordances et exportez.',
@@ -834,7 +876,7 @@ const fr: typeof en = {
     eyebrow: 'Espace analyste',
     title: 'Mes projets d’observation',
     subtitle:
-      'Créez vos expériences en double aveugle, partagez-les avec vos collègues et lisez les analyses.',
+      'Créez vos expériences en observation indépendante, partagez-les avec vos collègues et lisez les analyses.',
     createCta: 'Nouveau projet',
     createPanel: 'Créer un projet',
     titleLabel: 'Titre du projet',
@@ -873,7 +915,7 @@ const fr: typeof en = {
     openBlind: 'Ouvrir la session d’observation',
     copySessionLink: 'Copier le lien de session',
     emptyTitle: 'Aucun projet pour le moment.',
-    emptyHint: 'Créez votre premier projet d’observation en double aveugle pour commencer.',
+    emptyHint: 'Créez votre premier projet en observation indépendante pour commencer.',
     notAllowed: 'Vous n’avez pas accès à ce projet.',
     sharedBy: 'Partagé par',
     legacy: 'Projet plateforme',
@@ -997,6 +1039,12 @@ const fr: typeof en = {
     chartSplitAllTitle: 'Validées vs fantômes — tous les observateurs',
     chartWindowTitle: 'Captures par fenêtre cible',
     chartWindowsEmpty: 'Définissez des fenêtres cibles pour afficher ce graphique.',
+    exportJson: 'Exporter JSON',
+    exportZip: 'Images (.zip)',
+    exportExcel: 'Export Global (Excel)',
+    exportExcelHint:
+      '3 feuilles — Synthèse du projet · Matrice observateurs × types · Relevé global',
+    exportReport: 'Rapport PDF/Imprimable',
   },
 }
 
