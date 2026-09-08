@@ -7,6 +7,35 @@ export type ProjectPointDto = {
   pointName: string
   trameDebut: number
   trameFin: number
+  /** Passe vidéo à laquelle la fenêtre est rattachée ; null = fenêtre « générique » (vidéo héritée). */
+  videoId?: string | null
+}
+
+/**
+ * Passe vidéo d'un projet, côté observateur.
+ *
+ * On n'y expose JAMAIS le benchmark (`benchmarkSeconds`, confidentialité
+ * scientifique) ni les fenêtres de validation : uniquement ce dont l'annotateur
+ * a besoin pour offrir un onglet (libellé du type, source, nom, ordre).
+ */
+export type BlindVideoDto = {
+  id: string
+  typeLabel: string | null
+  name: string | null
+  source: string
+  orderIndex: number
+}
+
+/**
+ * Passe vidéo vue par un profil autorisé (admin / analyste).
+ * Contient le benchmark (vérité terrain) et le nombre de captures enregistrées.
+ */
+export type VideoAdminDto = BlindVideoDto & {
+  projectId: string
+  benchmarkSeconds: number | null
+  captureCount: number
+  pointCount: number
+  createdAt: string
 }
 
 export type ProjectDto = {
@@ -72,6 +101,12 @@ export type BlindProjectDto = {
   createdAt: string
   /** Types d'observation configurables proposés aux observateurs (jamais les fenêtres). */
   observationTypes: string[]
+  /**
+   * Passes vidéo du projet (au moins une si le projet est « publié »).
+   * Chaque passe correspond à un onglet de l'annotateur. Une passe peut être
+   * rattachée à un type (`typeLabel`) ou générique (`typeLabel = null`).
+   */
+  videos: BlindVideoDto[]
 }
 
 /** Capture locale effectuée pendant la session d'observation. */
@@ -85,6 +120,8 @@ export type CaptureRecord = {
   circleCount: number
   /** Type d'observation choisi par l'observateur (issu de Project.observationTypes). */
   observationType: string | null
+  /** Passe vidéo d'origine de la capture (null = passe « générique » héritée). */
+  videoId?: string | null
   /**
    * Position du foyer des cercles, normalisée 0–1 (axe x, axe y) par rapport à
    * la zone vidéo. Optionnel : utilisé uniquement pour une étiquette de zone dans
@@ -102,6 +139,8 @@ export type SubmitObservationsInput = {
     imageDataUrl: string
     /** Type d'observation choisi (doit appartenir à Project.observationTypes si renseigné). */
     observationType?: string | null
+    /** Passe vidéo d'origine (null / absent = passe générique héritée). */
+    videoId?: string | null
   }>
   /** Langue de l'interface, pour renvoyer des messages d'erreur localisés. */
   locale?: Locale
@@ -181,6 +220,29 @@ export type ObserverMetricDto = {
   lastSessionAt: string
 }
 
+/**
+ * Filtre d'analyse. Toute valeur présente restreint les métriques à ce contexte ;
+ * chaque sélecteur peut aussi représenter « tous » (valeur absente / chaîne vide).
+ *
+ * — `videoId` cible une passe vidéo précise ; la valeur `LEGACY_VIDEO_TOKEN` (une
+ *   chaîne vide réservée) cible la passe générique héritée (`Video.videoId = null`).
+ * — `observationType` cible un type d'observation configuré.
+ * — `observerId` cible un observateur précis.
+ */
+export type AnalyticsFilter = {
+  observationType?: string
+  videoId?: string
+  observerId?: string
+}
+
+/** Contexte vidéo exposé aux vues autorisées (analytics / admin) : inclut le benchmark. */
+export type AnalyticsVideoContextDto = BlindVideoDto & {
+  projectId: string
+  benchmarkSeconds: number | null
+  captureCount: number
+  pointCount: number
+}
+
 /** Données complètes d'analyse d'un projet d'observation. */
 export type ProjectAnalyticsDto = {
   project: {
@@ -190,6 +252,10 @@ export type ProjectAnalyticsDto = {
     videoUrl: string | null
     createdAt: string
     totalDefinedPoints: number
+    /** Types d'observation configurables (menu « Tous les types »). */
+    observationTypes?: string[]
+    /** Passes vidéo avec benchmarks (menus vidéo + contexte des graphiques). */
+    videos?: AnalyticsVideoContextDto[]
   }
   summary: {
     totalObservers: number
@@ -199,6 +265,8 @@ export type ProjectAnalyticsDto = {
     overallConcordanceRate: number // Moyenne des taux de concordance des points cibles
     overallPrecisionRate: number // % d'observations valides vs total
     averageDetectionDelay: number | null // Moyenne globale des délais de réaction
+    /** Filtre réellement appliqué aux calculs (cohérence métriques ↔ contexte). */
+    appliedFilter?: AnalyticsFilter
   }
   pointsAnalytics: PointConcordanceDto[]
   ghostPointsAnalytics: GhostPointAnalyticsDto
@@ -222,6 +290,8 @@ export type ProjectObservationRowDto = {
   pointId: string | null
   /** Nom du point de validation rattaché (null ⇒ fausse alerte / hors trame). */
   pointLabel: string | null
+  /** Passe vidéo d'origine (null = passe générique héritée). */
+  videoId?: string | null
   observerId: string
   observerUsername: string | null
   observerEmail: string | null
@@ -243,6 +313,11 @@ export type AdminProjectDetailDto = {
     pointsCount: number
   }
   points: ProjectPointDto[]
+  /**
+   * Passes vidéo du projet avec leurs benchmarks (vérité terrain) et leurs
+   * compteurs. Réservé aux profils autorisés (canManage).
+   */
+  videos: VideoAdminDto[]
   /** Relevé complet des observations, plus récentes d'abord. */
   rows: ProjectObservationRowDto[]
 }
