@@ -33,6 +33,7 @@ async function queryBlindProject(projectId: string): Promise<BlindProjectDto | n
       title: true,
       description: true,
       videoUrl: true,
+      observationTypes: true,
       createdAt: true,
     },
   })
@@ -44,6 +45,7 @@ async function queryBlindProject(projectId: string): Promise<BlindProjectDto | n
     title: project.title,
     description: project.description,
     videoUrl: project.videoUrl,
+    observationTypes: project.observationTypes,
     createdAt: project.createdAt.toISOString(),
   }
 }
@@ -56,6 +58,7 @@ async function queryBlindProjects(): Promise<BlindProjectDto[]> {
       title: true,
       description: true,
       videoUrl: true,
+      observationTypes: true,
       createdAt: true,
     },
     orderBy: { createdAt: 'desc' },
@@ -66,13 +69,14 @@ async function queryBlindProjects(): Promise<BlindProjectDto[]> {
     title: p.title,
     description: p.description,
     videoUrl: p.videoUrl,
+    observationTypes: p.observationTypes,
     createdAt: p.createdAt.toISOString(),
   }))
 }
 
 /**
  * Détail d'un projet pour la session d'observation — mis en cache.
- * RÈGLE DU PROTOCOLE EN AVEUGLE :
+ * RÈGLE DE LA PROCÉDURE D'OBSERVATION INDÉPENDANTE :
  * Les fenêtres de validation `ProjectPoint` sont strictement omises de la requête
  * pour éviter toute fuite vers le client de l'observateur.
  */
@@ -87,7 +91,7 @@ export async function getBlindProject(projectId: string): Promise<BlindProjectDt
 
 /**
  * Liste des projets actifs pour les observateurs — mise en cache.
- * RÈGLE DU PROTOCOLE EN AVEUGLE :
+ * RÈGLE DE LA PROCÉDURE D'OBSERVATION INDÉPENDANTE :
  * Les fenêtres de validation `ProjectPoint` sont strictement exclues de la requête.
  */
 const getCachedBlindProjects = unstable_cache(queryBlindProjects, ['blind-projects'], {
@@ -116,7 +120,7 @@ async function resolveObserverUser(identifier: string) {
     return prisma.user.create({
       data: {
         email: cleanId.toLowerCase(),
-        password: 'BLIND_OBSERVER_AUTO_GENERATED',
+        password: 'INDEPENDENT_OBSERVER_AUTO_GENERATED',
         role: Role.OBSERVER,
       },
     })
@@ -129,12 +133,12 @@ async function resolveObserverUser(identifier: string) {
   if (existingByAnon) return existingByAnon
 
   // Création avec email factice unique pour satisfaire la contrainte unique de User.email
-  const syntheticEmail = `${cleanId.toLowerCase()}@blind.vision-analytics`
+  const syntheticEmail = `${cleanId.toLowerCase()}@observateur.vision-analytics`
   return prisma.user.create({
     data: {
       email: syntheticEmail,
       anonymousId: cleanId,
-      password: 'BLIND_OBSERVER_AUTO_GENERATED',
+      password: 'INDEPENDENT_OBSERVER_AUTO_GENERATED',
       role: Role.OBSERVER,
     },
   })
@@ -197,10 +201,10 @@ export async function submitObservations(
       }
     }
 
-    // Vérification du projet
+    // Vérification du projet (isArchived + types d'observation configurés)
     const project = await prisma.project.findUnique({
       where: { id: projectId },
-      select: { id: true, isArchived: true },
+      select: { id: true, isArchived: true, observationTypes: true },
     })
 
     if (!project) {
@@ -233,17 +237,52 @@ export async function submitObservations(
       },
     })
 
+    // Types d'observation configurables du projet (liste proposée aux observateurs).
+    const configuredTypes = project.observationTypes ?? []
+    const configuredTypeSet = new Set(configuredTypes.map((type) => type.trim()))
+
+    // Validation des types AVANT tout téléversement Cloudinary (échec rapide).
+    for (let i = 0; i < observations.length; i++) {
+      const rawType = observations[i]?.observationType
+      const type = typeof rawType === 'string' ? rawType.trim() : ''
+      if (configuredTypes.length > 0) {
+        if (!type) {
+          return {
+            ok: false,
+            error: msg(
+              `Select an observation type for capture #${i + 1}.`,
+              `Sélectionnez un type d’observation pour la capture n°${i + 1}.`,
+            ),
+          }
+        }
+        if (!configuredTypeSet.has(type)) {
+          return {
+            ok: false,
+            error: msg(
+              `Observation type "${type}" is not offered for this project.`,
+              `Le type d’observation « ${type} » n’est pas proposé pour ce projet.`,
+            ),
+          }
+        }
+      }
+    }
+
     // Téléversement asynchrone des images vers Cloudinary
     const uploadedRecords: Array<{
       timestampTotal: number
       imageUrl: string
       pointId: string | null
       isGhostPoint: boolean
+      observationType: string | null
     }> = []
 
     for (const obs of observations) {
       const imageUrl = await uploadAnnotationToCloudinary(obs.imageDataUrl)
       const timestampTotal = Math.round(obs.timestamp)
+      const observationType =
+        configuredTypes.length > 0 && typeof obs.observationType === 'string'
+          ? obs.observationType.trim()
+          : null
 
       // Recherche d'une fenêtre de validation correspondante
       const matchedPoint = validationPoints.find(
@@ -255,6 +294,7 @@ export async function submitObservations(
         imageUrl,
         pointId: matchedPoint ? matchedPoint.id : null,
         isGhostPoint: !matchedPoint, // Si aucune fenêtre ne correspond => Point Fantôme (fausse alerte)
+        observationType,
       })
     }
 
@@ -266,6 +306,7 @@ export async function submitObservations(
         pointId: record.pointId,
         timestampTotal: record.timestampTotal,
         imageUrl: record.imageUrl,
+        observationType: record.observationType,
         isGhostPoint: record.isGhostPoint,
         isVerified: true,
       })),

@@ -15,6 +15,8 @@ export type ProjectDto = {
   description: string | null
   videoUrl: string | null
   createdAt: string
+  /** Types d'observation configurables proposés aux observateurs (ex. « 100m oblique »). */
+  observationTypes: string[]
   points: ProjectPointDto[]
   /** Nombre d'observations enregistrées (renseigné par la vue admin). */
   observationCount?: number
@@ -59,7 +61,7 @@ export type ObserverSessionSummaryDto = {
 }
 
 /**
- * Projet en aveugle (Blind Testing) :
+ * Projet de session d'observation indépendante :
  * Ne contient JAMAIS la liste des points ou des trames pour préserver l'intégrité scientifique.
  */
 export type BlindProjectDto = {
@@ -68,6 +70,8 @@ export type BlindProjectDto = {
   description: string | null
   videoUrl: string | null
   createdAt: string
+  /** Types d'observation configurables proposés aux observateurs (jamais les fenêtres). */
+  observationTypes: string[]
 }
 
 /** Capture locale effectuée pendant la session d'observation. */
@@ -79,6 +83,8 @@ export type CaptureRecord = {
   imageDataUrl: string
   /** Nombre de cercles d'intérêt portés par la capture. */
   circleCount: number
+  /** Type d'observation choisi par l'observateur (issu de Project.observationTypes). */
+  observationType: string | null
   /**
    * Position du foyer des cercles, normalisée 0–1 (axe x, axe y) par rapport à
    * la zone vidéo. Optionnel : utilisé uniquement pour une étiquette de zone dans
@@ -94,6 +100,8 @@ export type SubmitObservationsInput = {
   observations: Array<{
     timestamp: number
     imageDataUrl: string
+    /** Type d'observation choisi (doit appartenir à Project.observationTypes si renseigné). */
+    observationType?: string | null
   }>
   /** Langue de l'interface, pour renvoyer des messages d'erreur localisés. */
   locale?: Locale
@@ -209,6 +217,8 @@ export type ProjectObservationRowDto = {
   imageUrl: string
   /** Date de soumission (ISO). */
   createdAt: string
+  /** Type d'observation choisi par l'observateur (null si non configuré). */
+  observationType: string | null
   pointId: string | null
   /** Nom du point de validation rattaché (null ⇒ fausse alerte / hors trame). */
   pointLabel: string | null
@@ -227,6 +237,7 @@ export type AdminProjectDetailDto = {
     videoUrl: string | null
     isArchived: boolean
     createdAt: string
+    observationTypes: string[]
     observationCount: number
     observerCount: number
     pointsCount: number
