@@ -24,9 +24,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import type { CaptureRecord } from '@/lib/types'
+import type { BlindVideoDto, CaptureRecord } from '@/lib/types'
 import type { AnnotatorText, CompletionText, Locale, StepperText } from '@/lib/i18n'
 import SubmissionStepper from '@/components/SubmissionStepper'
+import { computeTypeCompletion } from '@/lib/captureCompletion'
+import { deriveObservationNameFromVideo } from '@/lib/videoName'
 
 /**
  * Marqueur (cercle d'intérêt) dessiné sur l'image.
@@ -45,6 +47,13 @@ type VideoAnnotatorProps = {
   projectId?: string
   projectTitle?: string
   expectedVideoUrl?: string | null
+  /**
+   * Passes vidéo du projet (une par onglet de l'annotateur). Une passe est soit
+   * rattachée à un type (`typeLabel` non nul → type verrouillé), soit générique
+   * (`typeLabel` nul → l'observateur choisit le type parmi `observationTypes`).
+   * Absent → passe unique héritée reconstruite depuis `expectedVideoUrl`.
+   */
+  videos?: BlindVideoDto[]
   /** Types d'observation configurables du projet (choisis par l'observateur à la capture). */
   observationTypes?: string[]
   locale: Locale
@@ -55,6 +64,36 @@ type VideoAnnotatorProps = {
   }
   /** Destination du bouton « Retour » de l'écran de fin (défaut : page publique `/observe`). */
   backHref?: string
+}
+
+/**
+ * Passe vidéo interne à l'annotateur. `key` vaut l'identifiant de la `Video` ou la
+ * chaîne vide pour la passe « générique » héritée (projet à vidéo unique).
+ */
+type TabPass = {
+  key: string
+  typeLabel: string | null
+  name: string | null
+  source: string | null
+}
+
+/** Clé de la passe générique héritée (vide) — captures sans `videoId` rattaché. */
+const GENERIC_TAB_KEY = ''
+
+function normalizeTypeKey(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
+}
+
+/** Libellé lisible d'une passe (type imposé → nom de fichier/vidéo → repli). */
+function passLabel(pass: TabPass, fallback: string): string {
+  if (pass.typeLabel) return pass.typeLabel
+  if (pass.name) return pass.name
+  if (pass.source) return deriveObservationNameFromVideo(pass.source) ?? fallback
+  return fallback
+}
+
+function isRemoteSource(value: string | null | undefined): boolean {
+  return Boolean(value) && /^https?:\/\//i.test(value?.trim() ?? '')
 }
 
 function generateId(): string {
@@ -132,6 +171,7 @@ export default function VideoAnnotator({
   projectId,
   projectTitle,
   expectedVideoUrl,
+  videos,
   observationTypes,
   locale,
   t,
@@ -156,17 +196,68 @@ export default function VideoAnnotator({
   const controlsTimerRef = useRef<number | null>(null)
 
   /**
-   * Vidéo distante référencée par URL (Cloudinary, S3, lecteur de flux…).
-   * On la STREAME par référence — on ne stocke jamais le fichier lourd localement.
-   * Elle devient la source initiale quand un projet fournit une URL distante ;
-   * un fichier local sélectionné ensuite prend simplement le relais.
+   * Passes vidéo du projet, dans l'ordre des onglets. Une passe porte soit un type
+   * verrouillé (`typeLabel`), soit une source à charger (URL distante streamée par
+   * référence, ou nom de fichier que l'observateur charge localement). Un projet
+   * hérité à vidéo unique est représenté par une passe générique unique.
    */
-  const remoteVideoUrl =
-    expectedVideoUrl && /^https?:\/\//.test(expectedVideoUrl.trim())
-      ? expectedVideoUrl.trim()
-      : null
+  const passes: TabPass[] = useMemo(() => {
+    const provided = videos && videos.length > 0 ? videos : null
+    if (provided) {
+      return provided.map((video) => ({
+        key: video.id || GENERIC_TAB_KEY,
+        typeLabel: (video.typeLabel ?? '').trim() || null,
+        name: (video.name ?? '').trim() || null,
+        source: (video.source ?? '').trim() || null,
+      }))
+    }
+    const legacySource = expectedVideoUrl?.trim()
+    return [
+      {
+        key: GENERIC_TAB_KEY,
+        typeLabel: null,
+        name: legacySource ? deriveObservationNameFromVideo(legacySource) : null,
+        source: legacySource || null,
+      },
+    ]
+  }, [videos, expectedVideoUrl])
 
-  const [videoUrl, setVideoUrl] = useState<string | null>(() => remoteVideoUrl)
+  /** Onglet actif (par défaut : la première passe). */
+  const [activeKey, setActiveKey] = useState<string>(() => passes[0]?.key ?? GENERIC_TAB_KEY)
+  const activePass: TabPass | null = passes.find((pass) => pass.key === activeKey) ?? passes[0] ?? null
+  /** Type verrouillé par l'association vidéo → type de l'onglet actif (null = passe générique). */
+  const lockedType = activePass?.typeLabel ?? null
+
+  /**
+   * Sources effectivement chargées par onglet (fichier local ou URL collée), pour
+   * restaurer la lecture quand on revient sur un onglet — jamais supprimées au
+   * changement d'onglet. Les URLs `blob:` ne sont révoquées qu'au remplacement ou
+   * au démontage, pas à la bascule.
+   */
+  const tabLoadsRef = useRef<Record<string, { url: string; label: string | null }>>({})
+
+  /** Types d'observation configurables du projet (liste propre, sans vide). */
+  const typeOptions = useMemo(
+    () => (observationTypes ?? []).map((item) => item.trim()).filter((item) => item.length > 0),
+    [observationTypes],
+  )
+  /** Vrai quand le projet impose un type à chaque capture. */
+  const typeRequired = typeOptions.length > 0
+  /** Type choisi pour la capture à venir (passe générique uniquement). */
+  const [nextObservationType, setNextObservationType] = useState<string>('')
+  /** Vrai quand la capture à venir peut partir (un type est résolu). */
+  const captureTypeReady = lockedType !== null || !typeRequired || Boolean(nextObservationType.trim())
+
+  /**
+   * Source initiale : au montage, une première passe distante démarre sa lecture
+   * (comportement hérité de la vidéo unique) ; une passe sans source attend un
+   * fichier local. Les bascules suivantes passent par `applyPass` (jamais un effet).
+   */
+  const [videoUrl, setVideoUrl] = useState<string | null>(() => {
+    const first = passes[0]
+    if (!first) return null
+    return isRemoteSource(first.source) ? first.source : null
+  })
   const [fileName, setFileName] = useState<string | null>(null)
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
@@ -176,6 +267,46 @@ export default function VideoAnnotator({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [observations, setObservations] = useState<CaptureRecord[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  /**
+   * Types « couvrables » de la session = configuration du projet restreinte à ce
+   * que les onglets permettent réellement de produire :
+   *  — une passe générique (sans type verrouillé) permet de capturer n'importe quel
+   *    type configuré ;
+   *  — sans passe générique, seuls les types verrouillés par une passe sont exigibles.
+   * Le protocole ne doit jamais bloquer une soumission sur un type qu'aucun onglet
+   * ne peut produire.
+   */
+  const requiredCoverableTypes = useMemo(() => {
+    if (typeOptions.length === 0) return typeOptions
+    let hasGenericPass = false
+    const lockedKeys = new Set<string>()
+    for (const pass of passes) {
+      if (pass.typeLabel) lockedKeys.add(normalizeTypeKey(pass.typeLabel))
+      else hasGenericPass = true
+    }
+    if (hasGenericPass) return typeOptions
+    return typeOptions.filter((option) => lockedKeys.has(normalizeTypeKey(option)))
+  }, [passes, typeOptions])
+
+  /** Couverture réelle de la session, agrégée sur TOUS les onglets (rien n'est supprimé à la bascule). */
+  const completion = useMemo(
+    () => computeTypeCompletion(requiredCoverableTypes, observations),
+    [requiredCoverableTypes, observations],
+  )
+  /** Vrai quand le projet exige au moins un type. */
+  const hasRequiredTypes = completion.totalRequired > 0
+  /** CTA « Soumettre toutes les observations » dès que les types requis sont tous couverts. */
+  const showSendAllLabel = hasRequiredTypes && completion.allRequiredCovered
+
+  /** Captures de l'onglet courant (le carrousel n'affiche que la passe active). */
+  const tabObservations = useMemo(
+    () =>
+      activeKey === GENERIC_TAB_KEY
+        ? observations.filter((capture) => !capture.videoId)
+        : observations.filter((capture) => capture.videoId === activeKey),
+    [activeKey, observations],
+  )
   const [manualUrl, setManualUrl] = useState('')
   const [isStepperOpen, setIsStepperOpen] = useState(false)
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
@@ -187,16 +318,6 @@ export default function VideoAnnotator({
   const [controlsVisible, setControlsVisible] = useState(true)
   /** Capture active du carrousel (null → dernière ajoutée, la plus récente). */
   const [activeId, setActiveId] = useState<string | null>(null)
-
-  /** Types d'observation configurables du projet (liste propre, sans vide). */
-  const typeOptions = useMemo(
-    () => (observationTypes ?? []).map((item) => item.trim()).filter((item) => item.length > 0),
-    [observationTypes],
-  )
-  /** Type choisi pour la capture à venir (partagé barre de commandes / plein écran). */
-  const [nextObservationType, setNextObservationType] = useState<string>('')
-  /** Vrai quand le projet impose un type à chaque capture. */
-  const typeRequired = typeOptions.length > 0
 
   /** Suit l'état du plein écran natif (bouton ou touche Échap) du lecteur. */
   useEffect(() => {
@@ -243,6 +364,18 @@ export default function VideoAnnotator({
   useEffect(() => {
     return () => {
       if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current)
+    }
+  }, [])
+
+  // Révoque toutes les URLs `blob:` des onglets au démontage (jamais à la bascule :
+  // revenir sur un onglet doit restaurer la lecture de son fichier local).
+  useEffect(() => {
+    const loads = tabLoadsRef.current
+    return () => {
+      for (const key of Object.keys(loads)) {
+        const url = loads[key]?.url
+        if (url && url.startsWith('blob:')) URL.revokeObjectURL(url)
+      }
     }
   }, [])
 
@@ -294,6 +427,63 @@ export default function VideoAnnotator({
     redraw()
   }, [redraw, selectCircle])
 
+  /**
+   * Charge une passe : coupe la lecture précédente, réinitialise l'état transitoire
+   * du lecteur (jamais les observations déjà enregistrées des autres onglets) puis
+   * choisit la source — URL distante (streamée par référence), fichier local déjà
+   * chargé pour cet onglet, ou attente d'un fichier. Appelé au montage et à chaque
+   * bascule d'onglet (déclenché par `applyPass` référencé depuis l'effet ci-dessous,
+   * afin que les réinitialisations ne soient jamais des setState synchrones).
+   */
+  const applyPass = useCallback(
+    (key: string) => {
+      const pass = passes.find((item) => item.key === key)
+      if (!pass) return
+      const video = videoRef.current
+      if (video && !video.paused) video.pause()
+      clearDrawing()
+      setErrorMessage(null)
+      setActiveId(null)
+      setEnded(false)
+      setEndPromptDismissed(false)
+      setDuration(0)
+      setCurrentTime(0)
+      setIsPlaying(false)
+      setIsReady(false)
+      setControlsVisible(true)
+      readyRef.current = false
+      playingRef.current = false
+
+      const saved = tabLoadsRef.current[pass.key]
+      if (saved) {
+        setVideoUrl(saved.url)
+        setFileName(saved.label)
+      } else if (isRemoteSource(pass.source)) {
+        setVideoUrl(pass.source)
+        setFileName(null)
+      } else {
+        setVideoUrl(null)
+        setFileName(null)
+      }
+    },
+    [clearDrawing, passes],
+  )
+
+  /**
+   * Bascule d'onglet : applique la passe cible (remise à zéro transitoire du
+   * lecteur, jamais des observations enregistrées) puis l'active. Déclenché par les
+   * seuls chemins qui changent `activeKey` — clic sur un onglet ou « type suivant » —
+   * pour ne jamais réinitialiser l'état dans un effet.
+   */
+  const selectPass = useCallback(
+    (key: string) => {
+      if (key === activeKey) return
+      applyPass(key)
+      setActiveKey(key)
+    },
+    [activeKey, applyPass],
+  )
+
   const handleDeleteCapture = useCallback((captureId: string) => {
     setObservations((prev) => prev.filter((item) => item.id !== captureId))
     // La capture active disparaît : on revient à la dernière restante.
@@ -340,7 +530,7 @@ export default function VideoAnnotator({
     setIsConfirmOpen(true)
   }
 
-  /** Réinitialise l'état pour une nouvelle vidéo. */
+  /** Charge un fichier local pour l'onglet actif et réinitialise la session de CETTE passe. */
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
@@ -349,9 +539,15 @@ export default function VideoAnnotator({
       setErrorMessage(t.annotator.fileTypeError)
       return
     }
+    // On ne réinitialise que la session de l'onglet actif : les observations déjà
+    // enregistrées pour les AUTRES passes ne sont jamais supprimées.
+    setObservations((prev) =>
+      activeKey === GENERIC_TAB_KEY
+        ? prev.filter((capture) => Boolean(capture.videoId))
+        : prev.filter((capture) => capture.videoId !== activeKey),
+    )
     setErrorMessage(null)
     clearDrawing()
-    setObservations([])
     setSubmittedCount(null)
     setFileName(file.name)
     setDuration(0)
@@ -362,7 +558,11 @@ export default function VideoAnnotator({
     setEndPromptDismissed(false)
     readyRef.current = false
     playingRef.current = false
-    setVideoUrl(URL.createObjectURL(file))
+    const previous = tabLoadsRef.current[activeKey]
+    if (previous && previous.url.startsWith('blob:')) URL.revokeObjectURL(previous.url)
+    const url = URL.createObjectURL(file)
+    tabLoadsRef.current[activeKey] = { url, label: file.name }
+    setVideoUrl(url)
   }
 
   /**
@@ -387,7 +587,12 @@ export default function VideoAnnotator({
     }
     setErrorMessage(null)
     clearDrawing()
-    setObservations([])
+    // Repli « charger une URL » : ne réinitialise que la passe active.
+    setObservations((prev) =>
+      activeKey === GENERIC_TAB_KEY
+        ? prev.filter((capture) => Boolean(capture.videoId))
+        : prev.filter((capture) => capture.videoId !== activeKey),
+    )
     setSubmittedCount(null)
     setFileName(null)
     setDuration(0)
@@ -398,16 +603,11 @@ export default function VideoAnnotator({
     setEndPromptDismissed(false)
     readyRef.current = false
     playingRef.current = false
+    const previous = tabLoadsRef.current[activeKey]
+    if (previous && previous.url.startsWith('blob:')) URL.revokeObjectURL(previous.url)
+    tabLoadsRef.current[activeKey] = { url, label: null }
     setVideoUrl(url)
   }
-
-  // Révoque l'ancienne URL objet quand la source change (ou au démontage).
-  useEffect(() => {
-    const url = videoUrl
-    return () => {
-      if (url && url.startsWith('blob:')) URL.revokeObjectURL(url)
-    }
-  }, [videoUrl])
 
   // Redimensionne le canvas dès que la vidéo est prête, puis à chaque redimensionnement.
   useEffect(() => {
@@ -636,14 +836,25 @@ export default function VideoAnnotator({
       timestamp: video.currentTime,
       imageDataUrl,
       circleCount: n,
-      // Type d'observation choisi pour cette capture (null si le projet n'impose rien).
-      observationType: typeRequired ? nextObservationType.trim() : null,
+      // Type verrouillé par l'onglet (association vidéo → type), sinon type choisi
+      // par l'observateur (null si le projet n'impose rien).
+      observationType: lockedType ?? (typeRequired ? nextObservationType.trim() : null),
+      // Passe vidéo d'origine de la capture ; null = passe générique héritée.
+      videoId: activeKey === GENERIC_TAB_KEY ? null : activeKey,
       centroid,
     }
     setObservations((previous) => [capture, ...previous])
     // Les marqueurs restent affichés : l'observateur peut en ajuster sur la frame
     // avant une nouvelle capture, ou les effacer pour changer de frame.
-  }, [nextObservationType, redraw, syncCanvasSize, t.annotator.remoteTaintError, typeRequired])
+  }, [
+    activeKey,
+    lockedType,
+    nextObservationType,
+    redraw,
+    syncCanvasSize,
+    t.annotator.remoteTaintError,
+    typeRequired,
+  ])
 
   const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current
@@ -669,20 +880,44 @@ export default function VideoAnnotator({
   )
 
   /**
-   * « Passer au type suivant » (stepper) : referme les modales, pré-sélectionne le
-   * type manquant dans le lecteur et laisse l'observateur poursuivre l'annotation
-   * à la position courante. Le lecteur observateur ne reçoit jamais de fenêtre
-   * cible (protocole en aveugle) : on ne peut donc pas « aller à » une trame.
+   * Onglet capable de produire un type : passe verrouillée sur ce type, sinon une
+   * passe générique (sélecteur libre), sinon la première passe (repli).
+   */
+  const typeToPassKey = useCallback(
+    (type: string): string | null => {
+      const wanted = normalizeTypeKey(type)
+      const typed = passes.find(
+        (pass) => pass.typeLabel && normalizeTypeKey(pass.typeLabel) === wanted,
+      )
+      if (typed) return typed.key
+      const generic = passes.find((pass) => !pass.typeLabel)
+      if (generic) return generic.key
+      return passes[0]?.key ?? null
+    },
+    [passes],
+  )
+
+  /** Type requis encore en attente vers lequel avancer (null si tout est couvert). */
+  const nextPendingType = completion.pendingTypes[0] ?? null
+
+  /**
+   * « Passer au type suivant » (stepper ou bandeau de couverture) : referme les
+   * modales, bascule sur l'onglet capable de produire le type manquant et prépare
+   * le sélecteur pour une passe générique. Le lecteur observateur ne reçoit jamais
+   * de fenêtre cible (protocole en aveugle) : on ne peut donc pas « aller à » une trame.
    */
   const handleContinueToType = useCallback(
     (type: string) => {
+      const nextKey = typeToPassKey(type)
+      if (nextKey !== null && nextKey !== activeKey) selectPass(nextKey)
+      // Une passe générique s'appuie sur le sélecteur : on pré-sélectionne le type.
       setNextObservationType(type)
       setEndPromptDismissed(true)
       setErrorMessage(null)
       setIsConfirmOpen(false)
       setIsStepperOpen(false)
     },
-    [],
+    [activeKey, selectPass, typeToPassKey],
   )
 
   /** « Lecture à cet instant » depuis une capture du carrousel. */
@@ -707,7 +942,7 @@ export default function VideoAnnotator({
    */
   const triggerCapture = useCallback(() => {
     if (!canAnnotate || annotations.length === 0) return
-    if (typeRequired && !nextObservationType.trim()) {
+    if (!captureTypeReady) {
       setErrorMessage(t.annotator.obsTypeMissing)
       return
     }
@@ -715,10 +950,9 @@ export default function VideoAnnotator({
   }, [
     annotations.length,
     canAnnotate,
+    captureTypeReady,
     handleCapture,
-    nextObservationType,
     t.annotator.obsTypeMissing,
-    typeRequired,
   ])
 
   /**
@@ -760,8 +994,8 @@ export default function VideoAnnotator({
     videoUrl,
   ])
 
-  // ——— Carrousel : ordre chronologique (ancienne → récente) ———
-  const display = useMemo(() => [...observations].reverse(), [observations])
+  // ——— Carrousel : ordre chronologique (ancienne → récente) de l'ONGLET actif ———
+  const display = useMemo(() => [...tabObservations].reverse(), [tabObservations])
 
   const activeIndex = useMemo(() => {
     if (display.length === 0) return -1
@@ -866,6 +1100,117 @@ export default function VideoAnnotator({
     <div className="flex w-full flex-col gap-4 lg:flex-row lg:items-start">
       {/* ——— Colonne principale : chargement + lecteur + commandes ——— */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
+        {/* ——— Onglets des passes vidéo + couverture des types requis ——— */}
+        {passes.length > 1 ? (
+          <section aria-label={t.annotator.tabBarAria} className="flex flex-col gap-2">
+            <div
+              role="tablist"
+              aria-label={t.annotator.tabBarAria}
+              className="flex flex-wrap items-stretch gap-2"
+            >
+              {passes.map((pass) => {
+                const isActiveTab = pass.key === activeKey
+                const passCount = observations.filter(
+                  (observation) =>
+                    (observation.videoId ?? null) ===
+                    (pass.key === GENERIC_TAB_KEY ? null : pass.key),
+                ).length
+                const mainLabel = passLabel(pass, t.annotator.passNameFallback)
+                const subLabel = pass.typeLabel ? pass.name : null
+                return (
+                  <button
+                    key={pass.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActiveTab}
+                    aria-label={mainLabel}
+                    onClick={() => selectPass(pass.key)}
+                    className={`flex min-w-0 flex-1 basis-56 flex-col items-start gap-0.5 rounded-xl border px-3 py-2 text-left transition-all sm:flex-none ${
+                      isActiveTab
+                        ? 'border-gold-500 bg-gold-500/10 shadow-sm ring-1 ring-gold-500/30'
+                        : 'border-line bg-white hover:border-gold-500/50 dark:border-white/10 dark:bg-[#161b22] dark:hover:border-gold-500/30'
+                    }`}
+                  >
+                    <span
+                      className={`flex min-w-0 w-full items-center justify-between gap-2 text-sm font-semibold ${
+                        isActiveTab
+                          ? 'text-gold-800 dark:text-gold-200'
+                          : 'text-zinc-900 dark:text-zinc-100'
+                      }`}
+                    >
+                      <span className="min-w-0 truncate">{mainLabel}</span>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-bold ${
+                          passCount > 0
+                            ? 'bg-gold-500/20 text-gold-800 dark:text-gold-200'
+                            : 'bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-400'
+                        }`}
+                        title={fill(t.annotator.tabCountLabel, { n: passCount })}
+                      >
+                        {passCount > 0 ? (
+                          <CheckCircle aria-hidden="true" className="h-3 w-3" />
+                        ) : null}
+                        {passCount}
+                      </span>
+                    </span>
+                    {subLabel ? (
+                      <span className="w-full truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+                        {subLabel}
+                      </span>
+                    ) : pass.typeLabel ? (
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-gold-600 dark:text-gold-400">
+                        {t.annotator.lockedTypeTag}
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+
+            {projectId && observations.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-white px-3 py-2 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
+                {hasRequiredTypes ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-200">
+                    <CheckCircle
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400"
+                    />
+                    {completion.allRequiredCovered
+                      ? t.annotator.typesAllCovered
+                      : fill(t.annotator.typesProgress, {
+                          done: completion.completedCount,
+                          total: completion.totalRequired,
+                        })}
+                  </span>
+                ) : null}
+                {hasRequiredTypes && !completion.allRequiredCovered && nextPendingType ? (
+                  <button
+                    type="button"
+                    onClick={() => handleContinueToType(nextPendingType)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-gold-600/30 bg-gold-500/10 px-3 text-xs font-semibold text-gold-800 transition-colors hover:bg-gold-500/20 dark:border-gold-400/20 dark:text-gold-200"
+                  >
+                    <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
+                    {fill(t.annotator.nextTypeButton, { type: nextPendingType })}
+                  </button>
+                ) : null}
+                <span className="min-w-2 flex-1" />
+                <button
+                  type="button"
+                  onClick={openSubmitConfirm}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+                >
+                  <Send aria-hidden="true" className="h-4 w-4" />
+                  <span>
+                    {showSendAllLabel
+                      ? fill(t.annotator.sendAllObservations, { n: observations.length })
+                      : `${t.annotator.sendObservations} (${observations.length})`}
+                  </span>
+                </button>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
         {/* Sélection du fichier vidéo */}
         <label
           htmlFor="video-upload"
@@ -888,9 +1233,19 @@ export default function VideoAnnotator({
             </span>
           ) : (
             <span className="text-zinc-500 dark:text-zinc-400">
-              {expectedVideoUrl
-                ? fill(t.annotator.recommendedVideo, { name: expectedVideoUrl })
-                : t.annotator.localVideoHint}
+              {activePass && isRemoteSource(activePass.source) ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Film
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5 shrink-0 text-gold-700 dark:text-gold-400"
+                  />
+                  {t.annotator.remoteStreamingTag}
+                </span>
+              ) : activePass?.source ? (
+                fill(t.annotator.recommendedVideo, { name: activePass.source })
+              ) : (
+                t.annotator.localVideoHint
+              )}
             </span>
           )}
         </label>
@@ -918,6 +1273,7 @@ export default function VideoAnnotator({
             }
           >
             <video
+              key={activeKey}
               ref={videoRef}
               src={videoUrl}
               className={
@@ -1085,7 +1441,17 @@ export default function VideoAnnotator({
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">
-                    {typeRequired ? (
+                    {lockedType ? (
+                      <span
+                        title={t.annotator.lockedTypeTag}
+                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-gold-400/50 bg-white/10 px-2.5"
+                      >
+                        <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-300">
+                          {t.annotator.obsTypeLabel}
+                        </span>
+                        <span className="min-w-0 text-xs font-bold text-white">{lockedType}</span>
+                      </span>
+                    ) : typeRequired ? (
                       <label
                         title={t.annotator.obsTypeLabel}
                         className={`inline-flex h-9 items-center gap-2 rounded-lg border bg-white/10 px-2.5 ${
@@ -1134,10 +1500,11 @@ export default function VideoAnnotator({
                     </button>
                     <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-1 text-xs font-semibold text-white">
                       <Camera aria-hidden="true" className="h-3.5 w-3.5" />
-                      {observations.length} {pluralLabel(t.annotator.unitObservation, observations.length)}
+                      {tabObservations.length}{' '}
+                      {pluralLabel(t.annotator.unitObservation, tabObservations.length)}
                     </span>
                   </div>
-                  {typeRequired && annotations.length > 0 && !nextObservationType.trim() ? (
+                  {!captureTypeReady && annotations.length > 0 ? (
                     <p className="mt-2 text-[11px] leading-relaxed text-gold-300/90">
                       {t.annotator.obsTypeMissing}
                     </p>
@@ -1243,7 +1610,19 @@ export default function VideoAnnotator({
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-white/10">
-            {typeRequired ? (
+            {lockedType ? (
+              <span
+                title={t.annotator.lockedTypeTag}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-gold-500/40 bg-gold-500/5 px-2.5"
+              >
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
+                  {t.annotator.obsTypeLabel}
+                </span>
+                <span className="min-w-0 max-w-[12rem] truncate text-xs font-bold text-zinc-900 dark:text-gold-200">
+                  {lockedType}
+                </span>
+              </span>
+            ) : typeRequired ? (
               <label
                 title={t.annotator.obsTypeLabel}
                 className={`inline-flex h-9 items-center gap-2 rounded-lg border px-2.5 ${
@@ -1295,7 +1674,7 @@ export default function VideoAnnotator({
                 ? t.annotator.hintLoad
                 : isPlaying
                   ? t.annotator.hintPlaying
-                  : typeRequired && !nextObservationType.trim()
+                  : !captureTypeReady
                     ? t.annotator.obsTypeMissing
                     : t.annotator.hintPaused}
             </p>
@@ -1329,14 +1708,25 @@ export default function VideoAnnotator({
               >
                 {t.annotator.endLater}
               </button>
-              <button
-                type="button"
-                onClick={openSubmitConfirm}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
-              >
-                <Send aria-hidden="true" className="h-3.5 w-3.5" />
-                {t.annotator.endSubmit}
-              </button>
+              {passes.length > 1 && hasRequiredTypes && !completion.allRequiredCovered && nextPendingType ? (
+                <button
+                  type="button"
+                  onClick={() => handleContinueToType(nextPendingType)}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+                >
+                  <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
+                  {fill(t.annotator.nextTypeButton, { type: nextPendingType })}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={openSubmitConfirm}
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+                >
+                  <Send aria-hidden="true" className="h-3.5 w-3.5" />
+                  {t.annotator.endSubmit}
+                </button>
+              )}
             </div>
           </div>
         ) : null}
@@ -1352,13 +1742,13 @@ export default function VideoAnnotator({
             {t.annotator.panelTitle}
           </h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {observations.length > 0
-              ? fill(t.annotator.panelCount, { n: observations.length })
+            {tabObservations.length > 0
+              ? fill(t.annotator.panelCount, { n: tabObservations.length })
               : t.annotator.panelEmptyTitle}
           </p>
         </header>
 
-        {observations.length === 0 || !activeCapture ? (
+        {tabObservations.length === 0 || !activeCapture ? (
           <div className="grid flex-1 place-items-center px-4 py-10 text-center text-sm text-zinc-500 dark:text-zinc-400">
             <div>
               <Send aria-hidden="true" className="mx-auto h-6 w-6 text-zinc-300 dark:text-zinc-600" />
@@ -1465,7 +1855,16 @@ export default function VideoAnnotator({
                   {zoneLabel(activeCapture.centroid)}
                 </span>
               ) : null}
-              {typeRequired ? (
+              {lockedType ? (
+                <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                  <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
+                    {t.annotator.obsTypeLabel}
+                  </span>
+                  <span className="min-w-0 max-w-[10rem] truncate rounded-md border border-gold-500/30 bg-gold-500/5 px-1.5 py-0.5 font-semibold text-zinc-900 dark:border-gold-400/20 dark:text-gold-200">
+                    {lockedType}
+                  </span>
+                </span>
+              ) : typeRequired ? (
                 <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                   <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
                     {t.annotator.obsTypeLabel}
@@ -1516,8 +1915,8 @@ export default function VideoAnnotator({
               </div>
             ) : null}
 
-            {/* Pied ancré : envoi des observations */}
-            {projectId && submittedCount === null ? (
+            {/* Pied ancré : envoi des observations (passe unique ; multi-passe → CTA global) */}
+            {projectId && submittedCount === null && passes.length === 1 ? (
               <footer className="mt-auto border-t border-zinc-100 p-3 dark:border-white/10">
                 <button
                   type="button"
@@ -1526,8 +1925,9 @@ export default function VideoAnnotator({
                 >
                   <Send aria-hidden="true" className="h-4 w-4" />
                   <span>
-                    {t.annotator.sendObservations}{' '}
-                    <span className="font-normal opacity-80">({observations.length})</span>
+                    {showSendAllLabel
+                      ? fill(t.annotator.sendAllObservations, { n: tabObservations.length })
+                      : `${t.annotator.sendObservations} (${tabObservations.length})`}
                   </span>
                 </button>
               </footer>
@@ -1608,7 +2008,7 @@ export default function VideoAnnotator({
           projectId={projectId}
           projectTitle={projectTitle || ''}
           captures={observations}
-          requiredTypes={typeOptions}
+          requiredTypes={requiredCoverableTypes}
           onContinueToType={handleContinueToType}
           locale={locale}
           t={t.stepper}
