@@ -45,6 +45,8 @@ type VideoAnnotatorProps = {
   projectId?: string
   projectTitle?: string
   expectedVideoUrl?: string | null
+  /** Types d'observation configurables du projet (choisis par l'observateur à la capture). */
+  observationTypes?: string[]
   locale: Locale
   t: {
     annotator: AnnotatorText
@@ -130,6 +132,7 @@ export default function VideoAnnotator({
   projectId,
   projectTitle,
   expectedVideoUrl,
+  observationTypes,
   locale,
   t,
   backHref,
@@ -184,6 +187,16 @@ export default function VideoAnnotator({
   const [controlsVisible, setControlsVisible] = useState(true)
   /** Capture active du carrousel (null → dernière ajoutée, la plus récente). */
   const [activeId, setActiveId] = useState<string | null>(null)
+
+  /** Types d'observation configurables du projet (liste propre, sans vide). */
+  const typeOptions = useMemo(
+    () => (observationTypes ?? []).map((item) => item.trim()).filter((item) => item.length > 0),
+    [observationTypes],
+  )
+  /** Type choisi pour la capture à venir (partagé barre de commandes / plein écran). */
+  const [nextObservationType, setNextObservationType] = useState<string>('')
+  /** Vrai quand le projet impose un type à chaque capture. */
+  const typeRequired = typeOptions.length > 0
 
   /** Suit l'état du plein écran natif (bouton ou touche Échap) du lecteur. */
   useEffect(() => {
@@ -287,6 +300,17 @@ export default function VideoAnnotator({
     setActiveId((current) => (current === captureId ? null : current))
   }, [])
 
+  /** Requalifie une capture existante (correctif avant soumission). */
+  const setCaptureType = useCallback((captureId: string, value: string) => {
+    setObservations((prev) =>
+      prev.map((capture) =>
+        capture.id === captureId
+          ? { ...capture, observationType: value.trim() || null }
+          : capture,
+      ),
+    )
+  }, [])
+
   /**
    * « Modifier » une observation : repositionne le lecteur sur l'horodatage de la
    * capture pour la re-annoter sur place. La capture précédente est retirée — on
@@ -308,6 +332,10 @@ export default function VideoAnnotator({
   /** Ouvre la boîte de confirmation de soumission (Confirmer / Suivre / Annuler). */
   const openSubmitConfirm = () => {
     if (observations.length === 0) return
+    if (typeRequired && observations.some((capture) => !capture.observationType)) {
+      setErrorMessage(t.annotator.obsTypeMissing)
+      return
+    }
     setEndPromptDismissed(true)
     setIsConfirmOpen(true)
   }
@@ -608,12 +636,14 @@ export default function VideoAnnotator({
       timestamp: video.currentTime,
       imageDataUrl,
       circleCount: n,
+      // Type d'observation choisi pour cette capture (null si le projet n'impose rien).
+      observationType: typeRequired ? nextObservationType.trim() : null,
       centroid,
     }
     setObservations((previous) => [capture, ...previous])
     // Les marqueurs restent affichés : l'observateur peut en ajuster sur la frame
     // avant une nouvelle capture, ou les effacer pour changer de frame.
-  }, [redraw, syncCanvasSize, t.annotator.remoteTaintError])
+  }, [nextObservationType, redraw, syncCanvasSize, t.annotator.remoteTaintError, typeRequired])
 
   const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current
@@ -638,6 +668,23 @@ export default function VideoAnnotator({
     [clearDrawing, t.annotator.toastSuccessDesc, t.annotator.toastSuccessTitle],
   )
 
+  /**
+   * « Passer au type suivant » (stepper) : referme les modales, pré-sélectionne le
+   * type manquant dans le lecteur et laisse l'observateur poursuivre l'annotation
+   * à la position courante. Le lecteur observateur ne reçoit jamais de fenêtre
+   * cible (protocole en aveugle) : on ne peut donc pas « aller à » une trame.
+   */
+  const handleContinueToType = useCallback(
+    (type: string) => {
+      setNextObservationType(type)
+      setEndPromptDismissed(true)
+      setErrorMessage(null)
+      setIsConfirmOpen(false)
+      setIsStepperOpen(false)
+    },
+    [],
+  )
+
   /** « Lecture à cet instant » depuis une capture du carrousel. */
   const handlePlayCapture = useCallback(
     (capture: CaptureRecord) => {
@@ -652,6 +699,66 @@ export default function VideoAnnotator({
     },
     [clearDrawing],
   )
+
+  /**
+   * Capture « instantanée » : point d'entrée commun aux boutons et aux raccourcis
+   * clavier. Quand le projet impose un type, on refuse tant qu'aucun n'est choisi
+   * (message localisé affiché par l'appelant).
+   */
+  const triggerCapture = useCallback(() => {
+    if (!canAnnotate || annotations.length === 0) return
+    if (typeRequired && !nextObservationType.trim()) {
+      setErrorMessage(t.annotator.obsTypeMissing)
+      return
+    }
+    handleCapture()
+  }, [
+    annotations.length,
+    canAnnotate,
+    handleCapture,
+    nextObservationType,
+    t.annotator.obsTypeMissing,
+    typeRequired,
+  ])
+
+  /**
+   * Raccourcis clavier (lecture / pause + capture) actifs dès qu'une vidéo est
+   * chargée. Espace : lecture / pause sans faire défiler la page ; C ou Entrée :
+   * capture immédiate. On ne les intercepte jamais quand l'utilisateur saisit du
+   * texte ou qu'un contrôle (bouton, lien) a le focus.
+   */
+  useEffect(() => {
+    if (!videoUrl) return
+    if (isStepperOpen || isConfirmOpen || submittedCount !== null) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target) return
+      if (target.closest('input, textarea, select, [contenteditable="true"]')) return
+      const onInteractiveControl = Boolean(target.closest('button, a'))
+      if (event.code === 'Space') {
+        // Un bouton focalisé conserve son comportement natif (Espace = activer).
+        if (onInteractiveControl) return
+        event.preventDefault()
+        togglePlayback()
+        return
+      }
+      if (event.code === 'KeyC' || event.code === 'Enter') {
+        if (onInteractiveControl) return
+        if (event.ctrlKey || event.metaKey || event.altKey) return
+        event.preventDefault()
+        triggerCapture()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [
+    isConfirmOpen,
+    isStepperOpen,
+    submittedCount,
+    togglePlayback,
+    triggerCapture,
+    videoUrl,
+  ])
 
   // ——— Carrousel : ordre chronologique (ancienne → récente) ———
   const display = useMemo(() => [...observations].reverse(), [observations])
@@ -978,9 +1085,37 @@ export default function VideoAnnotator({
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">
+                    {typeRequired ? (
+                      <label
+                        title={t.annotator.obsTypeLabel}
+                        className={`inline-flex h-9 items-center gap-2 rounded-lg border bg-white/10 px-2.5 ${
+                          nextObservationType.trim()
+                            ? 'border-gold-400/50'
+                            : 'border-gold-400/80'
+                        }`}
+                      >
+                        <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-300">
+                          {t.annotator.obsTypeLabel}
+                          {!nextObservationType.trim() ? ' *' : ''}
+                        </span>
+                        <select
+                          value={nextObservationType}
+                          onChange={(event) => setNextObservationType(event.target.value)}
+                          aria-label={t.annotator.obsTypeLabel}
+                          className="min-w-0 max-w-[10rem] rounded-md bg-transparent text-xs font-semibold text-white outline-none [&>option]:bg-zinc-900 [&>option]:text-white"
+                        >
+                          <option value="">{t.annotator.obsTypePlaceholder}</option>
+                          {typeOptions.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <button
                       type="button"
-                      onClick={handleCapture}
+                      onClick={triggerCapture}
                       disabled={!canAnnotate || annotations.length === 0}
                       className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-gold-500 px-4 text-sm font-semibold text-black transition-colors hover:bg-gold-400 disabled:cursor-not-allowed disabled:opacity-40"
                     >
@@ -1002,6 +1137,11 @@ export default function VideoAnnotator({
                       {observations.length} {pluralLabel(t.annotator.unitObservation, observations.length)}
                     </span>
                   </div>
+                  {typeRequired && annotations.length > 0 && !nextObservationType.trim() ? (
+                    <p className="mt-2 text-[11px] leading-relaxed text-gold-300/90">
+                      {t.annotator.obsTypeMissing}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -1103,9 +1243,37 @@ export default function VideoAnnotator({
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3 dark:border-white/10">
+            {typeRequired ? (
+              <label
+                title={t.annotator.obsTypeLabel}
+                className={`inline-flex h-9 items-center gap-2 rounded-lg border px-2.5 ${
+                  nextObservationType.trim()
+                    ? 'border-zinc-300 bg-white dark:border-white/15 dark:bg-white/5'
+                    : 'border-gold-500/60 bg-gold-500/5'
+                }`}
+              >
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
+                  {t.annotator.obsTypeLabel}
+                  {!nextObservationType.trim() ? ' *' : ''}
+                </span>
+                <select
+                  value={nextObservationType}
+                  onChange={(event) => setNextObservationType(event.target.value)}
+                  aria-label={t.annotator.obsTypeLabel}
+                  className="min-w-0 max-w-[12rem] cursor-pointer rounded-md bg-transparent text-xs font-semibold text-zinc-900 outline-none dark:text-zinc-100"
+                >
+                  <option value="">{t.annotator.obsTypePlaceholder}</option>
+                  {typeOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <button
               type="button"
-              onClick={handleCapture}
+              onClick={triggerCapture}
               disabled={!canAnnotate || annotations.length === 0}
               className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-ink px-4 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
@@ -1127,8 +1295,15 @@ export default function VideoAnnotator({
                 ? t.annotator.hintLoad
                 : isPlaying
                   ? t.annotator.hintPlaying
-                  : t.annotator.hintPaused}
+                  : typeRequired && !nextObservationType.trim()
+                    ? t.annotator.obsTypeMissing
+                    : t.annotator.hintPaused}
             </p>
+            {isReady ? (
+              <p className="w-full text-[11px] leading-relaxed text-zinc-400 dark:text-zinc-500 sm:text-right">
+                {t.annotator.shortcutsHelp}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -1290,6 +1465,26 @@ export default function VideoAnnotator({
                   {zoneLabel(activeCapture.centroid)}
                 </span>
               ) : null}
+              {typeRequired ? (
+                <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                  <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
+                    {t.annotator.obsTypeLabel}
+                  </span>
+                  <select
+                    value={activeCapture.observationType ?? ''}
+                    onChange={(event) => setCaptureType(activeCapture.id, event.target.value)}
+                    aria-label={t.annotator.obsTypeLabel}
+                    className="min-w-0 cursor-pointer rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-zinc-900 outline-none focus:border-gold-500 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-100"
+                  >
+                    <option value="">{t.annotator.obsTypePlaceholder}</option>
+                    {typeOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
             </div>
 
             {/* Vignettes (ancienne → récente) */}
@@ -1413,6 +1608,8 @@ export default function VideoAnnotator({
           projectId={projectId}
           projectTitle={projectTitle || ''}
           captures={observations}
+          requiredTypes={typeOptions}
+          onContinueToType={handleContinueToType}
           locale={locale}
           t={t.stepper}
           onDeleteCapture={handleDeleteCapture}

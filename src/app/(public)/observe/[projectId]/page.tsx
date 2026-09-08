@@ -30,8 +30,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
         : `Observation : ${project.title}`,
     description:
       locale === 'en'
-        ? `Blind scientific observation session for the experiment “${project.title}”.`
-        : `Session d’observation scientifique en aveugle pour l’expérience « ${project.title} ».`,
+        ? `Independent scientific observation session for the experiment “${project.title}”.`
+        : `Session d’observation scientifique indépendante pour l’expérience « ${project.title} ».`,
   }
 }
 
@@ -115,6 +115,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         projectId={project.id}
         projectTitle={project.title}
         expectedVideoUrl={project.videoUrl}
+        observationTypes={project.observationTypes}
         locale={locale}
         t={{
           annotator: d.annotator,

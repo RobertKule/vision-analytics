@@ -24,7 +24,7 @@ type ObserveWorkspaceProps = {
 }
 
 /**
- * Espace d'observation intégré : liste les projets actifs (double aveugle) et
+ * Espace d'observation intégré : liste les projets actifs (observation indépendante) et
  * alimente un unique VideoAnnotator avec le projet sélectionné, pour une
  * bascule fluide entre les vidéos sans recharger la page.
  */
@@ -159,6 +159,7 @@ export default function ObserveWorkspace({
             projectId={selected.id}
             projectTitle={selected.title}
             expectedVideoUrl={selected.videoUrl}
+            observationTypes={selected.observationTypes}
             locale={locale}
             t={{ annotator, stepper, completion }}
             backHref={annotatorBackHref}
