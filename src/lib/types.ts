@@ -141,7 +141,17 @@ export type SubmitObservationsInput = {
     observationType?: string | null
     /** Passe vidéo d'origine (null / absent = passe générique héritée). */
     videoId?: string | null
+    /**
+     * Clé de déduplication émise par le client, stable pour cette capture (son `id`
+     * local). Réutilisée à la reprise d'un brouillon : le serveur ignore les doublons.
+     */
+    clientKey?: string | null
   }>
+  /**
+   * Jeton de « session » logique partagé par tous les lots d'une même soumission
+   * (toute passe confondue). Permet de compter les sessions sans doublon à la reprise.
+   */
+  runId?: string
   /** Langue de l'interface, pour renvoyer des messages d'erreur localisés. */
   locale?: Locale
 }
