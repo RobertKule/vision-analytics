@@ -1,0 +1,93 @@
+import { NextResponse } from 'next/server'
+import { getCurrentSession } from '@/lib/auth'
+import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { prisma } from '@/lib/prisma'
+import { buildObserverWorkbookBuffer, observerKeyName } from '@/lib/serverExport'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
+type DataContext = {
+  params: Promise<{ projectId: string }>
+}
+
+/**
+ * Classeur Excel individuel d'un observateur (bouton « Télécharger les données »).
+ *
+ * Route `/api/*` non couverte par la garde du proxy → auto-authentification :
+ * session requise + accès de gestion (owner / partagé / admin). Généré côté serveur
+ * via ExcelJS, jamais dans le bundle client.
+ */
+export async function GET(_request: Request, ctx: DataContext): Promise<NextResponse> {
+  const session = await getCurrentSession()
+  if (!session) {
+    return NextResponse.json({ error: 'Non authentifié.' }, { status: 401 })
+  }
+
+  const { projectId } = await ctx.params
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, title: true },
+  })
+  if (!project) {
+    return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
+  }
+
+  const level = await getCurrentProjectAccess(projectId)
+  if (!canManage(level)) {
+    return NextResponse.json(
+      { error: 'Accès de gestion requis sur ce projet.' },
+      { status: 403 },
+    )
+  }
+
+  const url = new URL(_request.url)
+  const observerId = url.searchParams.get('observerId')
+  if (!observerId) {
+    return NextResponse.json(
+      { error: 'Identifiant d’observateur requis.' },
+      { status: 400 },
+    )
+  }
+
+  const rows = await prisma.observation.findMany({
+    where: { projectId, userId: observerId },
+    include: {
+      user: { select: { username: true, email: true, anonymousId: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  })
+
+  if (rows.length === 0) {
+    return NextResponse.json(
+      { error: 'Aucune donnée à exporter pour cet observateur.' },
+      { status: 404 },
+    )
+  }
+
+  const firstUser = rows[0].user
+
+  const buffer = await buildObserverWorkbookBuffer(
+    rows.map((row) => ({
+      timestampTotal: row.timestampTotal,
+      observationType: row.observationType,
+      isGhostPoint: row.isGhostPoint,
+      createdAt: row.createdAt,
+    })),
+  )
+
+  const filename = `Donnees_${observerKeyName({
+    username: firstUser?.username ?? null,
+    email: firstUser?.email ?? null,
+    anonymousId: firstUser?.anonymousId ?? null,
+  })}.xlsx`
+
+  const headers = new Headers({
+    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    'Content-Length': String(buffer.byteLength),
+  })
+
+  return new NextResponse(new Uint8Array(buffer), { status: 200, headers })
+}
