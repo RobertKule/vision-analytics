@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useRef, useState, useTransition } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -54,6 +54,13 @@ function pluralLabel(unit: { one: string; many: string }, count: number): string
   return count === 1 ? unit.one : unit.many
 }
 
+/**
+ * Nombre de captures envoyées par lot. Les captures sont soumises en plusieurs
+ * appels serveur séquentiels afin d'afficher une progression réelle
+ * (« Envoi… 3/8 », barre à x %) pendant le téléversement Cloudinary.
+ */
+const SUBMIT_BATCH_SIZE = 5
+
 function getStoredOrNewAnonymousId(): string {
   if (typeof window === 'undefined') return ''
   const stored = localStorage.getItem('va_observer_anonymous_id')
@@ -95,7 +102,23 @@ function SubmissionStepperModal({
   /** Confirmation explicite requise avant d'envoyer une session avec types manquants. */
   const [acknowledgeGaps, setAcknowledgeGaps] = useState(false)
 
+  /** Phase d'envoi réel (progress bar) : inactif → lots séquentiels → certification. */
+  const [sendPhase, setSendPhase] = useState<'idle' | 'sending' | 'finalizing'>('idle')
+  /** Progression courante (lot en cours / nombre total de lots). */
+  const [sendProgress, setSendProgress] = useState<{ done: number; total: number } | null>(null)
+  /** Lots déjà persistés côté serveur — sert de point de reprise après un échec partiel. */
+  const [sentBatches, setSentBatches] = useState(0)
+  /** Garde anti double-soumission : un envoi est déjà en cours. */
+  const inFlightRef = useRef(false)
+
   const [isPending, startTransition] = useTransition()
+
+  /** Un échec a persisté au moins un lot : la session ne peut que reprendre ou annuler en connaissance de cause. */
+  const hasPartialSend = sentBatches > 0 && !isSuccess
+  /** Verrouille navigation/fermeture pendant un envoi en cours ou une reprise obligatoire. */
+  const lockSession = isPending || isSuccess || hasPartialSend
+  /** Pourcentage affiché : lot courant / total (100 % pendant la certification). */
+  const percentShown = sendProgress ? Math.round((sendProgress.done / sendProgress.total) * 100) : 100
 
   /** Couverture des types requis par les captures de la session. */
   const completion = useMemo(
@@ -141,39 +164,76 @@ function SubmissionStepperModal({
     setCurrentStep(3)
   }
 
+  /**
+   * Envoi séquentiel des lots. Après un échec partiel (réseau ou refus serveur),
+   * `sentBatches` garde la position : un nouvel envoi ne reprend qu'à partir du lot
+   * non persisté, sans jamais re-soumettre ceux déjà enregistrés (anti-doublon).
+   */
   const handleExecuteSubmission = () => {
+    if (inFlightRef.current) return // anti double-soumission
     if (gapsPresent && !acknowledgeGaps) {
       setErrorNotice(t.typeGapTitle)
       return
     }
     setErrorNotice(null)
+    inFlightRef.current = true
     startTransition(async () => {
-      const payload = {
-        projectId,
-        observerIdentifier: effectiveIdentifier,
-        locale,
-        observations: captures.map((c) => ({
-          timestamp: c.timestamp,
-          imageDataUrl: c.imageDataUrl,
-          observationType: c.observationType,
-        })),
-      }
-
+      const totalBatches = Math.max(1, Math.ceil(captures.length / SUBMIT_BATCH_SIZE))
+      let cumulative = submittedCount
+      setSendPhase('sending')
       try {
-        const result: SubmissionResultDto = await submitObservations(payload)
+        for (let batch = sentBatches; batch < totalBatches; batch++) {
+          const chunk = captures.slice(
+            batch * SUBMIT_BATCH_SIZE,
+            (batch + 1) * SUBMIT_BATCH_SIZE,
+          )
+          if (chunk.length === 0) {
+            setSentBatches(batch + 1)
+            continue
+          }
+          setSendProgress({ done: batch + 1, total: totalBatches })
+          const result: SubmissionResultDto = await submitObservations({
+            projectId,
+            observerIdentifier: effectiveIdentifier,
+            locale,
+            observations: chunk.map((c) => ({
+              timestamp: c.timestamp,
+              imageDataUrl: c.imageDataUrl,
+              observationType: c.observationType,
+              videoId: c.videoId,
+            })),
+          })
 
-        if (result.ok) {
-          setIsSuccess(true)
-          setSubmittedCount(result.submittedCount)
-          onSubmissionSuccess(result.submittedCount)
-        } else {
-          setErrorNotice(result.error)
+          if (!result.ok) {
+            // Le lot courant est refusé (validation serveur) : on s'arrête et on
+            // propose la reprise — les lots précédents restent persistés.
+            setErrorNotice(result.error)
+            setSendPhase('idle')
+            setSendProgress(null)
+            return
+          }
+          cumulative += result.submittedCount
+          setSentBatches(batch + 1)
+          setSubmittedCount(cumulative)
         }
+
+        // Tous les lots sont persistés : certification du dossier avant l'écran final.
+        setSendProgress({ done: totalBatches, total: totalBatches })
+        setSendPhase('finalizing')
+        await new Promise((resolve) => window.setTimeout(resolve, 650))
+        setSendProgress(null)
+        setSendPhase('idle')
+        setIsSuccess(true)
+        onSubmissionSuccess(cumulative)
       } catch (error) {
         // Échec de transport (réseau, serveur redémarré, proxy…) : on ne laisse
         // jamais une promesse non gérée remonter dans la console.
         console.error('Submission transport error', error)
         setErrorNotice(t.errorNetwork)
+        setSendPhase('idle')
+        setSendProgress(null)
+      } finally {
+        inFlightRef.current = false
       }
     })
   }
@@ -203,7 +263,7 @@ function SubmissionStepperModal({
               {fill(t.title, { title: projectTitle })}
             </h2>
           </div>
-          {!isPending && !isSuccess && (
+          {!lockSession && (
             <button
               type="button"
               onClick={onClose}
@@ -597,12 +657,35 @@ function SubmissionStepperModal({
                     </div>
                   ) : null}
 
-                  {isPending && (
-                    <div className="mt-6 flex flex-col items-center gap-2">
-                      <div className="h-7 w-7 animate-spin rounded-full border-2 border-gold-600 border-t-transparent" />
-                      <p className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                        {t.uploading}
-                      </p>
+                  {/* Barre de progression réelle (lots séquentiels puis certification). */}
+                  {sendPhase !== 'idle' && (
+                    <div
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={percentShown}
+                      aria-label={t.progressBarAria}
+                      className="mt-6 w-full max-w-sm"
+                    >
+                      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                        <span className="truncate">
+                          {sendPhase === 'finalizing' || !sendProgress
+                            ? t.finalizing
+                            : fill(t.sendingBatch, {
+                                done: sendProgress.done,
+                                total: sendProgress.total,
+                              })}
+                        </span>
+                        <span className="font-mono font-bold text-zinc-800 dark:text-zinc-200">
+                          {fill(t.progressPercent, { percent: percentShown })}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10">
+                        <div
+                          className="h-full rounded-full bg-gold-600 transition-[width] duration-300 ease-out dark:bg-gold-400"
+                          style={{ width: `${percentShown}%` }}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -626,7 +709,7 @@ function SubmissionStepperModal({
           ) : (
             <>
               <div>
-                {currentStep > 1 && !isPending && (
+                {currentStep > 1 && !lockSession && (
                   <button
                     type="button"
                     onClick={() => setCurrentStep((prev) => (prev - 1) as 1 | 2)}
@@ -638,14 +721,16 @@ function SubmissionStepperModal({
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={isPending}
-                  className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-xs font-medium text-zinc-500 hover:text-zinc-800 disabled:opacity-50 dark:hover:text-zinc-200"
-                >
-                  {t.cancel}
-                </button>
+                {!hasPartialSend && (
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    disabled={isPending}
+                    className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-xs font-medium text-zinc-500 hover:text-zinc-800 disabled:opacity-50 dark:hover:text-zinc-200"
+                  >
+                    {t.cancel}
+                  </button>
+                )}
 
                 {currentStep === 1 && (
                   <button
@@ -676,7 +761,11 @@ function SubmissionStepperModal({
                     disabled={isPending || captures.length === 0 || (gapsPresent && !acknowledgeGaps)}
                     className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
-                    {isPending ? t.uploadingBtn : t.confirmUpload}
+                    {isPending
+                      ? t.uploadingBtn
+                      : hasPartialSend
+                        ? t.retrySend
+                        : t.confirmUpload}
                   </button>
                 )}
               </div>
