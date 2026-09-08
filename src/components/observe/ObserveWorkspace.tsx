@@ -159,6 +159,7 @@ export default function ObserveWorkspace({
             projectId={selected.id}
             projectTitle={selected.title}
             expectedVideoUrl={selected.videoUrl}
+            videos={selected.videos}
             observationTypes={selected.observationTypes}
             locale={locale}
             t={{ annotator, stepper, completion }}

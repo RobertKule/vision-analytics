@@ -115,6 +115,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         projectId={project.id}
         projectTitle={project.title}
         expectedVideoUrl={project.videoUrl}
+        videos={project.videos}
         observationTypes={project.observationTypes}
         locale={locale}
         t={{

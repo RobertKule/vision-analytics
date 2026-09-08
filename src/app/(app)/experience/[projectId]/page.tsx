@@ -108,6 +108,7 @@ export default async function ExperienceProjectPage({ params }: PageProps) {
         projectId={project.id}
         projectTitle={project.title}
         expectedVideoUrl={project.videoUrl}
+        videos={project.videos}
         observationTypes={project.observationTypes}
         locale={locale}
         backHref="/experience"
