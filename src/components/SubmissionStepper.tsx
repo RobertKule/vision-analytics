@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,11 +10,13 @@ import {
   RefreshCw,
   Timer,
   Trash,
+  TriangleAlert,
   X,
 } from 'lucide-react'
 import type { CaptureRecord, SubmissionResultDto } from '@/lib/types'
 import { submitObservations } from '@/app/actions/observationActions'
 import type { Locale, StepperText } from '@/lib/i18n'
+import { computeTypeCompletion } from '@/lib/captureCompletion'
 
 type SubmissionStepperProps = {
   isOpen: boolean
@@ -22,6 +24,10 @@ type SubmissionStepperProps = {
   projectId: string
   projectTitle: string
   captures: CaptureRecord[]
+  /** Types d'observation requis par le projet (vide si aucun n'est imposé). */
+  requiredTypes?: string[]
+  /** Retour au lecteur pour poursuivre la capture d'un type manquant. */
+  onContinueToType?: (type: string) => void
   locale: Locale
   t: StepperText
   onDeleteCapture: (captureId: string) => void
@@ -72,6 +78,8 @@ function SubmissionStepperModal({
   projectId,
   projectTitle,
   captures,
+  requiredTypes = [],
+  onContinueToType,
   locale,
   t,
   onDeleteCapture,
@@ -84,8 +92,18 @@ function SubmissionStepperModal({
   const [errorNotice, setErrorNotice] = useState<string | null>(null)
   const [isSuccess, setIsSuccess] = useState(false)
   const [submittedCount, setSubmittedCount] = useState(0)
+  /** Confirmation explicite requise avant d'envoyer une session avec types manquants. */
+  const [acknowledgeGaps, setAcknowledgeGaps] = useState(false)
 
   const [isPending, startTransition] = useTransition()
+
+  /** Couverture des types requis par les captures de la session. */
+  const completion = useMemo(
+    () => computeTypeCompletion(requiredTypes, captures),
+    [captures, requiredTypes],
+  )
+  /** Vrai quand des types requis attendent encore une capture. */
+  const gapsPresent = completion.totalRequired > 0 && !completion.allRequiredCovered
 
   const handleRegenerateId = () => {
     const newId =
@@ -118,10 +136,16 @@ function SubmissionStepperModal({
       return
     }
     setErrorNotice(null)
+    // Chaque passage à la confirmation redemande l'acquittement des types manquants.
+    setAcknowledgeGaps(false)
     setCurrentStep(3)
   }
 
   const handleExecuteSubmission = () => {
+    if (gapsPresent && !acknowledgeGaps) {
+      setErrorNotice(t.typeGapTitle)
+      return
+    }
     setErrorNotice(null)
     startTransition(async () => {
       const payload = {
@@ -131,17 +155,25 @@ function SubmissionStepperModal({
         observations: captures.map((c) => ({
           timestamp: c.timestamp,
           imageDataUrl: c.imageDataUrl,
+          observationType: c.observationType,
         })),
       }
 
-      const result: SubmissionResultDto = await submitObservations(payload)
+      try {
+        const result: SubmissionResultDto = await submitObservations(payload)
 
-      if (result.ok) {
-        setIsSuccess(true)
-        setSubmittedCount(result.submittedCount)
-        onSubmissionSuccess(result.submittedCount)
-      } else {
-        setErrorNotice(result.error)
+        if (result.ok) {
+          setIsSuccess(true)
+          setSubmittedCount(result.submittedCount)
+          onSubmissionSuccess(result.submittedCount)
+        } else {
+          setErrorNotice(result.error)
+        }
+      } catch (error) {
+        // Échec de transport (réseau, serveur redémarré, proxy…) : on ne laisse
+        // jamais une promesse non gérée remonter dans la console.
+        console.error('Submission transport error', error)
+        setErrorNotice(t.errorNetwork)
       }
     })
   }
@@ -250,6 +282,92 @@ function SubmissionStepperModal({
                   {fill(t.step1Count, { n: captures.length })}
                 </span>
               </div>
+
+              {completion.totalRequired > 0 ? (
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      {t.typeCoverTitle}
+                    </p>
+                    <span className="rounded-full bg-ink/5 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-white/10 dark:text-zinc-200">
+                      {fill(t.typeCoverProgress, {
+                        done: completion.completedCount,
+                        total: completion.totalRequired,
+                      })}
+                    </span>
+                  </div>
+
+                  {/* État de chaque type requis */}
+                  <ul className="mt-3 flex flex-wrap gap-2">
+                    {Object.entries(completion.typeCounts).map(([type, count]) => {
+                      const covered = count > 0
+                      return (
+                        <li
+                          key={type}
+                          className={`inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs ${
+                            covered
+                              ? 'border-gold-500/40 bg-gold-500/10 text-gold-800 dark:border-gold-400/20 dark:text-gold-200'
+                              : 'border-zinc-200 bg-white text-zinc-600 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-400'
+                          }`}
+                        >
+                          <span className="truncate font-medium">{type}</span>
+                          <span className="font-mono tabular-nums text-[10px] opacity-70">
+                            ×{count}
+                          </span>
+                          <span
+                            className={
+                              covered
+                                ? 'font-bold uppercase tracking-wide text-gold-700 dark:text-gold-400'
+                                : 'font-bold uppercase tracking-wide text-zinc-400 dark:text-zinc-600'
+                            }
+                          >
+                            {covered ? t.typeStateCovered : t.typeStatePending}
+                          </span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+
+                  {gapsPresent ? (
+                    <div className="mt-3 rounded-lg border border-clay-200 bg-clay-50 p-3 dark:border-clay-800 dark:bg-clay-900/30">
+                      <p className="flex items-start gap-1.5 text-xs font-bold text-clay-700 dark:text-clay-300">
+                        <TriangleAlert
+                          aria-hidden="true"
+                          className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                        />
+                        {t.typeGapTitle}
+                      </p>
+                      <p className="mt-1 pl-5 text-xs leading-relaxed text-clay-600 dark:text-clay-300">
+                        {t.typePendingIntro}{' '}
+                        <strong className="font-semibold">
+                          {completion.pendingTypes.join(' · ')}
+                        </strong>
+                      </p>
+                      <div className="mt-2 flex justify-end">
+                        {onContinueToType ? (
+                          <button
+                            type="button"
+                            onClick={() => onContinueToType(completion.pendingTypes[0])}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-ink px-3 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+                          >
+                            {t.typeContinueButton}
+                            <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                      <Check
+                        aria-hidden="true"
+                        className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400"
+                        strokeWidth={2.5}
+                      />
+                      {t.typeAllCovered}
+                    </p>
+                  )}
+                </div>
+              ) : null}
 
               {captures.length === 0 ? (
                 <div className="grid place-items-center rounded-xl border-2 border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-white/15 dark:text-zinc-400">
@@ -455,6 +573,30 @@ function SubmissionStepperModal({
                     </div>
                   </div>
 
+                  {gapsPresent ? (
+                    <div className="mx-auto mt-5 w-full max-w-sm rounded-xl border border-clay-200 bg-clay-50 p-4 text-left dark:border-clay-800 dark:bg-clay-900/30">
+                      <p className="flex items-center gap-1.5 text-xs font-bold text-clay-700 dark:text-clay-300">
+                        <TriangleAlert aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                        {t.typeGapTitle}
+                      </p>
+                      <p className="mt-1 text-xs leading-relaxed text-clay-600 dark:text-clay-300">
+                        {t.typePendingIntro}{' '}
+                        <strong className="font-semibold">
+                          {completion.pendingTypes.join(', ')}
+                        </strong>
+                      </p>
+                      <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-clay-700 dark:text-clay-300">
+                        <input
+                          type="checkbox"
+                          checked={acknowledgeGaps}
+                          onChange={(event) => setAcknowledgeGaps(event.target.checked)}
+                          className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-clay-300 accent-clay-700"
+                        />
+                        <span>{t.typeGapAcknowledge}</span>
+                      </label>
+                    </div>
+                  ) : null}
+
                   {isPending && (
                     <div className="mt-6 flex flex-col items-center gap-2">
                       <div className="h-7 w-7 animate-spin rounded-full border-2 border-gold-600 border-t-transparent" />
@@ -531,7 +673,7 @@ function SubmissionStepperModal({
                   <button
                     type="button"
                     onClick={handleExecuteSubmission}
-                    disabled={isPending || captures.length === 0}
+                    disabled={isPending || captures.length === 0 || (gapsPresent && !acknowledgeGaps)}
                     className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
                     {isPending ? t.uploadingBtn : t.confirmUpload}
