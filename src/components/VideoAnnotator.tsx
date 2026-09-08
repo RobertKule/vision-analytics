@@ -9,9 +9,11 @@ import {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  CloudOff,
   Crosshair,
   Edit2,
   Film,
+  History,
   MapPin,
   Maximize2,
   Minimize2,
@@ -29,6 +31,14 @@ import type { AnnotatorText, CompletionText, Locale, StepperText } from '@/lib/i
 import SubmissionStepper from '@/components/SubmissionStepper'
 import { computeTypeCompletion } from '@/lib/captureCompletion'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import {
+  clearStoredDraft,
+  filterObservationsToPasses,
+  getAnonymousObserverId,
+  loadStoredDraft,
+  saveStoredDraft,
+  type StoredObservationDraft,
+} from '@/lib/draftStore'
 
 /**
  * Marqueur (cercle d'intérêt) dessiné sur l'image.
@@ -62,6 +72,12 @@ type VideoAnnotatorProps = {
     stepper: StepperText
     completion: CompletionText
   }
+  /**
+   * Identité du brouillon local : email du compte connecté (session `/experience`),
+   * absent sur le parcours public anonyme (`/observe`) où l'on retombe sur l'ID
+   * anonyme du navigateur.
+   */
+  identityLabel?: string | null
   /** Destination du bouton « Retour » de l'écran de fin (défaut : page publique `/observe`). */
   backHref?: string
 }
@@ -125,6 +141,18 @@ function pluralLabel(unit: { one: string; many: string }, count: number): string
   return count === 1 ? unit.one : unit.many
 }
 
+/** Date et heure courtes (locale) d'une sauvegarde de brouillon. */
+function formatSavedAt(iso: string, locale: Locale): string {
+  const parsed = new Date(iso)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-GB', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 const BASE_COLOR = '#10b981'
 const SELECT_COLOR = '#22d3ee'
 
@@ -176,6 +204,7 @@ export default function VideoAnnotator({
   locale,
   t,
   backHref,
+  identityLabel,
 }: VideoAnnotatorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -526,6 +555,10 @@ export default function VideoAnnotator({
       setErrorMessage(t.annotator.obsTypeMissing)
       return
     }
+    if (!isOnline) {
+      setErrorMessage(t.annotator.offlineSubmitBlocked)
+      return
+    }
     setEndPromptDismissed(true)
     setIsConfirmOpen(true)
   }
@@ -867,18 +900,6 @@ export default function VideoAnnotator({
     setCurrentTime(target)
   }
 
-  const handleSubmissionSuccess = useCallback(
-    (count: number) => {
-      setObservations([])
-      clearDrawing()
-      setSubmittedCount(count)
-      toast.success(t.annotator.toastSuccessTitle, {
-        description: t.annotator.toastSuccessDesc,
-      })
-    },
-    [clearDrawing, t.annotator.toastSuccessDesc, t.annotator.toastSuccessTitle],
-  )
-
   /**
    * Onglet capable de produire un type : passe verrouillée sur ce type, sinon une
    * passe générique (sélecteur libre), sinon la première passe (repli).
@@ -1029,6 +1050,174 @@ export default function VideoAnnotator({
     return t.annotator.zones[ZONE_KEYS[row * 3 + col]]
   }
 
+  // ——— Brouillon local de session (reprise) & état de connexion ———
+  // Le brouillon est écrit pour (utilisateur connecté sinon ID anonyme du navigateur)
+  // sur ce projet. Il n'est jamais purgé avant une soumission confirmée ou un abandon
+  // explicite ; le serveur déduplique par `clientKey` si une reprise ré-envoyait une
+  // capture déjà persistée. Jamais de mot de passe, jeton ni fenêtre de validation ici.
+  const draftOwnerRef = useRef<string>('')
+  const pendingSnapshotRef = useRef<StoredObservationDraft | null>(null)
+  const saveTimerRef = useRef<number | null>(null)
+  const [resumeDraft, setResumeDraft] = useState<StoredObservationDraft | null>(null)
+  const [draftReady, setDraftReady] = useState(false)
+  const [isOnline, setIsOnline] = useState(true)
+
+  /**
+   * Au montage, charge le brouillon de la session (identité + projet) pour proposer
+   * une reprise. Le décompte démarre seulement quand ce chargement a abouti
+   * (`draftReady`), afin qu'une sauvegarde ne puisse jamais écraser un brouillon
+   * encore non proposé à la reprise.
+   */
+  useEffect(() => {
+    if (!projectId) return
+    const owner = (identityLabel ?? '').trim() || getAnonymousObserverId()
+    draftOwnerRef.current = owner
+    let cancelled = false
+    void loadStoredDraft(owner, projectId)
+      .then((draft) => {
+        if (cancelled) return
+        if (draft && draft.observations.length > 0) setResumeDraft(draft)
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          console.warn('Impossible de lire le brouillon local de session.', error)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setDraftReady(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [identityLabel, projectId])
+
+  /** Écrit immédiatement la dernière copie en attente (bascule hors ligne, soumission…). */
+  const flushPendingSnapshot = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    const snapshot = pendingSnapshotRef.current
+    pendingSnapshotRef.current = null
+    if (!snapshot) return
+    void saveStoredDraft(snapshot).catch((error: unknown) => {
+      console.warn('Impossible de sauvegarder le brouillon local de session.', error)
+    })
+  }, [])
+
+  /** Supprime définitivement le brouillon de la session courante (identité, projet). */
+  const clearPersistedDraft = useCallback(() => {
+    const owner = draftOwnerRef.current
+    if (!projectId || !owner) return
+    void clearStoredDraft(owner, projectId).catch((error: unknown) => {
+      console.warn('Impossible de supprimer le brouillon local de session.', error)
+    })
+  }, [projectId])
+
+  /**
+   * Sauvegarde automatique (débounce ~600 ms) : chaque changement de captures ou
+   * d'onglet actif remplace la copie en attente ; un seul minuteur écrit la plus
+   * récente. Suspendue tant qu'un brouillon attend une décision (reprendre/ignorer)
+   * et après une soumission confirmée (le brouillon est alors purgé).
+   */
+  useEffect(() => {
+    if (!projectId) return
+    const owner = draftOwnerRef.current
+    if (!owner || !draftReady || resumeDraft || submittedCount !== null) return
+    if (observations.length === 0) return
+    pendingSnapshotRef.current = {
+      version: 1,
+      projectId,
+      owner,
+      savedAt: new Date().toISOString(),
+      activeTab: activeKey,
+      observations,
+    }
+    if (saveTimerRef.current !== null) return
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null
+      const snapshot = pendingSnapshotRef.current
+      pendingSnapshotRef.current = null
+      if (!snapshot) return
+      void saveStoredDraft(snapshot).catch((error: unknown) => {
+        console.warn('Impossible de sauvegarder le brouillon local de session.', error)
+      })
+    }, 600)
+  }, [activeKey, draftReady, observations, projectId, resumeDraft, submittedCount])
+
+  /** Au démontage, écrit la dernière copie en attente (navigation, fermeture…). */
+  useEffect(() => {
+    return () => {
+      flushPendingSnapshot()
+    }
+  }, [flushPendingSnapshot])
+
+  /** Écoute les bascules de connexion : hors ligne, le brouillon reste écrit en local. */
+  useEffect(() => {
+    const sync = () => {
+      const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+      setIsOnline(online)
+      if (!online) flushPendingSnapshot()
+    }
+    const id = window.setTimeout(sync, 0)
+    window.addEventListener('online', sync)
+    window.addEventListener('offline', sync)
+    return () => {
+      window.clearTimeout(id)
+      window.removeEventListener('online', sync)
+      window.removeEventListener('offline', sync)
+    }
+  }, [flushPendingSnapshot])
+
+  /**
+   * Reprend une session sauvegardée : seules les captures des passes encore présentes
+   * sont restaurées (un projet peut avoir évolué entre deux visites), puis l'onglet
+   * sauvegardé est ré-activé s'il existe toujours.
+   */
+  const handleResumeDraft = () => {
+    const draft = resumeDraft
+    if (!draft) return
+    const availableKeys = passes.map((pass) => pass.key)
+    const restored = filterObservationsToPasses(draft.observations, availableKeys)
+    setObservations(restored)
+    setActiveId(null)
+    setResumeDraft(null)
+    if (draft.activeTab && draft.activeTab !== activeKey) {
+      const stillAvailable = new Set(availableKeys)
+      if (stillAvailable.has(draft.activeTab)) selectPass(draft.activeTab)
+    }
+  }
+
+  /** Abandon explicite du brouillon : suppression définitive, session vierge. */
+  const handleDiscardDraft = () => {
+    setResumeDraft(null)
+    clearPersistedDraft()
+  }
+
+  const handleSubmissionSuccess = useCallback(
+    (count: number) => {
+      // Toute la session a été confirmée : plus aucun brouillon à reprendre.
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      pendingSnapshotRef.current = null
+      setObservations([])
+      clearDrawing()
+      setSubmittedCount(count)
+      clearPersistedDraft()
+      toast.success(t.annotator.toastSuccessTitle, {
+        description: t.annotator.toastSuccessDesc,
+      })
+    },
+    [
+      clearDrawing,
+      clearPersistedDraft,
+      t.annotator.toastSuccessDesc,
+      t.annotator.toastSuccessTitle,
+    ],
+  )
+
   const canvasPointerProps = canAnnotate
     ? {
         onPointerDown: handlePointerDown,
@@ -1097,7 +1286,70 @@ export default function VideoAnnotator({
   }
 
   return (
-    <div className="flex w-full flex-col gap-4 lg:flex-row lg:items-start">
+    <div className="flex w-full flex-col gap-4">
+      {/* ——— Hors ligne : tout reste enregistré sur l'appareil ——— */}
+      {!isOnline ? (
+        <div
+          role="status"
+          className="flex items-start gap-2.5 rounded-xl border border-clay-200 bg-clay-50 px-3.5 py-2.5 text-xs leading-relaxed text-clay-700 dark:border-clay-800/60 dark:bg-clay-900/30 dark:text-clay-300"
+        >
+          <CloudOff aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{t.annotator.offlineWarning}</span>
+        </div>
+      ) : null}
+
+      {/* ——— Reprise : une session non soumise est encore là ——— */}
+      {resumeDraft ? (
+        <div
+          role="status"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gold-500/40 bg-gold-500/10 px-4 py-3"
+        >
+          <div className="flex min-w-0 items-start gap-2.5">
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gold-500/15 text-gold-700 dark:bg-gold-400/10 dark:text-gold-300">
+              <History aria-hidden="true" className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                {t.annotator.draftResumeTitle}
+              </p>
+              <p className="text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
+                {fill(t.annotator.draftResumeBody, {
+                  n: resumeDraft.observations.length,
+                  saved: formatSavedAt(resumeDraft.savedAt, locale),
+                })}
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDiscardDraft}
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5"
+            >
+              <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
+              {t.annotator.draftDiscardAction}
+            </button>
+            <button
+              type="button"
+              onClick={handleResumeDraft}
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-ink px-3 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+            >
+              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+              {t.annotator.draftResumeAction}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Confirmation discrète que la session est auto-sauvegardée sur l'appareil. */}
+      {projectId && draftReady && resumeDraft === null && submittedCount === null && observations.length > 0 ? (
+        <p className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-400 dark:text-zinc-500">
+          <CheckCircle aria-hidden="true" className="h-3 w-3 text-gold-600 dark:text-gold-400" />
+          {t.annotator.draftStatus}
+        </p>
+      ) : null}
+
+      <div className="flex w-full flex-col gap-4 lg:flex-row lg:items-start">
       {/* ——— Colonne principale : chargement + lecteur + commandes ——— */}
       <div className="flex min-w-0 flex-1 flex-col gap-4">
         {/* ——— Onglets des passes vidéo + couverture des types requis ——— */}
@@ -2016,6 +2268,7 @@ export default function VideoAnnotator({
           onSubmissionSuccess={handleSubmissionSuccess}
         />
       ) : null}
+      </div>
     </div>
   )
 }
