@@ -26,20 +26,22 @@ model User {
   ownedProjects Project[]       @relation("ProjectOwner")
   grantedAccess ProjectAccess[]
   createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @default(now()) @updatedAt
 }
 
 model Project {
-  id           String          @id @default(uuid())
-  ownerId      String? // Créateur (ADMIN ou ANALYST) — null pour les projets hérités
-  owner        User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  title        String
-  description  String?
-  videoUrl     String?         // Chemin ou nom du fichier vidéo local
-  isArchived   Boolean         @default(false)
-  points       ProjectPoint[]
-  observations Observation[]
-  accessList   ProjectAccess[] // Partage ANALYST → ANALYST (par username)
-  createdAt    DateTime        @default(now())
+  id               String          @id @default(uuid())
+  ownerId          String? // Créateur (ADMIN ou ANALYST) — null pour les projets hérités
+  owner            User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  title            String
+  description      String?
+  videoUrl         String?         // Chemin ou nom du fichier vidéo local
+  observationTypes String[]        @default([]) // Types d'observation configurables proposés aux observateurs (ex: « 100m oblique », « Faune détectée »)
+  isArchived       Boolean         @default(false)
+  points           ProjectPoint[]
+  observations     Observation[]
+  accessList       ProjectAccess[] // Partage ANALYST → ANALYST (par username)
+  createdAt        DateTime        @default(now())
 }
 
 /// Partage d'un projet entre analystes (propriétaire + invités).
@@ -77,6 +79,7 @@ model Observation {
   point          ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
   timestampTotal Int           // Horodatage saisi en secondes
   imageUrl       String        // URL Cloudinary de la capture annotée
+  observationType String?      // Type d'observation choisi par l'observateur (issu de Project.observationTypes)
   isGhostPoint   Boolean       @default(false) // Indique si hors-trame / fausse alerte
   isVerified     Boolean       @default(true)
   createdAt      DateTime      @default(now())
