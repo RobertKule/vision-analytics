@@ -86,6 +86,7 @@ const en = {
     rightsLabel: '© 2026 All rights reserved',
     footerExperiments: 'Experiments',
     footerSignIn: 'Sign in',
+    mySpace: 'My space',
   },
   observe: {
     eyebrow: 'Observer space',
@@ -155,6 +156,18 @@ const en = {
     endLater: 'Review first',
     toastSuccessTitle: 'Session submitted',
     toastSuccessDesc: 'Your observations were transmitted and recorded securely.',
+    remoteStreamingTag: 'Streaming (remote)',
+    editCaptureAria: 'Edit observation #{{n}}',
+    remoteTaintError:
+      'This remote source cannot be captured directly (CORS missing). Download it and load the local file instead.',
+    sendObservations: 'Send observations',
+    confirmKicker: 'Final review',
+    confirmTitle: 'Send your observations?',
+    confirmBody:
+      'Your {{n}} annotated capture(s) will be recorded and validated against the study’s blind windows.',
+    confirmCancel: 'Cancel',
+    confirmFollow: 'Continue observing',
+    confirmSend: 'Confirm & send',
   },
   stepper: {
     kicker: 'Blind protocol',
@@ -482,6 +495,7 @@ const fr: typeof en = {
     rightsLabel: '© 2026 Tous droits réservés',
     footerExperiments: 'Expériences',
     footerSignIn: 'Connexion',
+    mySpace: 'Mon espace',
   },
   observe: {
     eyebrow: 'Espace observateur',
@@ -551,6 +565,18 @@ const fr: typeof en = {
     endLater: 'Revue d’abord',
     toastSuccessTitle: 'Session soumise avec succès',
     toastSuccessDesc: 'Vos observations ont été transmises et enregistrées en toute sécurité.',
+    remoteStreamingTag: 'Streaming (distant)',
+    editCaptureAria: 'Modifier l’observation n°{{n}}',
+    remoteTaintError:
+      'Impossible de capturer depuis cette source distante (CORS non autorisé). Téléchargez-la et chargez le fichier local à la place.',
+    sendObservations: 'Envoyer les observations',
+    confirmKicker: 'Revue finale',
+    confirmTitle: 'Envoyer vos observations ?',
+    confirmBody:
+      'Vos {{n}} capture(s) annotée(s) seront enregistrées et validées contre les fenêtres aveugles de l’étude.',
+    confirmCancel: 'Annuler',
+    confirmFollow: 'Suivre',
+    confirmSend: 'Confirmer & envoyer',
   },
   stepper: {
     kicker: 'Protocole en aveugle',

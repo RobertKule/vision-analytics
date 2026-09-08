@@ -30,8 +30,8 @@ export default function LanguageToggle({ locale, variant = 'default' }: Language
     variant === 'mono'
       ? `inline-flex h-7 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-bold uppercase tracking-wide transition-colors ${
           active
-            ? 'bg-[#121417] text-[#FBF9F5] shadow-sm'
-            : 'text-[#4A4E57] hover:text-[#121417]'
+            ? 'bg-[#121417] text-[#FBF9F5] shadow-sm dark:bg-[#FBF9F5] dark:text-[#121417]'
+            : 'text-[#4A4E57] hover:text-[#121417] dark:text-zinc-400 dark:hover:text-[#FBF9F5]'
         }`
       : `inline-flex h-7 min-w-8 items-center justify-center rounded-md px-2 text-[11px] font-bold uppercase tracking-wide transition-colors ${
           active
@@ -41,7 +41,7 @@ export default function LanguageToggle({ locale, variant = 'default' }: Language
 
   const containerClass =
     variant === 'mono'
-      ? 'inline-flex items-center gap-0.5 rounded-lg border border-[#121417]/15 bg-white/50 p-0.5'
+      ? 'inline-flex items-center gap-0.5 rounded-lg border border-[#121417]/15 bg-white/50 p-0.5 dark:border-white/15 dark:bg-white/5'
       : 'inline-flex items-center gap-0.5 rounded-lg border border-zinc-300 bg-white p-0.5 shadow-sm dark:border-zinc-700 dark:bg-zinc-900'
 
   return (

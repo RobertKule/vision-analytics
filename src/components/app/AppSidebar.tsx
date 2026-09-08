@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import {
   ChevronsLeft,
@@ -10,7 +11,6 @@ import {
   FolderKanban,
   History,
   LayoutDashboard,
-  Leaf,
   Settings,
   Users,
 } from 'lucide-react'
@@ -131,10 +131,16 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
       <div className="flex h-14 items-center gap-2.5 border-b border-zinc-100 px-3 dark:border-white/5">
         <Link
           href="/"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 text-white shadow-sm"
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-forest-500/30"
           aria-label="Vision Analytics"
         >
-          <Leaf aria-hidden="true" className="h-4 w-4" />
+          <Image
+            src="/Parc National des Virunga.png"
+            alt="Parc National des Virunga"
+            width={40}
+            height={40}
+            className="h-7 w-7 object-contain"
+          />
         </Link>
         {!collapsed ? (
           <span className="truncate text-sm font-bold tracking-tight text-zinc-900 dark:text-zinc-50">

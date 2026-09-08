@@ -27,8 +27,10 @@ export default function GlobalLoading() {
 
       {/* Grand bloc principal skeleton */}
       <div className="mt-8 flex h-72 w-full animate-pulse flex-col items-center justify-center rounded-2xl border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/60">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-red-600 border-t-transparent" />
-        <p className="mt-3 text-xs font-medium text-zinc-400">Chargement des données scientifiques…</p>
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-400 border-t-transparent dark:border-zinc-300" />
+        <p className="mt-3 text-xs font-medium text-zinc-400 dark:text-zinc-500">
+          Chargement des données scientifiques…
+        </p>
       </div>
     </div>
   )

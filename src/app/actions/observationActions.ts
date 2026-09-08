@@ -1,23 +1,24 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, unstable_cache, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { uploadAnnotationToCloudinary } from '@/lib/cloudinary'
 import type { BlindProjectDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 import { Role } from '@prisma/client'
 
+/**
+ * Tag de cache partagé pour les lectures « observer » (liste + détail des
+ * projets). Tout changement de projet ou nouvelle soumission invalide ces
+ * lectures via `revalidateTag`.
+ */
+const BLIND_PROJECTS_TAG = 'blind-projects'
+
 function isValidBase64Image(dataUrl: string): boolean {
   return typeof dataUrl === 'string' && dataUrl.startsWith('data:image/')
 }
 
-/**
- * Récupère les données d'un projet pour la session d'observation.
- * RÈGLE DU PROTOCOLE EN AVEUGLE :
- * Les fenêtres de validation `ProjectPoint` sont strictement omises de la requête
- * pour éviter toute fuite vers le client de l'observateur.
- */
-export async function getBlindProject(projectId: string): Promise<BlindProjectDto | null> {
+async function queryBlindProject(projectId: string): Promise<BlindProjectDto | null> {
   if (!projectId || typeof projectId !== 'string' || !projectId.trim()) {
     return null
   }
@@ -47,12 +48,7 @@ export async function getBlindProject(projectId: string): Promise<BlindProjectDt
   }
 }
 
-/**
- * Liste tous les projets actifs pour les observateurs.
- * RÈGLE DU PROTOCOLE EN AVEUGLE :
- * Les fenêtres de validation `ProjectPoint` sont strictement exclues de la requête.
- */
-export async function listBlindProjects(): Promise<BlindProjectDto[]> {
+async function queryBlindProjects(): Promise<BlindProjectDto[]> {
   const projects = await prisma.project.findMany({
     where: { isArchived: false },
     select: {
@@ -72,6 +68,35 @@ export async function listBlindProjects(): Promise<BlindProjectDto[]> {
     videoUrl: p.videoUrl,
     createdAt: p.createdAt.toISOString(),
   }))
+}
+
+/**
+ * Détail d'un projet pour la session d'observation — mis en cache.
+ * RÈGLE DU PROTOCOLE EN AVEUGLE :
+ * Les fenêtres de validation `ProjectPoint` sont strictement omises de la requête
+ * pour éviter toute fuite vers le client de l'observateur.
+ */
+const getCachedBlindProject = unstable_cache(queryBlindProject, ['blind-project'], {
+  tags: [BLIND_PROJECTS_TAG],
+  revalidate: 300,
+})
+
+export async function getBlindProject(projectId: string): Promise<BlindProjectDto | null> {
+  return getCachedBlindProject(projectId)
+}
+
+/**
+ * Liste des projets actifs pour les observateurs — mise en cache.
+ * RÈGLE DU PROTOCOLE EN AVEUGLE :
+ * Les fenêtres de validation `ProjectPoint` sont strictement exclues de la requête.
+ */
+const getCachedBlindProjects = unstable_cache(queryBlindProjects, ['blind-projects'], {
+  tags: [BLIND_PROJECTS_TAG],
+  revalidate: 300,
+})
+
+export async function listBlindProjects(): Promise<BlindProjectDto[]> {
+  return getCachedBlindProjects()
 }
 
 /**
@@ -246,6 +271,7 @@ export async function submitObservations(
       })),
     })
 
+    updateTag(BLIND_PROJECTS_TAG)
     revalidatePath(`/observe/${projectId}`)
     revalidatePath('/admin/projects')
 

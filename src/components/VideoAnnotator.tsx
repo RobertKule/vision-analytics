@@ -8,6 +8,7 @@ import {
   Camera,
   CheckCircle,
   Crosshair,
+  Edit2,
   Film,
   Pause,
   Play,
@@ -15,6 +16,7 @@ import {
   Send,
   Timer,
   Trash,
+  Trash2,
   X,
 } from 'lucide-react'
 import type { CaptureRecord } from '@/lib/types'
@@ -128,7 +130,18 @@ export default function VideoAnnotator({
   const readyRef = useRef(false)
   const playingRef = useRef(false)
 
-  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  /**
+   * Vidéo distante référencée par URL (Cloudinary, S3, lecteur de flux…).
+   * On la STREAME par référence — on ne stocke jamais le fichier lourd localement.
+   * Elle devient la source initiale quand un projet fournit une URL distante ;
+   * un fichier local sélectionné ensuite prend simplement le relais.
+   */
+  const remoteVideoUrl =
+    expectedVideoUrl && /^https?:\/\//.test(expectedVideoUrl.trim())
+      ? expectedVideoUrl.trim()
+      : null
+
+  const [videoUrl, setVideoUrl] = useState<string | null>(() => remoteVideoUrl)
   const [fileName, setFileName] = useState<string | null>(null)
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
@@ -139,6 +152,7 @@ export default function VideoAnnotator({
   const [observations, setObservations] = useState<CaptureRecord[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isStepperOpen, setIsStepperOpen] = useState(false)
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false)
   const [ended, setEnded] = useState(false)
   const [endPromptDismissed, setEndPromptDismissed] = useState(false)
   const [submittedCount, setSubmittedCount] = useState<number | null>(null)
@@ -195,6 +209,30 @@ export default function VideoAnnotator({
     setObservations((prev) => prev.filter((item) => item.id !== captureId))
   }, [])
 
+  /**
+   * « Modifier » une observation : repositionne le lecteur sur l'horodatage de la
+   * capture pour la re-annoter sur place. La capture précédente est retirée — on
+   * en enregistre une corrigée sur la même frame.
+   */
+  const handleEditCapture = (captureId: string) => {
+    const capture = observations.find((item) => item.id === captureId)
+    if (!capture) return
+    setObservations((prev) => prev.filter((item) => item.id !== captureId))
+    clearDrawing()
+    const video = videoRef.current
+    if (video && Number.isFinite(video.duration)) {
+      video.currentTime = capture.timestamp
+      setCurrentTime(capture.timestamp)
+    }
+  }
+
+  /** Ouvre la boîte de confirmation de soumission (Confirmer / Suivre / Annuler). */
+  const openSubmitConfirm = () => {
+    if (observations.length === 0) return
+    setEndPromptDismissed(true)
+    setIsConfirmOpen(true)
+  }
+
   /** Réinitialise l'état pour une nouvelle vidéo. */
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -224,7 +262,7 @@ export default function VideoAnnotator({
   useEffect(() => {
     const url = videoUrl
     return () => {
-      if (url) URL.revokeObjectURL(url)
+      if (url && url.startsWith('blob:')) URL.revokeObjectURL(url)
     }
   }, [videoUrl])
 
@@ -415,12 +453,23 @@ export default function VideoAnnotator({
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     // Figer la frame vidéo courante dans l'image de capture.
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    try {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    } catch {
+      setErrorMessage(t.annotator.remoteTaintError)
+      return
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     const selected = selectedIdRef.current
     for (const circle of circlesRef.current) paintCircle(ctx, circle, circle.id === selected)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
-    const imageDataUrl = canvas.toDataURL('image/png')
+    let imageDataUrl: string
+    try {
+      imageDataUrl = canvas.toDataURL('image/png')
+    } catch {
+      setErrorMessage(t.annotator.remoteTaintError)
+      return
+    }
     // Restaurer le calque transparent pour poursuivre l'annotation.
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     redraw()
@@ -433,7 +482,7 @@ export default function VideoAnnotator({
     setObservations((previous) => [capture, ...previous])
     // Les marqueurs restent affichés : l'observateur peut en ajuster sur la frame
     // avant une nouvelle capture, ou les effacer pour changer de frame.
-  }, [redraw, syncCanvasSize])
+  }, [redraw, syncCanvasSize, t.annotator.remoteTaintError])
 
   const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current
@@ -776,7 +825,7 @@ export default function VideoAnnotator({
               </button>
               <button
                 type="button"
-                onClick={() => setIsStepperOpen(true)}
+                onClick={openSubmitConfirm}
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 text-xs font-semibold text-amber-950 shadow-sm transition-colors hover:bg-amber-400"
               >
                 <Send aria-hidden="true" className="h-3.5 w-3.5" />
@@ -828,21 +877,36 @@ export default function VideoAnnotator({
                     <span className="font-mono text-xs tabular-nums text-zinc-700 dark:text-zinc-200">
                       T+ {formatTime(observation.timestamp)}
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <span className="text-xs text-zinc-500 dark:text-zinc-400">
                         #{observations.length - index} · {observation.circleCount}{' '}
                         {pluralLabel(t.annotator.unitCircle, observation.circleCount)}
                       </span>
                       <button
                         type="button"
+                        onClick={() => handleEditCapture(observation.id)}
+                        className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-forest-500/10 hover:text-forest-600 dark:hover:text-forest-400"
+                        title={fill(t.annotator.editCaptureAria, {
+                          n: observations.length - index,
+                        })}
+                        aria-label={fill(t.annotator.editCaptureAria, {
+                          n: observations.length - index,
+                        })}
+                      >
+                        <Edit2 aria-hidden="true" className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleDeleteCapture(observation.id)}
-                        className="text-xs text-zinc-400 transition-colors hover:text-red-600 dark:hover:text-red-400"
-                        title={fill(t.annotator.deleteCaptureAria, { n: observations.length - index })}
+                        className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
+                        title={fill(t.annotator.deleteCaptureAria, {
+                          n: observations.length - index,
+                        })}
                         aria-label={fill(t.annotator.deleteCaptureAria, {
                           n: observations.length - index,
                         })}
                       >
-                        <Trash aria-hidden="true" className="h-4 w-4" />
+                        <Trash2 aria-hidden="true" className="h-4 w-4" />
                       </button>
                     </div>
                   </div>
@@ -854,17 +918,86 @@ export default function VideoAnnotator({
               <footer className="border-t border-zinc-100 p-3 dark:border-white/10">
                 <button
                   type="button"
-                  onClick={() => setIsStepperOpen(true)}
+                  onClick={openSubmitConfirm}
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:from-forest-600 hover:to-forest-700"
                 >
-                  <span>{fill(t.annotator.submit, { n: observations.length })}</span>
                   <Send aria-hidden="true" className="h-4 w-4" />
+                  <span>
+                    {t.annotator.sendObservations}{' '}
+                    <span className="font-normal opacity-80">
+                      ({observations.length})
+                    </span>
+                  </span>
                 </button>
               </footer>
             ) : null}
           </>
         )}
       </aside>
+
+      {/* ——— Boîte de confirmation d'envoi : Confirmer / Suivre / Annuler ——— */}
+      {isConfirmOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="submit-confirm-title"
+          className="fixed inset-0 z-50 grid place-items-center overflow-y-auto p-4"
+        >
+          <button
+            type="button"
+            aria-label={t.annotator.confirmCancel}
+            onClick={() => setIsConfirmOpen(false)}
+            className="absolute inset-0 cursor-default bg-black/50 backdrop-blur-sm"
+          />
+          <div className="relative w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#161b22]">
+            <p className="text-xs font-semibold uppercase tracking-widest text-forest-600 dark:text-forest-400">
+              {t.annotator.confirmKicker}
+            </p>
+            <h3
+              id="submit-confirm-title"
+              className="mt-2 text-xl font-bold text-zinc-900 dark:text-zinc-50"
+            >
+              {t.annotator.confirmTitle}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+              {fill(t.annotator.confirmBody, { n: observations.length })}
+            </p>
+
+            <div className="mt-6 flex flex-col-reverse items-stretch justify-end gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => setIsConfirmOpen(false)}
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-zinc-300 px-4 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5"
+              >
+                <X aria-hidden="true" className="h-4 w-4" />
+                {t.annotator.confirmCancel}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setEndPromptDismissed(true)
+                  setIsConfirmOpen(false)
+                }}
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-forest-600/30 bg-forest-500/10 px-4 text-sm font-semibold text-forest-700 transition-colors hover:bg-forest-500/20 dark:text-forest-400"
+              >
+                <Play aria-hidden="true" className="h-4 w-4" />
+                {t.annotator.confirmFollow}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsConfirmOpen(false)
+                  setIsStepperOpen(true)
+                }}
+                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:from-forest-600 hover:to-forest-700"
+              >
+                <Send aria-hidden="true" className="h-4 w-4" />
+                {t.annotator.confirmSend}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Stepper de soumission */}
       {projectId ? (

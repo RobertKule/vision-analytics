@@ -1,9 +1,12 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
 import type { ActionResult, ProjectDto } from '@/lib/types'
+
+/** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
+const BLIND_PROJECTS_TAG = 'blind-projects'
 
 type CreateProjectInput = {
   title: string
@@ -73,6 +76,8 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
     })
 
     revalidatePath('/admin/projects')
+    revalidatePath('/observe')
+    updateTag(BLIND_PROJECTS_TAG)
     return { ok: true, id: project.id }
   } catch (error) {
     console.error('Erreur lors de la création du projet :', error)
@@ -108,6 +113,8 @@ export async function archiveProject(projectId: string): Promise<ActionResult> {
     })
 
     revalidatePath('/admin/projects')
+    revalidatePath('/observe')
+    updateTag(BLIND_PROJECTS_TAG)
     return { ok: true }
   } catch (error) {
     console.error('Erreur lors de l’archivage du projet :', error)

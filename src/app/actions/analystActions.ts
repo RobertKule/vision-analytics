@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, updateTag } from 'next/cache'
 import { Prisma, Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
@@ -9,6 +9,9 @@ import type { ActionResult, AnalystProjectDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 
 const msg = (locale: Locale, en: string, fr: string) => (locale === 'fr' ? fr : en)
+
+/** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
+const BLIND_PROJECTS_TAG = 'blind-projects'
 
 function parseSeconds(value: unknown): number | null {
   const number = typeof value === 'number' ? value : Number(value)
@@ -98,6 +101,8 @@ export async function createOwnedProject(input: {
     })
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
+    revalidatePath('/observe')
+    updateTag(BLIND_PROJECTS_TAG)
     return { ok: true, id: project.id }
   } catch (error) {
     console.error('Erreur lors de la création du projet :', error)
@@ -124,6 +129,7 @@ export async function archiveOwnedProject(input: { projectId: string; locale?: L
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
     revalidatePath('/observe')
+    updateTag(BLIND_PROJECTS_TAG)
     return { ok: true }
   } catch (error) {
     console.error('Erreur lors de l’archivage :', error)

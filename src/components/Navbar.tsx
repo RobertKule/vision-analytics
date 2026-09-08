@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { Eye, LayoutDashboard, Leaf, LogIn, ShieldCheck } from 'lucide-react'
+import Image from 'next/image'
+import { Eye, LayoutDashboard, LogIn, ShieldCheck } from 'lucide-react'
 import { getCurrentAdmin } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
@@ -39,8 +40,14 @@ export default async function Navbar() {
           href="/"
           className="group inline-flex shrink-0 items-center gap-2.5 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-forest-500/60"
         >
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-forest-500 to-forest-700 text-white shadow-sm transition-transform group-hover:scale-105">
-            <Leaf aria-hidden="true" className="h-4 w-4" />
+          <span className="inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-forest-500/30 transition-transform group-hover:scale-105">
+            <Image
+              src="/Parc National des Virunga.png"
+              alt="Parc National des Virunga"
+              width={40}
+              height={40}
+              className="h-7 w-7 object-contain"
+            />
           </span>
           <span className="hidden text-sm font-bold tracking-tight text-zinc-900 sm:inline dark:text-zinc-50">
             Vision Analytics
