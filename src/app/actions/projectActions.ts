@@ -89,8 +89,14 @@ function parseSeconds(value: unknown): number | null {
  * session OBSERVER / ANALYST, même en devinant l'URL d'une Server Action.
  */
 
-/** Liste des projets non archivés avec leurs fenêtres temporelles triées. */
+/**
+ * Liste des projets non archivés avec leurs fenêtres temporelles triées.
+ * Réservé à l'administration : les fenêtres (`ProjectPoint`) sont des données
+ * confidentielles de la procédure en aveugle et ne doivent jamais fuir vers un
+ * profil non-admin (même en invoquant la Server Action directement).
+ */
 export async function listProjects(): Promise<ProjectDto[]> {
+  if (!(await getCurrentAdmin())) return []
   const projects = await prisma.project.findMany({
     where: { isArchived: false },
     include: {
