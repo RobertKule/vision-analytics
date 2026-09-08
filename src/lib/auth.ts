@@ -85,9 +85,18 @@ export async function getCurrentSession(): Promise<Session | null> {
   return parseSessionToken(token)
 }
 
-/** Alias rétro-compatible (helpers « admin » existants). */
+/**
+ * Session dont le rôle est réellement ADMIN.
+ *
+ * Les opérations d'administration (création / édition / archivage / restauration /
+ * suppression de projet, gestion des vidéos et benchmarks) doivent être gardées par
+ * `requireAdmin()` et non par `getCurrentSession()` : une simple connexion (OBSERVER
+ * ou ANALYST) ne doit jamais pouvoir exécuter une mutation d'administration en
+ * devinant l'URL d'une Server Action (cf. mission « protection côté serveur »).
+ */
 export async function getCurrentAdmin(): Promise<Session | null> {
-  return getCurrentSession()
+  const session = await getCurrentSession()
+  return session?.role === 'ADMIN' ? session : null
 }
 
 // ——— Inscription publique (ANALYST / OBSERVER) ———
