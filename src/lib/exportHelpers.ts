@@ -194,6 +194,7 @@ export function sanitizeBaseName(value: string): string {
 /** Libellé lisible d'une passe vidéo (nom → type → « Passe N » → nom de fichier). */
 export function videoDisplayName(
   video: {
+    id?: string | null
     name?: string | null
     typeLabel?: string | null
     source?: string | null
