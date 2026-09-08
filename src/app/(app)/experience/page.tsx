@@ -15,8 +15,8 @@ export async function generateMetadata(): Promise<Metadata> {
       locale === 'en' ? 'Experiments' : 'Expériences',
     description:
       locale === 'en'
-        ? 'Run your double-blind video observation sessions, capture and submit your findings.'
-        : 'Menez vos sessions d’observation vidéo en double aveugle, capturez et soumettez vos observations.',
+        ? 'Run your independent video observation sessions, capture and submit your findings.'
+        : 'Menez vos sessions d’observation vidéo indépendantes, capturez et soumettez vos observations.',
   }
 }
 

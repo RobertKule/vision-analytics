@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
+import { getCurrentSession } from '@/lib/auth'
 import { getProjectAnalytics } from '@/app/actions/analyticsActions'
 import ProjectAnalyticsDashboard from '@/components/admin/ProjectAnalyticsDashboard'
 
@@ -31,9 +32,12 @@ export default async function ProjectAnalyticsPage({ params }: PageProps) {
     notFound()
   }
 
+  const session = await getCurrentSession()
+  const authorName = session?.username?.trim() || session?.email || ''
+
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
-      <ProjectAnalyticsDashboard analytics={analytics} />
+      <ProjectAnalyticsDashboard analytics={analytics} authorName={authorName} />
     </div>
   )
 }
