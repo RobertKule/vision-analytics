@@ -4,6 +4,7 @@ import {
   buildGlobalObservations,
   buildObserverMatrix,
   buildProjectSummary,
+  buildTypeStatistics,
   clockLabel,
   interObserverAgreementRate,
   type GlobalExportRow,
@@ -243,5 +244,55 @@ describe('clockLabel', () => {
   it('formate les minutes non bornées (contrat Minuterie MM:SS)', () => {
     expect(clockLabel(3725)).toBe('62:05')
     expect(clockLabel(59)).toBe('00:59')
+  })
+})
+
+describe('buildTypeStatistics', () => {
+  it('agrège par type : validées, hors trame, observateurs distincts, fenêtres distinctes', () => {
+    const source: GlobalExportSource = {
+      project,
+      rows: [
+        row({ observationType: 'Faune', isGhostPoint: false, pointId: 'pt-a', userId: 'u1' }),
+        // Même observateur, même fenêtre (compté une seule fois dans windowsHit).
+        row({ observationType: 'Faune', isGhostPoint: false, pointId: 'pt-a', userId: 'u1', timestampTotal: 65 }),
+        row({ observationType: 'Faune', isGhostPoint: true, pointId: null, userId: 'u2', anonymousId: 'anon-2' }),
+        row({ observationType: 'Eau', isGhostPoint: false, pointId: 'pt-b', userId: 'u2', anonymousId: 'anon-2' }),
+      ],
+    }
+    const stats = buildTypeStatistics(source)
+    const faune = stats.find((entry) => entry.type === 'Faune')
+    const eau = stats.find((entry) => entry.type === 'Eau')
+    expect(faune).toMatchObject({ total: 3, validated: 2, ghosts: 1, observers: 2, windowsHit: 1 })
+    expect(faune?.precision).toBeCloseTo(2 / 3)
+    expect(eau).toMatchObject({ total: 1, validated: 1, ghosts: 0, observers: 1, windowsHit: 1 })
+  })
+
+  it('conserve les types configurés à zéro et ignore les lignes sans type', () => {
+    const source: GlobalExportSource = {
+      project,
+      rows: [
+        row({ observationType: null }),
+        row({ observationType: '', isGhostPoint: true }),
+      ],
+    }
+    const stats = buildTypeStatistics(source)
+    expect(stats).toHaveLength(project.observationTypes.length)
+    for (const entry of stats) {
+      expect(entry).toMatchObject({ total: 0, validated: 0, ghosts: 0, observers: 0, windowsHit: 0 })
+      expect(entry.precision).toBeNull()
+    }
+  })
+
+  it('ajoute les types observés non configurés (projet à types libres), tri alphabétique', () => {
+    const freeProject = { ...project, observationTypes: [] }
+    const source: GlobalExportSource = {
+      project: freeProject,
+      rows: [
+        row({ observationType: 'Zèbre' }),
+        row({ observationType: 'Faune' }),
+      ],
+    }
+    const stats = buildTypeStatistics(source)
+    expect(stats.map((entry) => entry.type)).toEqual(['Faune', 'Zèbre'])
   })
 })
