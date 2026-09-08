@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeft, AtSign, Eye, EyeOff, Lock, Microscope, UserRound } from 'lucide-react'
 import { register, type AuthResult } from '@/app/actions/authActions'
+import { friendlyActionError } from '@/lib/actionError'
 import type { RegisterableRole } from '@/lib/auth'
 import type { Locale, AuthText, RolesText } from '@/lib/i18n'
 import { homeForRole } from '@/lib/navigation'
@@ -73,7 +74,13 @@ export default function RegisterForm({ locale, t, roleName }: RegisterFormProps)
     }
 
     startTransition(async () => {
-      applyAuthResult(await register({ username, email, password, role, locale }))
+      try {
+        applyAuthResult(await register({ username, email, password, role, locale }))
+      } catch (error) {
+        // Échec de transport (réseau, serveur redémarré…) : message explicite, pas de rejet non géré.
+        console.error('register transport error', error)
+        setErrorMessage(friendlyActionError(error, locale))
+      }
     })
   }
 

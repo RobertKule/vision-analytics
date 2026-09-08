@@ -2,7 +2,7 @@
 
 import {
   authenticateUser,
-  closeAdminSession,
+  closeSession,
   getCurrentSession,
   registerUser,
   type RegisterableRole,
@@ -118,7 +118,7 @@ export async function register(input: {
   return { ok: false, error: locale === 'fr' ? fr : en }
 }
 
-/** Connexion administrateur par email / mot de passe (compte de l'environnement). */
+/** Connexion administrateur par email / mot de passe (compte géré en base de données). */
 export async function loginAdmin(input: { email: string; password: string }): Promise<AuthResult> {
   const email = (input?.email ?? '').trim()
   if (!email || !input?.password) {
@@ -144,6 +144,6 @@ export async function loginAdmin(input: { email: string; password: string }): Pr
 
 /** Déconnexion : supprime le cookie de session. */
 export async function logout(): Promise<{ ok: true }> {
-  await closeAdminSession()
+  await closeSession()
   return { ok: true }
 }

@@ -2,8 +2,10 @@
 
 import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { LogOut } from 'lucide-react'
 import { logout } from '@/app/actions/authActions'
+import { friendlyActionError } from '@/lib/actionError'
 
 type LogoutButtonProps = {
   /** Libellé localisé (EN / FR). Par défaut français. */
@@ -25,9 +27,17 @@ export default function LogoutButton({
 
   const handleLogout = () => {
     startTransition(async () => {
-      await logout()
-      router.push('/')
-      router.refresh()
+      try {
+        await logout()
+        router.push('/')
+        router.refresh()
+      } catch (error) {
+        // Échec de transport : on reste connecté pour permettre une nouvelle tentative.
+        console.error('logout failed', error)
+        toast.error('Déconnexion impossible', {
+          description: friendlyActionError(error, 'fr'),
+        })
+      }
     })
   }
 

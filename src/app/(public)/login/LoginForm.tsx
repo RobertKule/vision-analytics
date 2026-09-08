@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeft, Eye, EyeOff, Lock, LogIn, User } from 'lucide-react'
 import { login, type AuthResult } from '@/app/actions/authActions'
+import { friendlyActionError } from '@/lib/actionError'
 import type { Locale, AuthText, RolesText } from '@/lib/i18n'
 import { homeForRole, resolvePostLoginRedirect } from '@/lib/navigation'
 
@@ -47,7 +48,13 @@ export default function LoginForm({ locale, t, roleName }: LoginFormProps) {
     event.preventDefault()
     setErrorMessage(null)
     startTransition(async () => {
-      applyAuthResult(await login({ identifier, password, locale }))
+      try {
+        applyAuthResult(await login({ identifier, password, locale }))
+      } catch (error) {
+        // Échec de transport (réseau, serveur redémarré…) : message explicite, pas de rejet non géré.
+        console.error('login transport error', error)
+        setErrorMessage(friendlyActionError(error, locale))
+      }
     })
   }
 
