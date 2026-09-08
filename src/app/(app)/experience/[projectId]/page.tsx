@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { ArrowLeft, EyeOff, Film, ShieldCheck } from 'lucide-react'
 import { getBlindProject } from '@/app/actions/observationActions'
 import VideoAnnotator from '@/components/VideoAnnotator'
+import { getCurrentSession } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
 
@@ -36,7 +37,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function ExperienceProjectPage({ params }: PageProps) {
   const { projectId } = await params
-  const locale = await getLocale()
+  const [locale, session] = await Promise.all([getLocale(), getCurrentSession()])
   const project = await getBlindProject(projectId)
 
   if (!project) {
@@ -112,6 +113,7 @@ export default async function ExperienceProjectPage({ params }: PageProps) {
         observationTypes={project.observationTypes}
         locale={locale}
         backHref="/experience"
+        identityLabel={session?.email ?? null}
         t={{
           annotator: d.annotator,
           stepper: d.stepper,
