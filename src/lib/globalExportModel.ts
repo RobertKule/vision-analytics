@@ -98,6 +98,89 @@ export type ObserverMatrix = {
   observers: ObserverMatrixEntry[]
 }
 
+/**
+ * Statistiques agrégées par type d'observation (feuille dédiée du classeur
+ * global). Chaque type porte ses compteurs TOTAUX (tous observateurs), calculés
+ * sur le sous-ensemble filtré transmis au classeur.
+ */
+export type TypeStatistic = {
+  type: string
+  /** Captures totales portant ce type. */
+  total: number
+  /** Captures validées (point trouvé, `isGhostPoint === false`). */
+  validated: number
+  /** Captures hors trame / fausses alertes. */
+  ghosts: number
+  /** Observateurs distincts ayant produit au moins une capture de ce type. */
+  observers: number
+  /** Fenêtres (points) distinctes touchées par ce type. */
+  windowsHit: number
+  /** Précision 0..1 (validées / total) ; null si aucune capture de ce type. */
+  precision: number | null
+}
+
+/**
+ * Agrège les statistiques PAR TYPE sur le sous-ensemble de lignes transmis.
+ * Colonnes et ordre stables : types configurés d'abord (même sans capture),
+ * puis types observés non configurés (tri alphabétique) — comme la matrice.
+ */
+export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[] {
+  const { project, rows } = source
+  const configured = cleanConfiguredTypes(project.observationTypes)
+
+  type Acc = {
+    total: number
+    validated: number
+    ghosts: number
+    observers: Set<string>
+    windows: Set<string>
+  }
+  const stats = new Map<string, Acc>()
+  const ensure = (type: string): Acc => {
+    let acc = stats.get(type)
+    if (!acc) {
+      acc = { total: 0, validated: 0, ghosts: 0, observers: new Set(), windows: new Set() }
+      stats.set(type, acc)
+    }
+    return acc
+  }
+  for (const type of configured) ensure(type)
+
+  const observedUnknown = new Set<string>()
+  for (const row of rows) {
+    const type = row.observationType?.trim()
+    if (!type) continue
+    if (!configured.includes(type)) observedUnknown.add(type)
+    const acc = ensure(type)
+    acc.total += 1
+    if (row.isGhostPoint) acc.ghosts += 1
+    else acc.validated += 1
+    acc.observers.add(row.userId)
+    if (row.pointId) acc.windows.add(row.pointId)
+  }
+
+  const types = [
+    ...configured,
+    ...Array.from(observedUnknown).sort((a, b) => a.localeCompare(b)),
+  ]
+
+  return types.map((type) => {
+    const acc = stats.get(type)
+    if (!acc) {
+      return { type, total: 0, validated: 0, ghosts: 0, observers: 0, windowsHit: 0, precision: null }
+    }
+    return {
+      type,
+      total: acc.total,
+      validated: acc.validated,
+      ghosts: acc.ghosts,
+      observers: acc.observers.size,
+      windowsHit: acc.windows.size,
+      precision: acc.total > 0 ? acc.validated / acc.total : null,
+    }
+  })
+}
+
 /** Ligne de relevé global (feuille 3). */
 export type LedgerObservation = {
   timecode: string
