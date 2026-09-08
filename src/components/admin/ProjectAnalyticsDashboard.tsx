@@ -5,12 +5,16 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  Download,
   ExternalLink,
   Eye,
   EyeOff,
+  FileArchive,
   FileSpreadsheet,
   FileText,
   LayoutDashboard,
+  Loader2,
+  RotateCcw,
   ScanLine,
   Timer,
   User,
@@ -26,6 +30,15 @@ import {
   buildWindowBars,
   tickIntervalFor,
 } from '@/components/charts/chartData'
+import { getProjectAnalytics } from '@/app/actions/analyticsActions'
+import { friendlyActionError } from '@/lib/actionError'
+import {
+  downloadChartPackage,
+  downloadChartPng,
+  renderChartPngDataUrl,
+  type PackageChartInput,
+} from '@/lib/chartPngExport'
+import { sanitizeBaseName, videoDisplayName } from '@/lib/exportHelpers'
 import {
   Area,
   AreaChart,
@@ -92,9 +105,12 @@ function getConcordanceBadge(rate: number) {
 }
 
 export default function ProjectAnalyticsDashboard({
-  analytics,
+  analytics: initialAnalytics,
   authorName = '',
 }: ProjectAnalyticsDashboardProps) {
+  // L'analyse vit en état local : les filtres (type/vidéo) déclenchent un
+  // RECALCUL CÔTÉ SERVEUR, puis remplacent ces données — jamais une coupe frontend.
+  const [analytics, setAnalytics] = useState<ProjectAnalyticsDto>(initialAnalytics)
   const { project, summary, pointsAnalytics, ghostPointsAnalytics, observersMetrics } = analytics
 
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('overview')
@@ -103,6 +119,76 @@ export default function ProjectAnalyticsDashboard({
   )
   const [selectedCapture, setSelectedCapture] = useState<ObservationCaptureDto | null>(null)
   const [isReportModalOpen, setIsReportModalOpen] = useState(false)
+
+  // ——— Filtres Type / Vidéo ———
+  // `appliedFilter` est renvoyé par le serveur : il décrit exactement le
+  // sous-ensemble sur lequel les métriques et graphiques visibles ont été calculés.
+  const appliedFilter = analytics.summary.appliedFilter
+  const appliedType = appliedFilter?.observationType ?? ''
+  const appliedVideoId = appliedFilter?.videoId ?? ''
+
+  // Brouillon du formulaire (appliqué uniquement au clic sur « Recalculer »).
+  const [draftType, setDraftType] = useState<string>(appliedType)
+  const [draftVideo, setDraftVideo] = useState<string>(appliedVideoId)
+  const [filtering, setFiltering] = useState(false)
+
+  const appliedVideoLabel = videoDisplayName(
+    (project.videos ?? []).find((video) => video.id === appliedVideoId),
+  )
+  // Contexte des graphiques : reflète TOUJOURS le filtre réellement appliqué.
+  const contextParts: string[] = []
+  if (appliedType) contextParts.push(appliedType)
+  if (appliedVideoId && appliedVideoLabel && appliedVideoLabel !== '—') {
+    contextParts.push(appliedVideoLabel)
+  }
+  const hasAppliedFilter = contextParts.length > 0
+  const chartTitleSuffix = hasAppliedFilter ? ` — ${contextParts.join(' · ')}` : ''
+  const pngContextBanner = [
+    appliedType ? `Type : ${appliedType}` : '',
+    appliedVideoId && appliedVideoLabel && appliedVideoLabel !== '—'
+      ? `Vidéo : ${appliedVideoLabel}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const draftDirty = draftType.trim() !== appliedType || draftVideo.trim() !== appliedVideoId
+
+  const fileBase = sanitizeBaseName(project.title)
+
+  const runServerFilter = (nextType: string, nextVideo: string) => {
+    setFiltering(true)
+    const projectId = project.id
+    void getProjectAnalytics(projectId, {
+      observationType: nextType ? nextType : undefined,
+      videoId: nextVideo ? nextVideo : undefined,
+    })
+      .then((result) => {
+        if (!result) {
+          toast.error('Analyse indisponible', {
+            description: 'Le sous-ensemble demandé est introuvable ou l’accès est refusé.',
+          })
+          return
+        }
+        setAnalytics(result)
+        // Synchronise la liste des fenêtres après changement de contexte.
+        setSelectedPointId(null)
+      })
+      .catch((error: unknown) => {
+        toast.error('Filtre impossible', { description: friendlyActionError(error, 'fr') })
+      })
+      .finally(() => setFiltering(false))
+  }
+
+  const handleApplyFilter = () => {
+    if (!draftDirty || filtering) return
+    runServerFilter(draftType.trim(), draftVideo.trim())
+  }
+
+  const handleResetFilterDraft = () => {
+    setDraftType(appliedType)
+    setDraftVideo(appliedVideoId)
+  }
 
   const selectedPoint = pointsAnalytics.find((p) => p.pointId === selectedPointId)
 
@@ -122,6 +208,116 @@ export default function ProjectAnalyticsDashboard({
   })
   const windowBars = buildWindowBars(pointsAnalytics)
   const hasWindows = pointsAnalytics.length > 0
+
+  // ——— Exports PNG « graphique réel visible » (Recharts → SVG sérialisé → canvas) ———
+  const pngErrorToast = (error: unknown) =>
+    toast.error('Export PNG impossible', {
+      description: error instanceof Error ? error.message : 'Erreur inconnue.',
+    })
+
+  const downloadDetectionPng = () => {
+    void downloadChartPng({
+      chartId: 'detections',
+      fileName: `${fileBase}_detections`,
+      projectTitle: project.title,
+      chartTitle: `Détections dans le temps${chartTitleSuffix}`,
+      context: pngContextBanner || undefined,
+      legend: [
+        { color: COLOR_GOLD, label: 'Valides' },
+        { color: COLOR_SLATE, label: 'Fantômes' },
+      ],
+    }).catch(pngErrorToast)
+  }
+
+  const downloadSplitPng = () => {
+    void downloadChartPng({
+      chartId: 'ventilation',
+      fileName: `${fileBase}_valides_fantomes`,
+      projectTitle: project.title,
+      chartTitle: `Valides vs Fantômes${chartTitleSuffix}`,
+      context: pngContextBanner || undefined,
+      legend: [
+        { color: COLOR_GOLD, label: 'Valides' },
+        { color: COLOR_SLATE, label: 'Fantômes' },
+      ],
+    }).catch(pngErrorToast)
+  }
+
+  const downloadWindowsPng = () => {
+    void downloadChartPng({
+      chartId: 'fenetres',
+      fileName: `${fileBase}_captures_par_fenetre`,
+      projectTitle: project.title,
+      chartTitle: `Captures par fenêtre cible${chartTitleSuffix}`,
+      context: pngContextBanner || undefined,
+    }).catch(pngErrorToast)
+  }
+
+  const [packaging, setPackaging] = useState(false)
+
+  // ——— Export ZIP « Excel + graphiques » (capture des PNG visibles → route serveur) ———
+  const handlePackageExport = async () => {
+    const legend = [
+      { color: COLOR_GOLD, label: 'Valides' },
+      { color: COLOR_SLATE, label: 'Fantômes' },
+    ]
+    try {
+      setPackaging(true)
+      const charts: PackageChartInput[] = []
+      charts.push({
+        id: 'detections',
+        dataUrl: await renderChartPngDataUrl({
+          chartId: 'detections',
+          fileName: 'detections',
+          projectTitle: project.title,
+          chartTitle: `Détections dans le temps${chartTitleSuffix}`,
+          context: pngContextBanner || undefined,
+          legend,
+        }),
+      })
+      charts.push({
+        id: 'ventilation',
+        dataUrl: await renderChartPngDataUrl({
+          chartId: 'ventilation',
+          fileName: 'ventilation',
+          projectTitle: project.title,
+          chartTitle: `Valides vs Fantômes${chartTitleSuffix}`,
+          context: pngContextBanner || undefined,
+          legend,
+        }),
+      })
+      if (hasWindows) {
+        charts.push({
+          id: 'fenetres',
+          dataUrl: await renderChartPngDataUrl({
+            chartId: 'fenetres',
+            fileName: 'fenetres',
+            projectTitle: project.title,
+            chartTitle: `Captures par fenêtre cible${chartTitleSuffix}`,
+            context: pngContextBanner || undefined,
+          }),
+        })
+      }
+      await downloadChartPackage(
+        `/api/admin/projects/${project.id}/export-global-package`,
+        {
+          observationType: appliedType || undefined,
+          videoId: appliedVideoId || undefined,
+          charts,
+        },
+        `${fileBase}_Export_Global_Graphiques.zip`,
+      )
+      toast.success('Export ZIP téléchargé', {
+        description: 'Classeur Excel (3 feuilles) + graphiques PNG + manifest.json.',
+      })
+    } catch (error) {
+      toast.error('Export du ZIP impossible', {
+        description: error instanceof Error ? error.message : 'Erreur inconnue.',
+      })
+    } finally {
+      setPackaging(false)
+    }
+  }
 
   const handleOpenReport = () => {
     setIsReportModalOpen(true)
@@ -198,6 +394,92 @@ export default function ProjectAnalyticsDashboard({
           </Link>
         </div>
       </header>
+
+      {/* ——— Filtres d'analyse (Type / Vidéo) — recalcul côté serveur ——— */}
+      <section
+        aria-label="Filtres de l’analyse"
+        className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            Type d’observation
+            <select
+              value={draftType}
+              disabled={filtering}
+              onChange={(event) => setDraftType(event.target.value)}
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-milk dark:focus:ring-milk/15"
+            >
+              <option value="">Tous les types</option>
+              {(project.observationTypes ?? []).map((observationType) => (
+                <option key={observationType} value={observationType}>
+                  {observationType}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            Vidéo / Passe
+            <select
+              value={draftVideo}
+              disabled={filtering}
+              onChange={(event) => setDraftVideo(event.target.value)}
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-milk dark:focus:ring-milk/15"
+            >
+              <option value="">Toutes les vidéos</option>
+              {(project.videos ?? []).map((video) => (
+                <option key={video.id} value={video.id}>
+                  {videoDisplayName(video)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <button
+            type="button"
+            onClick={handleApplyFilter}
+            disabled={!draftDirty || filtering}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+          >
+            <ScanLine aria-hidden="true" className="h-3.5 w-3.5" />
+            Recalculer l’analyse
+          </button>
+
+          {draftDirty ? (
+            <button
+              type="button"
+              onClick={handleResetFilterDraft}
+              disabled={filtering}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3.5 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+              Annuler le filtre
+            </button>
+          ) : null}
+
+          {filtering ? (
+            <span className="inline-flex h-9 items-center gap-2 text-xs font-medium text-gold-700 dark:text-gold-400">
+              <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+              Actualisation des métriques…
+            </span>
+          ) : null}
+        </div>
+
+        <p className="mt-3 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          {hasAppliedFilter ? (
+            <>
+              Filtre appliqué :{' '}
+              <span className="font-semibold text-gold-700 dark:text-gold-400">
+                {contextParts.join(' · ')}
+              </span>{' '}
+              — toutes les métriques, graphiques et exports sont recalculés côté serveur sur ce
+              sous-ensemble.
+            </>
+          ) : (
+            'Analyse complète — tous les types d’observation et toutes les vidéos.'
+          )}
+        </p>
+      </section>
 
       {/* ——— Navigation par onglets thématiques ——— */}
       <Tabs
@@ -334,15 +616,30 @@ export default function ProjectAnalyticsDashboard({
 
           {/* ——— Visualisations analytiques (Recharts) ——— */}
           <section aria-labelledby="viz-title" className="flex flex-col gap-4">
-            <header className="flex flex-wrap items-end justify-between gap-2">
+            <header className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 id="viz-title" className="text-base font-bold text-zinc-900 dark:text-zinc-100">
                   Visualisations
                 </h2>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Répartition des détections dans le temps et ventilation des captures.
+                  Répartition des détections dans le temps et ventilation des captures. Chaque
+                  graphique porte un contexte filtré et un bouton « PNG » pour l’export d’image.
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={() => void handlePackageExport()}
+                disabled={!hasObservations || packaging || filtering}
+                title="Classeur Excel (3 feuilles) + graphiques PNG de la vue filtrée + manifest.json"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+              >
+                {packaging ? (
+                  <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileArchive aria-hidden="true" className="h-3.5 w-3.5" />
+                )}
+                {packaging ? 'Préparation du ZIP…' : 'Exporter ZIP (Excel + graphiques)'}
+              </button>
             </header>
 
             {!hasObservations ? (
@@ -354,12 +651,25 @@ export default function ProjectAnalyticsDashboard({
                 <div className="grid gap-6 lg:grid-cols-2">
                   {/* Détections dans le temps */}
                   <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      Détections dans le temps
-                    </h3>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Captures validées et points fantômes par intervalle de 10 secondes.
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                          Détections dans le temps{chartTitleSuffix}
+                        </h3>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                          Captures validées et points fantômes par intervalle de 10 secondes.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={downloadDetectionPng}
+                        title="Télécharger le graphique (PNG)"
+                        aria-label="Télécharger le graphique Détections dans le temps en PNG"
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-2.5 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      >
+                        <Download aria-hidden="true" className="h-3.5 w-3.5" /> PNG
+                      </button>
+                    </div>
                     <div className="mt-2 flex items-center gap-4 text-[11px] text-zinc-600 dark:text-zinc-300">
                       <span className="inline-flex items-center gap-1.5">
                         <span className="h-2.5 w-2.5 rounded-sm bg-gold-500" />
@@ -371,7 +681,7 @@ export default function ProjectAnalyticsDashboard({
                       </span>
                     </div>
                     <ClientChart>
-                      <div className="h-56 w-full">
+                      <div className="h-56 w-full" data-chart-export="detections">
                         <ResponsiveContainer width="100%" height="100%">
                           <AreaChart
                             data={detectionSeries}
@@ -430,14 +740,27 @@ export default function ProjectAnalyticsDashboard({
 
                   {/* Valides vs Fantômes */}
                   <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      Valides vs Fantômes
-                    </h3>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Taux de précision globale de la session d’observation.
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                          Valides vs Fantômes{chartTitleSuffix}
+                        </h3>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                          Taux de précision globale de la session d’observation.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={downloadSplitPng}
+                        title="Télécharger le graphique (PNG)"
+                        aria-label="Télécharger le graphique Valides vs Fantômes en PNG"
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-2.5 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      >
+                        <Download aria-hidden="true" className="h-3.5 w-3.5" /> PNG
+                      </button>
+                    </div>
                     <div className="mt-2 flex items-center justify-center gap-6">
-                      <div className="h-48 w-full max-w-[15rem]">
+                      <div className="h-48 w-full max-w-[15rem]" data-chart-export="ventilation">
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
                             <Tooltip contentStyle={TOOLTIP_STYLE} />
@@ -484,14 +807,27 @@ export default function ProjectAnalyticsDashboard({
                 {/* Captures par fenêtre cible (pleine largeur) */}
                 {hasWindows ? (
                   <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                      Captures par fenêtre cible
-                    </h3>
-                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      Volume de captures validées pour chaque fenêtre définie par l’admin.
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                          Captures par fenêtre cible{chartTitleSuffix}
+                        </h3>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                          Volume de captures validées pour chaque fenêtre définie par l’admin.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={downloadWindowsPng}
+                        title="Télécharger le graphique (PNG)"
+                        aria-label="Télécharger le graphique Captures par fenêtre cible en PNG"
+                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-2.5 text-[11px] font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                      >
+                        <Download aria-hidden="true" className="h-3.5 w-3.5" /> PNG
+                      </button>
+                    </div>
                     <ClientChart>
-                      <div className="h-56 w-full">
+                      <div className="h-56 w-full" data-chart-export="fenetres">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart
                             data={windowBars}
