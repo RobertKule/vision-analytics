@@ -151,6 +151,7 @@ export default function VideoAnnotator({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [observations, setObservations] = useState<CaptureRecord[]>([])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [manualUrl, setManualUrl] = useState('')
   const [isStepperOpen, setIsStepperOpen] = useState(false)
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
   const [ended, setEnded] = useState(false)
@@ -256,6 +257,42 @@ export default function VideoAnnotator({
     readyRef.current = false
     playingRef.current = false
     setVideoUrl(URL.createObjectURL(file))
+  }
+
+  /**
+   * Fallback « charger une URL » : permet d'observer quand le projet n'a pas de
+   * vidéo pré-configurée (l'analyste n'a fourni aucune URL) ou depuis le lecteur
+   * de démonstration. La vidéo est lue par référence, jamais stockée.
+   */
+  const handleLoadUrl = () => {
+    const raw = manualUrl.trim()
+    if (!raw) return
+    const url = raw
+    const isHttp = /^https?:\/\//i.test(raw)
+    const isObject = /^(blob:|data:)/.test(raw)
+    if (!isHttp && !isObject) {
+      setErrorMessage(t.annotator.urlInvalid)
+      return
+    }
+    if (isObject && !url.startsWith('blob:')) {
+      // data: URLs ne sont pas diffusables en stream fiable.
+      setErrorMessage(t.annotator.urlInvalid)
+      return
+    }
+    setErrorMessage(null)
+    clearDrawing()
+    setObservations([])
+    setSubmittedCount(null)
+    setFileName(null)
+    setDuration(0)
+    setCurrentTime(0)
+    setIsPlaying(false)
+    setIsReady(false)
+    setEnded(false)
+    setEndPromptDismissed(false)
+    readyRef.current = false
+    playingRef.current = false
+    setVideoUrl(url)
   }
 
   // Révoque l'ancienne URL objet quand la source change (ou au démontage).
@@ -716,15 +753,41 @@ export default function VideoAnnotator({
             ) : null}
           </div>
         ) : (
-          <div className="grid h-64 w-full place-items-center rounded-xl border-2 border-dashed border-zinc-300 bg-white px-6 text-center dark:border-white/15 dark:bg-[#161b22]">
-            <div>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              handleLoadUrl()
+            }}
+            className="grid w-full place-items-center rounded-xl border-2 border-dashed border-zinc-300 bg-white px-6 py-10 text-center dark:border-white/15 dark:bg-[#161b22]"
+          >
+            <div className="w-full max-w-md">
               <Camera aria-hidden="true" className="mx-auto h-7 w-7 text-zinc-300 dark:text-zinc-600" />
               <p className="mt-2 text-sm font-medium text-zinc-600 dark:text-zinc-300">
                 {t.annotator.noVideoTitle}
               </p>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">{t.annotator.noVideoHint}</p>
+
+              {/* Fallback : coller une URL de vidéo directe */}
+              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="url"
+                  value={manualUrl}
+                  onChange={(event) => setManualUrl(event.target.value)}
+                  placeholder={t.annotator.urlPlaceholder}
+                  aria-label={t.annotator.urlPlaceholder}
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-forest-500 focus:outline-none focus:ring-2 focus:ring-forest-500/30 dark:border-white/15 dark:bg-[#0d1117] dark:text-zinc-100 dark:placeholder:text-zinc-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!manualUrl.trim()}
+                  className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-forest-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-forest-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Play aria-hidden="true" className="h-4 w-4" />
+                  {t.annotator.urlLoad}
+                </button>
+              </div>
             </div>
-          </div>
+          </form>
         )}
 
         {/* Commandes du lecteur */}

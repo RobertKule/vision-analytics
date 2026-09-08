@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { ArrowLeft, EyeOff, Film, ShieldCheck, VideoOff } from 'lucide-react'
+import { ArrowLeft, EyeOff, Film, ShieldCheck } from 'lucide-react'
 import { getBlindProject } from '@/app/actions/observationActions'
 import VideoAnnotator from '@/components/VideoAnnotator'
 import { getLocale } from '@/lib/i18n-server'
@@ -45,7 +45,6 @@ export default async function ObserveProjectPage({ params }: PageProps) {
 
   const d = getDictionary(locale)
   const t = d.session
-  const hasVideo = Boolean(project.videoUrl?.trim())
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
@@ -95,49 +94,27 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         <p className="mt-1.5">{t.guidelines}</p>
       </div>
 
-      {hasVideo ? (
-        <>
-          {project.videoUrl && (
-            <div className="mb-4 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-white/10 dark:bg-[#161b22] dark:text-zinc-300">
-              <Film aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
-              <span>{t.targetVideoLabel}</span>
-              <code className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{project.videoUrl}</code>
-            </div>
-          )}
-
-          <VideoAnnotator
-            projectId={project.id}
-            projectTitle={project.title}
-            expectedVideoUrl={project.videoUrl}
-            locale={locale}
-            t={{
-              annotator: d.annotator,
-              stepper: d.stepper,
-              completion: d.completion,
-            }}
-          />
-        </>
-      ) : (
-        /* ——— État vide : l'expérience n'a pas encore partagé sa vidéo ——— */
-        <div className="rounded-2xl border-2 border-dashed border-amber-500/40 bg-white p-10 text-center dark:border-amber-500/30 dark:bg-[#161b22]">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
-            <VideoOff aria-hidden="true" className="h-8 w-8" />
-          </div>
-          <h2 className="mx-auto mt-5 max-w-md text-lg font-bold text-zinc-900 dark:text-zinc-50">
-            {t.noVideoTitle}
-          </h2>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            {t.noVideoBody}
-          </p>
-          <Link
-            href="/observe"
-            className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-forest-600 px-5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-forest-500"
-          >
-            <ArrowLeft aria-hidden="true" className="h-4 w-4" />
-            {t.noVideoAction}
-          </Link>
+      {project.videoUrl && (
+        <div className="mb-4 inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 dark:border-white/10 dark:bg-[#161b22] dark:text-zinc-300">
+          <Film aria-hidden="true" className="h-3.5 w-3.5 text-forest-600 dark:text-forest-400" />
+          <span>{t.targetVideoLabel}</span>
+          <code className="font-mono font-semibold text-zinc-900 dark:text-zinc-100">{project.videoUrl}</code>
         </div>
       )}
+
+      {/* Le VideoAnnotator gère aussi le cas « pas encore de vidéo » :
+          repli interactif — coller une URL ou charger un fichier local (.mp4/.webm). */}
+      <VideoAnnotator
+        projectId={project.id}
+        projectTitle={project.title}
+        expectedVideoUrl={project.videoUrl}
+        locale={locale}
+        t={{
+          annotator: d.annotator,
+          stepper: d.stepper,
+          completion: d.completion,
+        }}
+      />
     </div>
   )
 }
