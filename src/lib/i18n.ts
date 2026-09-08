@@ -182,6 +182,15 @@ const en = {
     obsTypeLabel: 'Observation type',
     obsTypePlaceholder: 'Select a type…',
     obsTypeMissing: 'Select the observation type of this capture.',
+    lockedTypeTag: 'Fixed type',
+    // — Passes vidéo multi-vidéo / multi-types —
+    tabBarAria: 'Video passes',
+    tabCountLabel: '{{n}} captures',
+    passNameFallback: 'Video pass',
+    typesProgress: 'Required types: {{done}}/{{total}}',
+    typesAllCovered: 'All required types are covered.',
+    nextTypeButton: 'Pass to next type: {{type}}',
+    sendAllObservations: 'Submit all observations ({{n}})',
     // — Raccourcis clavier du lecteur —
     shortcutsHelp: 'Keyboard — Space: play / pause · C or Enter: capture',
     // — Carrousel des captures (zone de prévisualisation) —
@@ -234,7 +243,13 @@ const en = {
     recCount: 'Observations',
     recIdentifier: 'Identifier',
     uploading: 'Uploading captures and validating…',
-    successTitle: 'Submission recorded successfully',
+    // — Progression réelle d'envoi (lots) —
+    progressBarAria: 'Upload progress',
+    sendingBatch: 'Sending your observations… {{done}}/{{total}}',
+    finalizing: 'Finalizing and certifying…',
+    progressPercent: '{{percent}}%',
+    retrySend: 'Resume sending',
+    successTitle: '✅ Observations submitted successfully',
     successBody: 'Stored securely and validated against the study’s scientific windows.',
     finish: 'Finish session',
     back: 'Back',
@@ -531,6 +546,22 @@ const en = {
     exportExcelHint:
       '3 sheets — Project summary · Observers × types matrix · Full raw ledger',
     exportReport: 'Printable scientific report',
+    filterType: 'Observation type',
+    filterTypeAll: 'All types',
+    filterVideo: 'Video',
+    filterVideoAll: 'All videos',
+    filterApply: 'Recompute analysis',
+    filterReset: 'Clear filter',
+    filterApplied: 'Filter applied on',
+    filterAll: 'Full analysis — all observation types and videos',
+    filterUpdate: 'Updating analysis…',
+    pngDownload: 'Download chart (PNG)',
+    exportPackage: 'Export ZIP (Excel + charts)',
+    exportPackageHint:
+      'Excel workbook + PNG charts of the currently filtered view',
+    exportPackageBusy: 'Preparing ZIP…',
+    chartExportErrorTitle: 'PNG export failed',
+    packageErrorTitle: 'Package export failed',
   },
 }
 
@@ -696,6 +727,15 @@ const fr: typeof en = {
     obsTypeLabel: 'Type d’observation',
     obsTypePlaceholder: 'Sélectionnez un type…',
     obsTypeMissing: 'Sélectionnez le type d’observation de cette capture.',
+    lockedTypeTag: 'Type fixé',
+    // — Passes vidéo multi-vidéo / multi-types —
+    tabBarAria: 'Passes vidéo',
+    tabCountLabel: '{{n}} capture(s)',
+    passNameFallback: 'Passe vidéo',
+    typesProgress: 'Types requis : {{done}}/{{total}}',
+    typesAllCovered: 'Tous les types requis sont couverts.',
+    nextTypeButton: 'Passer au type suivant : {{type}}',
+    sendAllObservations: 'Soumettre toutes les observations ({{n}})',
     // — Raccourcis clavier du lecteur —
     shortcutsHelp: 'Clavier — Espace : lecture / pause · C ou Entrée : capturer',
     // — Carrousel des captures (zone de prévisualisation) —
@@ -748,7 +788,13 @@ const fr: typeof en = {
     recCount: 'Observations',
     recIdentifier: 'Identifiant',
     uploading: 'Téléversement des captures et validation en cours…',
-    successTitle: 'Soumission enregistrée avec succès',
+    // — Progression réelle d'envoi (lots) —
+    progressBarAria: 'Progression de l’envoi',
+    sendingBatch: 'Envoi de vos observations en cours… {{done}}/{{total}}',
+    finalizing: 'Finalisation et certification…',
+    progressPercent: '{{percent}}%',
+    retrySend: 'Reprendre l’envoi',
+    successTitle: '✅ Observations soumises avec succès',
     successBody: 'Stockée en toute sécurité et validée contre les fenêtres scientifiques de l’étude.',
     finish: 'Terminer la session',
     back: 'Précédent',
@@ -1045,6 +1091,22 @@ const fr: typeof en = {
     exportExcelHint:
       '3 feuilles — Synthèse du projet · Matrice observateurs × types · Relevé global',
     exportReport: 'Rapport PDF/Imprimable',
+    filterType: 'Type d’observation',
+    filterTypeAll: 'Tous les types',
+    filterVideo: 'Vidéo',
+    filterVideoAll: 'Toutes les vidéos',
+    filterApply: 'Recalculer l’analyse',
+    filterReset: 'Annuler le filtre',
+    filterApplied: 'Filtre appliqué :',
+    filterAll: 'Analyse complète — tous les types d’observation et toutes les vidéos.',
+    filterUpdate: 'Actualisation de l’analyse…',
+    pngDownload: 'Télécharger le graphique (PNG)',
+    exportPackage: 'Exporter ZIP (Excel + graphiques)',
+    exportPackageHint:
+      'Classeur Excel + graphiques PNG de la vue filtrée courante',
+    exportPackageBusy: 'Préparation du ZIP…',
+    chartExportErrorTitle: 'Export PNG impossible',
+    packageErrorTitle: 'Export du ZIP impossible',
   },
 }
 
