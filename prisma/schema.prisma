@@ -35,13 +35,39 @@ model Project {
   owner            User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   title            String
   description      String?
-  videoUrl         String?         // Chemin ou nom du fichier vidéo local
+  videoUrl         String?         // Chemin ou nom du fichier vidéo local (vidéo « générique » héritée)
   observationTypes String[]        @default([]) // Types d'observation configurables proposés aux observateurs (ex: « 100m oblique », « Faune détectée »)
   isArchived       Boolean         @default(false)
   points           ProjectPoint[]
   observations     Observation[]
+  videos           Video[]         // Passes vidéo du projet (multi-vidéo : chaque vidéo peut être rattachée à un type d'observation)
   accessList       ProjectAccess[] // Partage ANALYST → ANALYST (par username)
   createdAt        DateTime        @default(now())
+}
+
+/// Passe vidéo d'un projet. Une vidéo peut être rattachée à UN type d'observation
+/// (pass « typée » : l'observateur y travaille uniquement ce type) ou rester
+/// générique (`typeLabel = null` : l'observateur y capture n'importe quel type
+/// proposé — comportement historique du projet à vidéo unique).
+model Video {
+  id        String    @id @default(uuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Libellé exact (issu de Project.observationTypes) auquel cette vidéo est rattachée ; null = vidéo générique.
+  typeLabel String?
+  /// Libellé humain affiché (ex. nom de fichier) ; null = généré depuis `source`.
+  name      String?
+  /// Source de la vidéo (URL distante ou nom de fichier chargé par l'observateur).
+  source    String
+  /// Ordre d'affichage des onglets dans l'annotateur.
+  orderIndex Int @default(0)
+  /// Point réel / vérité terrain (en secondes) pour cette passe — CONFIDENTIEL, jamais transmis à l'observateur.
+  benchmarkSeconds Int?
+  points      ProjectPoint[]
+  observations Observation[]
+  createdAt   DateTime   @default(now())
+
+  @@index([projectId])
 }
 
 /// Partage d'un projet entre analystes (propriétaire + invités).
@@ -61,12 +87,15 @@ model ProjectPoint {
   id             String        @id @default(uuid())
   projectId      String
   project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  videoId        String?       // Fenêtre rattachée à une passe vidéo précise ; null = fenêtre « générique » (projet à vidéo unique)
+  video          Video?        @relation(fields: [videoId], references: [id], onDelete: Cascade)
   pointName      String        // ex: "Point 2"
   trameDebut     Int           // Trame début en secondes
   trameFin       Int           // Trame fin en secondes
   observations   Observation[]
 
   @@index([projectId])
+  @@index([videoId])
 }
 
 model Observation {
@@ -75,6 +104,8 @@ model Observation {
   project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId         String
   user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId        String?       // Passe vidéo d'origine ; null = vidéo générique historique
+  video          Video?        @relation(fields: [videoId], references: [id], onDelete: SetNull)
   pointId        String?       // Auto-assigné si dans [trameDebut, trameFin]
   point          ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
   timestampTotal Int           // Horodatage saisi en secondes
@@ -87,4 +118,5 @@ model Observation {
   @@index([projectId])
   @@index([userId])
   @@index([pointId])
+  @@index([videoId])
 }
