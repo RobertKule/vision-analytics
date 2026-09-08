@@ -3,10 +3,12 @@
 import { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { ChevronDown, Eye, LayoutDashboard, LogIn, LogOut, Menu, X } from 'lucide-react'
 import type { Locale, NavText, RolesText } from '@/lib/i18n'
 import type { SessionRole } from '@/lib/session'
 import { logout } from '@/app/actions/authActions'
+import { friendlyActionError } from '@/lib/actionError'
 import LanguageToggle from '@/components/LanguageToggle'
 import ThemeToggle from '@/components/ThemeToggle'
 
@@ -79,9 +81,17 @@ export default function UserActions({
 
   const handleLogout = () => {
     startTransition(async () => {
-      await logout()
-      router.push('/')
-      router.refresh()
+      try {
+        await logout()
+        router.push('/')
+        router.refresh()
+      } catch (error) {
+        // Échec de transport : on reste connecté pour permettre une nouvelle tentative.
+        console.error('logout failed', error)
+        toast.error(locale === 'en' ? 'Sign out failed' : 'Déconnexion impossible', {
+          description: friendlyActionError(error, locale),
+        })
+      }
     })
   }
 
