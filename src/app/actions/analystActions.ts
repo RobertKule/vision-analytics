@@ -55,6 +55,7 @@ export async function listAnalystProjects(): Promise<AnalystProjectDto[]> {
       title: project.title,
       description: project.description,
       videoUrl: project.videoUrl,
+      observationTypes: project.observationTypes,
       createdAt: project.createdAt.toISOString(),
       points: project.points.map((point) => ({
         id: point.id,

@@ -34,6 +34,8 @@ import {
   parseTimecodeToSeconds,
   secondsToTimecode,
 } from '@/lib/timecode'
+import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import { friendlyActionError } from '@/lib/actionError'
 import Sheet from '@/components/ui/Sheet'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
 import VideoUrlPicker from '@/components/ui/VideoUrlPicker'
@@ -183,6 +185,8 @@ function CreateProjectSheet({
   const [description, setDescription] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
   const [isPending, startTransition] = useTransition()
+  // Le nom saisi par l'utilisateur ne doit jamais être écrasé par la suggestion auto.
+  const [titleTouchedByUser, setTitleTouchedByUser] = useState(false)
 
   const steps: StepperStep[] = [
     { num: 1, label: t.projectCreateStep1 },
@@ -191,10 +195,33 @@ function CreateProjectSheet({
   ]
   const titleValid = title.trim().length > 0
 
+  /** Saisie utilisateur : on fige le nom (plus aucune suggestion automatique ensuite). */
+  const handleTitleChange = (value: string) => {
+    setTitleTouchedByUser(true)
+    setTitle(value)
+  }
+
+  /**
+   * Rattachement de la vidéo cible : si l'utilisateur n'a pas encore saisi de nom,
+   * on propose automatiquement le nom de session dérivé du fichier vidéo.
+   */
+  const handleVideoChange = (value: string) => {
+    setVideoUrl(value)
+    if (!titleTouchedByUser) {
+      setTitle(deriveObservationNameFromVideo(value) ?? '')
+    }
+  }
+
+  const derivedSuggestion = titleTouchedByUser
+    ? null
+    : deriveObservationNameFromVideo(videoUrl)
+
   const doCreate = () => {
     if (!titleValid) return
     startTransition(async () => {
-      const result = await createOwnedProject({ title, description, videoUrl, locale })
+      const result = await createOwnedProject({ title, description, videoUrl, locale }).catch(
+        (error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }),
+      )
       if (result.ok) {
         toast.success(locale === 'en' ? 'Project created' : 'Projet créé')
         router.refresh()
@@ -230,7 +257,7 @@ function CreateProjectSheet({
           {step < steps.length ? (
             <button
               type="button"
-              disabled={!titleValid || isPending}
+              disabled={isPending}
               onClick={() => setStep((current) => current + 1)}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
@@ -239,7 +266,7 @@ function CreateProjectSheet({
           ) : (
             <button
               type="button"
-              disabled={isPending}
+              disabled={isPending || !titleValid}
               onClick={doCreate}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             >
@@ -306,7 +333,7 @@ function CreateProjectSheet({
                 type="text"
                 autoFocus
                 value={title}
-                onChange={(event) => setTitle(event.target.value)}
+                onChange={(event) => handleTitleChange(event.target.value)}
                 placeholder={t.titlePlaceholder}
                 className={inputClass}
               />
@@ -338,9 +365,31 @@ function CreateProjectSheet({
               <VideoUrlPicker
                 inputId="analyst-project-video"
                 value={videoUrl}
-                onChange={setVideoUrl}
+                onChange={handleVideoChange}
                 text={t.videoPicker}
               />
+
+              {derivedSuggestion && !titleTouchedByUser ? (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {locale === 'en' ? (
+                    <>
+                      Suggested session name from the video:{' '}
+                      <span className="font-medium text-zinc-700 dark:text-zinc-200">
+                        “{derivedSuggestion}”
+                      </span>{' '}
+                      — editable in step 1.
+                    </>
+                  ) : (
+                    <>
+                      Nom de session proposé d’après le fichier vidéo :{' '}
+                      <span className="font-medium text-zinc-700 dark:text-zinc-200">
+                        « {derivedSuggestion} »
+                      </span>{' '}
+                      — modifiable à l’étape 1.
+                    </>
+                  )}
+                </p>
+              ) : null}
 
               {/* Aperçu */}
               <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/5">
@@ -402,7 +451,9 @@ function ProjectCard({
   }
 
   const runArchive = async () => {
-    const result = await archiveOwnedProject({ projectId: project.id, locale })
+    const result = await archiveOwnedProject({ projectId: project.id, locale }).catch(
+      (error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }),
+    )
     router.refresh()
     if (result.ok) {
       toast.success(locale === 'en' ? 'Project archived' : 'Projet archivé')
@@ -562,7 +613,9 @@ function WindowRow({
 }) {
   const router = useRouter()
   const runDelete = async () => {
-    const result = await deleteWindowFromProject({ pointId: point.id, locale })
+    const result = await deleteWindowFromProject({ pointId: point.id, locale }).catch(
+      (error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }),
+    )
     router.refresh()
     if (result.ok) {
       toast.success(locale === 'en' ? 'Window deleted' : 'Fenêtre supprimée')
@@ -650,7 +703,7 @@ function AddWindowSheet({
         trameDebut: debut,
         trameFin: fin,
         locale,
-      })
+      }).catch((error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }))
       if (result.ok) {
         toast.success(locale === 'en' ? 'Window added' : 'Fenêtre ajoutée')
         router.refresh()
@@ -854,7 +907,9 @@ function SharePanel({
   const runShare = async () => {
     if (!username.trim()) return
     startTransition(async () => {
-      const result = await shareProjectWithUser({ projectId: project.id, username, locale })
+      const result = await shareProjectWithUser({ projectId: project.id, username, locale }).catch(
+        (error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }),
+      )
       if (result.ok) {
         setUsername('')
         toast.success(locale === 'en' ? 'Project shared' : 'Projet partagé')
@@ -868,7 +923,9 @@ function SharePanel({
   }
 
   const runUnshare = async (userId: string, name: string) => {
-    const result = await unshareProjectFromUser({ projectId: project.id, userId, locale })
+    const result = await unshareProjectFromUser({ projectId: project.id, userId, locale }).catch(
+      (error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }),
+    )
     router.refresh()
     if (result.ok) {
       toast.success(locale === 'en' ? 'Access removed' : 'Accès retiré', { description: name })

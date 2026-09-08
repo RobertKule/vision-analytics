@@ -4,7 +4,9 @@ import { useState } from 'react'
 import {
   ChartColumn,
   ChartPie,
-  Download,
+  FileJson2,
+  FileSpreadsheet,
+  FolderArchive,
   Ghost,
   Printer,
   Target,
@@ -14,7 +16,13 @@ import {
 import type { ProjectAnalyticsDto } from '@/lib/types'
 import type { Locale, AnalyticsText } from '@/lib/i18n'
 import ClientChart from '@/components/charts/ClientChart'
+import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 import { buildSplitSlices, buildWindowBars } from '@/components/charts/chartData'
+import {
+  buildAnalyticsObservationJson,
+  sanitizeBaseName,
+  triggerFileDownload,
+} from '@/lib/exportHelpers'
 import {
   Bar,
   BarChart,
@@ -45,6 +53,8 @@ type AnalystAnalyticsProps = {
   locale: Locale
   t: AnalyticsText
   analytics: ProjectAnalyticsDto
+  /** Nom (ou email) affiché comme auteur du rapport imprimable. */
+  authorName?: string
 }
 
 function formatSeconds(seconds: number): string {
@@ -57,50 +67,7 @@ function shortId(id: string): string {
   return id.slice(0, 6)
 }
 
-/** Export CSV brut des mesures (points cibles + fantômes). */
-function exportCsv(analytics: ProjectAnalyticsDto, locale: Locale): void {
-  const rows: string[][] = [['project', 'title', 'window', 'observer', 'timestamp_s', 'delay_s', 'ghost']]
-  for (const point of analytics.pointsAnalytics) {
-    for (const capture of point.captures) {
-      rows.push([
-        analytics.project.title,
-        analytics.project.id,
-        point.pointName,
-        capture.observerAnonymousId,
-        String(capture.timestampTotal),
-        capture.delaySeconds === null ? '' : String(capture.delaySeconds),
-        capture.isGhostPoint ? '1' : '0',
-      ])
-    }
-  }
-  for (const capture of analytics.ghostPointsAnalytics.captures) {
-    rows.push([
-      analytics.project.title,
-      analytics.project.id,
-      locale === 'fr' ? 'fantôme' : 'ghost',
-      capture.observerAnonymousId,
-      String(capture.timestampTotal),
-      '',
-      '1',
-    ])
-  }
-  const csv = rows
-    .map((row) =>
-      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','),
-    )
-    .join('\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `vision-analytics-${analytics.project.id}.csv`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
-
-export default function AnalystAnalytics({ locale, t, analytics }: AnalystAnalyticsProps) {
+export default function AnalystAnalytics({ t, analytics, authorName = '' }: AnalystAnalyticsProps) {
   const summary = analytics.summary
   const hasWindows = analytics.pointsAnalytics.length > 0
   const hasData = summary.totalObservations > 0
@@ -109,6 +76,7 @@ export default function AnalystAnalytics({ locale, t, analytics }: AnalystAnalyt
 
   // Filtre d'observateur pour les visualisations (« '' » = tous).
   const [selectedObserverId, setSelectedObserverId] = useState('')
+  const [isReportOpen, setIsReportOpen] = useState(false)
   const selectedObserver = analytics.observersMetrics.find(
     (observer) => observer.userId === selectedObserverId,
   )
@@ -125,6 +93,16 @@ export default function AnalystAnalytics({ locale, t, analytics }: AnalystAnalyt
     { valid: t.chartValid, ghost: t.chartGhost },
   )
   const windowBars = buildWindowBars(analytics.pointsAnalytics, observerAnonymousId)
+
+  const exportBase = sanitizeBaseName(analytics.project.title)
+
+  const handleExportJson = () => {
+    triggerFileDownload(
+      `${exportBase}_observations.json`,
+      buildAnalyticsObservationJson(analytics),
+      'application/json;charset=utf-8',
+    )
+  }
 
   const stat = (label: string, value: string, Icon: typeof Users, accent: string) => (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
@@ -161,23 +139,51 @@ export default function AnalystAnalytics({ locale, t, analytics }: AnalystAnalyt
         )}
       </section>
 
-      {/* ——— Exports ——— */}
+      {/* ——— Exports scientifiques & rapport imprimable ——— */}
       <section className="flex flex-wrap items-center gap-3">
+        {hasData ? (
+          <a
+            href={`/api/admin/projects/${analytics.project.id}/export-global-excel`}
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+            title={t.exportExcelHint}
+          >
+            <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5" />
+            {t.exportExcel}
+          </a>
+        ) : (
+          <span
+            aria-disabled="true"
+            className="inline-flex h-9 cursor-not-allowed items-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk opacity-40 dark:bg-milk dark:text-ink"
+            title="Aucune observation à exporter"
+          >
+            <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5" />
+            {t.exportExcel}
+          </span>
+        )}
         <button
           type="button"
-          onClick={() => exportCsv(analytics, locale)}
+          onClick={handleExportJson}
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          title="Export JSON hiérarchique"
+        >
+          <FileJson2 aria-hidden="true" className="h-3.5 w-3.5 text-gold-600 dark:text-gold-400" />
+          {t.exportJson}
+        </button>
+        <a
+          href={`/api/admin/projects/${analytics.project.id}/captures`}
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+          title="Bundle d’images annotées (.zip) avec manifest.json"
+        >
+          <FolderArchive aria-hidden="true" className="h-3.5 w-3.5 text-gold-600 dark:text-gold-400" />
+          {t.exportZip}
+        </a>
+        <button
+          type="button"
+          onClick={() => setIsReportOpen(true)}
           className="inline-flex h-9 items-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
         >
-          <Download aria-hidden="true" className="h-3.5 w-3.5" />
-          CSV
-        </button>
-        <button
-          type="button"
-          onClick={() => window.print()}
-          className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-300 px-4 text-xs font-semibold text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:text-zinc-200 dark:hover:bg-white/5"
-        >
           <Printer aria-hidden="true" className="h-3.5 w-3.5" />
-          PDF
+          {t.exportReport}
         </button>
       </section>
 
@@ -457,6 +463,13 @@ export default function AnalystAnalytics({ locale, t, analytics }: AnalystAnalyt
           </div>
         )}
       </section>
+
+      <ExecutiveReportModal
+        isOpen={isReportOpen}
+        onClose={() => setIsReportOpen(false)}
+        analytics={analytics}
+        authorName={authorName}
+      />
     </div>
   )
 }

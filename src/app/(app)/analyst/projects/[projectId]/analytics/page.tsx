@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import type { Metadata } from 'next'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
+import { getCurrentSession } from '@/lib/auth'
 import { getProjectAnalytics } from '@/app/actions/analyticsActions'
 import AnalystAnalytics from '@/components/analyst/AnalystAnalytics'
 
@@ -27,6 +28,9 @@ export default async function AnalystAnalyticsPage({ params }: Props) {
   const analytics = await getProjectAnalytics(projectId)
   if (!analytics) redirect('/analyst/projects')
 
+  const session = await getCurrentSession()
+  const authorName = session?.username?.trim() || session?.email || ''
+
   const d = getDictionary(locale)
 
   return (
@@ -43,7 +47,12 @@ export default async function AnalystAnalyticsPage({ params }: Props) {
         </p>
       </header>
 
-      <AnalystAnalytics locale={locale} t={d.analytics} analytics={analytics} />
+      <AnalystAnalytics
+        locale={locale}
+        t={d.analytics}
+        analytics={analytics}
+        authorName={authorName}
+      />
     </div>
   )
 }
