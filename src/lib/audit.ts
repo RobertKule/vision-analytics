@@ -61,11 +61,15 @@ export const AUDIT_ACTIONS = {
   videoRemoved: 'VIDEO_REMOVED',
   // Observations
   observationSubmitted: 'OBSERVATION_SUBMITTED',
+  sessionFinalized: 'SESSION_FINALIZED',
+  captureDeleted: 'CAPTURE_DELETED',
   // Exports
   exportGlobal: 'EXPORT_GLOBAL',
   exportExcel: 'EXPORT_EXCEL',
   exportPackage: 'EXPORT_PACKAGE',
   exportCaptures: 'EXPORT_CAPTURES',
+  exportChart: 'EXPORT_CHART',
+  exportPdf: 'EXPORT_PDF',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]

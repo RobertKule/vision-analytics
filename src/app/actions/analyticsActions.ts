@@ -70,7 +70,16 @@ export async function getProjectAnalytics(
       },
       videos: {
         orderBy: { orderIndex: 'asc' },
-        include: { _count: { select: { observations: true, points: true } } },
+        include: {
+          _count: {
+            select: {
+              // Seules les captures CERTIFIÉES (isVerified) comptent : une session
+              // « en cours » (transitoire) n'est jamais visible des analyses.
+              observations: { where: { isVerified: true } },
+              points: true,
+            },
+          },
+        },
       },
     },
   })
@@ -79,17 +88,22 @@ export async function getProjectAnalytics(
 
   const appliedFilter = normalizeFilter(filter)
 
-  // Construction du prédicat d'observations aligné sur le filtre.
-  const where: { projectId: string; observationType?: string; userId?: string; videoId?: string | null } = {
-    projectId: project.id,
-  }
+  // Construction du prédicat d'observations aligné sur le filtre. `isVerified` est
+  // TOUJOURS vrai : seules les données certifiées alimentent les statistiques.
+  const where: {
+    projectId: string
+    observationType?: string
+    userId?: string
+    videoId?: string | null
+    isVerified?: boolean
+  } = { projectId: project.id, isVerified: true }
   if (appliedFilter.observationType) where.observationType = appliedFilter.observationType
   if (appliedFilter.observerId) where.userId = appliedFilter.observerId
   if (appliedFilter.videoId !== undefined) {
     where.videoId = appliedFilter.videoId === LEGACY_GENERIC_VIDEO_ID ? null : appliedFilter.videoId
   }
 
-  // Récupération des observations du contexte filtré.
+  // Récupération des observations certifiées du contexte filtré.
   const observations = await prisma.observation.findMany({
     where,
     include: {
@@ -114,7 +128,7 @@ export async function getProjectAnalytics(
             : point.videoId === appliedFilter.videoId,
         )
 
-  // Ensemble des observateurs distincts ayant soumis des données dans le contexte
+  // Ensemble des observateurs distincts ayant soumis des données certifiées.
   const observerMap = new Map<string, { id: string; anonymousId: string; email: string }>()
   for (const obs of observations) {
     if (obs.user && !observerMap.has(obs.user.id)) {
@@ -123,12 +137,22 @@ export async function getProjectAnalytics(
   }
   const totalObservers = observerMap.size
 
-  const totalObservations = observations.length
   const validObservations = observations.filter((o) => !o.isGhostPoint)
   const ghostObservations = observations.filter((o) => o.isGhostPoint)
 
-  const validObservationsCount = validObservations.length
+  // ——— Règle produit « point unique » ———
+  // Points uniques validés = couples distincts (observateur, pointId) parmi les
+  // captures certifiées non fantômes : un observateur qui capture N fois la même
+  // fenêtre ne « détecte » cette fenêtre qu'une fois. Les fausses alertes restent
+  // des événements (chaque capture hors trame = 1). Le total « déclarations » =
+  // points uniques validés + fausses alertes → dénominateur commun de la précision.
+  const validPointKeys = new Set<string>()
+  for (const obs of validObservations) {
+    if (obs.pointId) validPointKeys.add(`${obs.userId}|${obs.pointId}`)
+  }
+  const validObservationsCount = validPointKeys.size
   const ghostPointsCount = ghostObservations.length
+  const totalObservations = validObservationsCount + ghostPointsCount
 
   // ——— 1. Analyse par Point Cible (Concordance & Délais) ———
   const pointsAnalytics: PointConcordanceDto[] = relevantPoints.map((point) => {
@@ -137,6 +161,8 @@ export async function getProjectAnalytics(
     const concordanceRate =
       totalObservers > 0 ? Math.round((distinctObserversOnPoint / totalObservers) * 100) : 0
 
+    // Délai moyen PAR ÉVÉNEMENT (chaque capture validée de la fenêtre contribue un
+    // délai) — mesure de réaction, volontairement pas dédupliquée par point unique.
     const delays = matching.map((o) => Math.max(0, o.timestampTotal - point.trameDebut))
     const avgDelaySeconds =
       delays.length > 0
@@ -182,11 +208,15 @@ export async function getProjectAnalytics(
         )
       : 0
 
+  // Précision globale = points uniques validés / « déclarations » (points uniques
+  // validés + fausses alertes). Même formule que dans les exports Excel/CSV/PDF.
   const overallPrecisionRate =
     totalObservations > 0
       ? Math.round((validObservationsCount / totalObservations) * 100)
       : 0
 
+  // Délai moyen de réaction — PAR ÉVÉNEMENT : moyenne sur chaque capture validée
+  // (une fenêtre capturée 3 fois contribue 3 délais), pas par point unique.
   const allDelays = pointsAnalytics.flatMap((p) =>
     p.captures.map((c) => c.delaySeconds).filter((d): d is number => d !== null),
   )
@@ -245,14 +275,22 @@ export async function getProjectAnalytics(
   }
 
   // ——— 3. Matrice de Performance des Observateurs ———
+  // Compteurs « points » selon la règle produit : `validObservationsCount` et
+  // `pointsDetectedCount` = fenêtres distinctes (non fantômes) détectées par
+  // l'observateur ; `totalObservations` = « déclarations » (points uniques validés
+  // + fausses alertes) ; `precisionRate` = points uniques / déclarations.
   const observersMetrics: ObserverMetricDto[] = Array.from(observerMap.values()).map(
     (observer) => {
       const userObs = observations.filter((o) => o.userId === observer.id)
       const validObs = userObs.filter((o) => !o.isGhostPoint)
       const ghostObs = userObs.filter((o) => o.isGhostPoint)
-      const uniquePointsDetected = new Set(
-        validObs.map((o) => o.pointId).filter((id): id is string => Boolean(id)),
-      ).size
+      const uniquePointKeys = new Set<string>()
+      for (const obs of validObs) {
+        if (obs.pointId) uniquePointKeys.add(`${obs.userId}|${obs.pointId}`)
+      }
+      const uniquePointsDetected = uniquePointKeys.size
+      const ghostEvents = ghostObs.length
+      const totalDeclarations = uniquePointsDetected + ghostEvents
 
       const timestamps = userObs.map((o) => new Date(o.createdAt).getTime())
       const firstSessionAt =
@@ -264,12 +302,14 @@ export async function getProjectAnalytics(
         userId: observer.id,
         anonymousId: observer.anonymousId,
         email: observer.email,
-        totalObservations: userObs.length,
-        validObservationsCount: validObs.length,
-        ghostPointsCount: ghostObs.length,
+        totalObservations: totalDeclarations,
+        validObservationsCount: uniquePointsDetected,
+        ghostPointsCount: ghostEvents,
         pointsDetectedCount: uniquePointsDetected,
         precisionRate:
-          userObs.length > 0 ? Math.round((validObs.length / userObs.length) * 100) : 0,
+          totalDeclarations > 0
+            ? Math.round((uniquePointsDetected / totalDeclarations) * 100)
+            : 0,
         firstSessionAt,
         lastSessionAt,
       }

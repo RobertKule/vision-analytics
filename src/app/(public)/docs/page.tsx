@@ -1,8 +1,9 @@
 import type { Metadata } from 'next'
-import { BookOpen, Braces } from 'lucide-react'
+import { BookOpen } from 'lucide-react'
 import { getLocale } from '@/lib/i18n-server'
 import { type Locale } from '@/lib/i18n'
-import { getDocs, type DocsSection } from '@/lib/docs'
+import { getDocs, type DocsLocale, type DocsSection } from '@/lib/docs'
+import DocsSidebar from '@/components/public/DocsSidebar'
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getLocale()
@@ -97,9 +98,80 @@ function SectionBlocks({ section }: { section: DocsSection }) {
   )
 }
 
+/** Carte article : un `DocsSection` avec son ancre `#id` (cible du scroll-spy). */
+function ArticleCard({ section }: { section: DocsSection }) {
+  return (
+    <article
+      id={section.id}
+      className="scroll-mt-24 rounded-2xl border border-[#E5E0D8] bg-white/70 p-6 sm:p-8 dark:border-white/10 dark:bg-white/[0.03]"
+    >
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden="true"
+          className="mt-[7px] h-4 w-1 shrink-0 rounded-full bg-[#BD8F2E] dark:bg-[#D0A94E]"
+        />
+        <h3 className="text-lg font-bold tracking-tight text-[#121417] dark:text-[#FBF9F5] sm:text-xl">
+          {section.title}
+        </h3>
+      </div>
+      <div className="pl-4">
+        <SectionBlocks section={section} />
+      </div>
+    </article>
+  )
+}
+
+/** Groupe de lecture (« Guides utilisateurs » / « Référence développeur »). */
+function DocsGroup({
+  groupId,
+  title,
+  intro,
+  sections,
+}: {
+  groupId: string
+  title: string
+  intro: string
+  sections: DocsSection[]
+}) {
+  return (
+    <section id={groupId} className="scroll-mt-24">
+      <header className="mb-6">
+        <div className="flex items-center gap-2.5">
+          <BookOpen
+            aria-hidden="true"
+            className="h-5 w-5 text-[#BD8F2E] dark:text-[#D0A94E]"
+          />
+          <h2 className="text-2xl font-extrabold tracking-tight text-[#121417] dark:text-[#FBF9F5] sm:text-3xl">
+            {title}
+          </h2>
+        </div>
+        <p className="mt-1.5 text-sm text-[#4A4E57] dark:text-zinc-400">{intro}</p>
+      </header>
+      <div className="space-y-5">
+        {sections.map((section) => (
+          <ArticleCard key={section.id} section={section} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
 export default async function DocsPage() {
   const locale = await getLocale()
-  const docs = getDocs(locale as Locale)
+  const docs: DocsLocale = getDocs(locale as Locale)
+
+  const groups = [
+    {
+      id: 'guides',
+      title: docs.tocUsers,
+      sections: docs.users.map((section) => ({ id: section.id, title: section.title })),
+    },
+    {
+      id: 'reference',
+      title: docs.tocDevs,
+      sections: docs.devs.map((section) => ({ id: section.id, title: section.title })),
+    },
+  ]
 
   return (
     <div className="border-b border-[#E5E0D8] dark:border-white/10">
@@ -119,130 +191,32 @@ export default async function DocsPage() {
         </div>
       </section>
 
-      {/* ——— SOMMAIRE : deux niveaux ——— */}
-      <section className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <a
-            href="#guides"
-            className="group flex flex-col gap-2 rounded-2xl border border-[#E5E0D8] bg-white/70 p-5 transition-colors hover:border-[#BD8F2E]/60 dark:border-white/10 dark:bg-white/5 dark:hover:border-[#D0A94E]/50"
-          >
-            <span className="flex items-center gap-2 text-base font-bold text-[#121417] dark:text-[#FBF9F5]">
-              <BookOpen
-                aria-hidden="true"
-                className="h-5 w-5 text-[#BD8F2E] transition-transform group-hover:-translate-y-0.5 dark:text-[#D0A94E]"
-              />
-              {docs.tocUsers}
-            </span>
-            <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-[#4A4E57] dark:text-zinc-400">
-              {docs.users.map((section) => (
-                <span key={section.id} className="underline decoration-[#BD8F2E]/50 underline-offset-2">
-                  {section.title}
-                </span>
-              ))}
-            </span>
-          </a>
+      {/* ——— SOMMAIRE LATÉRAL + CONTENU ——— */}
+      <section className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="lg:grid lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-12">
+          <DocsSidebar
+            groups={groups}
+            label={docs.navTitle}
+            mobileLabel={docs.navTitle}
+          />
 
-          <a
-            href="#reference"
-            className="group flex flex-col gap-2 rounded-2xl border border-[#E5E0D8] bg-white/70 p-5 transition-colors hover:border-[#BD8F2E]/60 dark:border-white/10 dark:bg-white/5 dark:hover:border-[#D0A94E]/50"
-          >
-            <span className="flex items-center gap-2 text-base font-bold text-[#121417] dark:text-[#FBF9F5]">
-              <Braces
-                aria-hidden="true"
-                className="h-5 w-5 text-[#BD8F2E] transition-transform group-hover:-translate-y-0.5 dark:text-[#D0A94E]"
-              />
-              {docs.tocDevs}
-            </span>
-            <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-[#4A4E57] dark:text-zinc-400">
-              {docs.devs.slice(0, 6).map((section) => (
-                <span key={section.id} className="underline decoration-[#BD8F2E]/50 underline-offset-2">
-                  {section.title}
-                </span>
-              ))}
-            </span>
-          </a>
+          <div className="min-w-0 space-y-14">
+            <DocsGroup
+              groupId="guides"
+              title={docs.tocUsers}
+              intro={docs.usersIntro}
+              sections={docs.users}
+            />
+            <div className="h-px w-full bg-[#E5E0D8] dark:bg-white/10" aria-hidden="true" />
+            <DocsGroup
+              groupId="reference"
+              title={docs.tocDevs}
+              intro={docs.devsIntro}
+              sections={docs.devs}
+            />
+          </div>
         </div>
       </section>
-
-      {/* ——— GUIDES UTILISATEURS ——— */}
-      <DocsAudience
-        groupId="guides"
-        title={docs.tocUsers}
-        intro={docs.usersIntro}
-        sections={docs.users}
-      />
-
-      {/* ——— RÉFÉRENCE DÉVELOPPEUR ——— */}
-      <DocsAudience
-        groupId="reference"
-        title={docs.tocDevs}
-        intro={docs.devsIntro}
-        sections={docs.devs}
-      />
     </div>
-  )
-}
-
-function DocsAudience({
-  groupId,
-  title,
-  intro,
-  sections,
-}: {
-  groupId: string
-  title: string
-  intro: string
-  sections: DocsSection[]
-}) {
-  return (
-    <section
-      id={groupId}
-      className="scroll-mt-20 border-t border-[#E5E0D8] bg-[#FBF9F5] dark:border-white/10 dark:bg-[#0D1117]"
-    >
-      <div className="mx-auto w-full max-w-4xl px-4 py-14 sm:px-6 lg:px-8">
-        <header className="mb-8">
-          <h2 className="text-2xl font-extrabold tracking-tight text-[#121417] dark:text-[#FBF9F5] sm:text-3xl">
-            {title}
-          </h2>
-          <p className="mt-1.5 text-sm text-[#4A4E57] dark:text-zinc-400">{intro}</p>
-
-          {/* Sous-sommaire par section (ancres) */}
-          <nav aria-label={title} className="mt-5 flex flex-wrap gap-2">
-            {sections.map((section) => (
-              <a
-                key={section.id}
-                href={`#${section.id}`}
-                className="rounded-full border border-[#E5E0D8] bg-white/70 px-3 py-1 text-xs font-medium text-[#4A4E57] transition-colors hover:border-[#BD8F2E]/60 hover:text-[#7C5813] dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:border-[#D0A94E]/50 dark:hover:text-[#D0A94E]"
-              >
-                {section.title}
-              </a>
-            ))}
-          </nav>
-        </header>
-
-        <div className="space-y-10">
-          {sections.map((section) => (
-            <article
-              key={section.id}
-              id={section.id}
-              className="scroll-mt-24 rounded-2xl border border-[#E5E0D8] bg-white/60 p-6 sm:p-8 dark:border-white/10 dark:bg-white/[0.03]"
-            >
-              <div className="flex items-start gap-3">
-                <span
-                  aria-hidden="true"
-                  className="mt-[7px] h-4 w-1 shrink-0 rounded-full bg-[#BD8F2E] dark:bg-[#D0A94E]"
-                />
-                <h3 className="text-lg font-bold tracking-tight text-[#121417] dark:text-[#FBF9F5] sm:text-xl">
-                  {section.title}
-                </h3>
-              </div>
-              <div className="pl-4">
-                <SectionBlocks section={section} />
-              </div>
-            </article>
-          ))}
-        </div>
-      </div>
-    </section>
   )
 }

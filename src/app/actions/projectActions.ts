@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { deleteManyCloudinaryAssets } from '@/lib/cloudinary'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
 import type {
@@ -213,7 +214,10 @@ export async function getAdminProjectDetail(
         orderBy: { orderIndex: 'asc' },
         include: {
           _count: {
-            select: { observations: true, points: true },
+            select: {
+              observations: { where: { isVerified: true } },
+              points: true,
+            },
           },
         },
       },
@@ -221,8 +225,10 @@ export async function getAdminProjectDetail(
   })
   if (!project) return null
 
+  // Seules les sessions finalisées (certifiées) alimentent la vue admin : les captures
+  // « enregistrées mais non finalisées » restent transitoires et invisibles des analyses.
   const observations = await prisma.observation.findMany({
-    where: { projectId: project.id },
+    where: { projectId: project.id, isVerified: true },
     include: {
       user: {
         select: { id: true, username: true, email: true, anonymousId: true },
@@ -599,6 +605,26 @@ export async function deleteProject(projectId: string): Promise<ActionResult> {
       }
     }
 
+    // Purge des assets Cloudinary AVANT la suppression des lignes en base : on évite de
+    // laisser des images orphelines. Suppression groupée « best effort » — un échec réseau
+    // sur UN asset n'empêche pas la purge du projet ; les échecs restants sont comptés et
+    // tracés (jamais traités en silence) pour un éventuel nettoyage ultérieur.
+    const captureReferences = await prisma.observation.findMany({
+      where: { projectId },
+      select: { imagePublicId: true, imageUrl: true },
+    })
+    const cloudinaryCleanup = await deleteManyCloudinaryAssets(
+      captureReferences.map((capture) => ({
+        publicId: capture.imagePublicId,
+        imageUrl: capture.imageUrl,
+      })),
+    )
+    if (cloudinaryCleanup.failed > 0) {
+      console.error(
+        `[deleteProject] ${cloudinaryCleanup.failed}/${cloudinaryCleanup.deleted + cloudinaryCleanup.failed} assets Cloudinary non supprimés (projet ${projectId}) — nettoyage différé nécessaire.`,
+      )
+    }
+
     await prisma.$transaction(async (tx) => {
       // On purge d'abord les observations pour une suppression prévisible, puis le projet
       // (les relations restantes — vidéos, fenêtres, partages — cascadent).
@@ -610,6 +636,10 @@ export async function deleteProject(projectId: string): Promise<ActionResult> {
       action: AUDIT_ACTIONS.projectDeleted,
       entityType: 'project',
       entityId: projectId,
+      metadata: {
+        cloudinaryDeleted: cloudinaryCleanup.deleted,
+        cloudinaryFailed: cloudinaryCleanup.failed,
+      },
     })
     revalidateProject(projectId)
     return { ok: true }

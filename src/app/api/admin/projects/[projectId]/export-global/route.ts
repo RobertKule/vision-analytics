@@ -78,7 +78,9 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
   }
 
   const rows = await prisma.observation.findMany({
-    where: { projectId },
+    // Données CERTIFIÉES uniquement : le relevé brut conserve chaque capture
+    // certifiée (`isVerified`), mais ignore les sessions « en cours ».
+    where: { projectId, isVerified: true },
     include: {
       user: { select: { username: true, email: true, anonymousId: true } },
       point: { select: { pointName: true } },

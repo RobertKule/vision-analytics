@@ -4,9 +4,9 @@ import type { DetectionPoint } from '@/components/charts/chartData'
  * Graphiques vectoriels STATIQUES pour le rapport imprimable.
  *
  * Contrairement à Recharts (ResponsiveContainer / ResizeObserver), ces SVG sont
- * rendus de façon synchrone et n'ont aucune dépendance à `window` : ils s'impriment
- * nets et non rognés via `window.print()`. Palette éditoriale : or = validé,
- * ardoise = fantôme.
+ * rendus de façon synchrone et n'ont aucune dépendance à `window` : ils servent à
+ * l'aperçu du rapport et sont rasterisés en PNG haute résolution pour le PDF réel
+ * (jamais rognés ni flous). Palette éditoriale : or = validé, ardoise = fantôme.
  */
 
 const COLOR_VALID = '#9C711B' // gold-700 (lisible sur blanc à l'impression)
@@ -55,6 +55,7 @@ export function ReportDetectionChart({ points }: { points: DetectionPoint[] }) {
       role="img"
       aria-label="Répartition des détections validées et des points fantômes dans le temps"
       className="h-auto w-full"
+      data-report-chart="detections"
     >
       {/* Grille horizontale */}
       {[0, 1, 2, 3, 4].map((division) => {
@@ -115,6 +116,7 @@ export function ReportSplitRing({ valid, ghost }: { valid: number; ghost: number
       role="img"
       aria-label="Part des observations validées par rapport aux points fantômes"
       className="mx-auto h-48 w-48"
+      data-report-chart="ventilation"
     >
       <circle
         cx={center}

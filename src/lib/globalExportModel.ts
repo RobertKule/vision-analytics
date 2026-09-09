@@ -10,7 +10,38 @@
  *
  * Convention de champ « point trouvé » : cohérente avec le classeur individuel
  * (`isGhostPoint ? 'Non' : 'Oui'`). Géométrie de capture jamais persistée.
+ *
+ * ─── SÉMANTIQUE « POINT UNIQUE » (règle produit, appliquée partout) ─────────
+ * Pour UN observateur, plusieurs observations certifiées dans la MÊME fenêtre
+ * temporelle (`pointId`) du MÊME type comptent pour UN point détecté, pas N.
+ * Unités retenues (identiques dans le tableau de bord, l'Excel, le CSV, le PDF) :
+ *   - Point unique validé   = couple distinct `(observateur, pointId)` parmi les
+ *     captures certifiées NON fantômes. Un observateur ne « détecte » une fenêtre
+ *     qu'une fois, quel que soit son nombre de captures dans cette fenêtre.
+ *     Deux observateurs détectant la même fenêtre produisent DEUX points uniques.
+ *   - Fausse alerte (fantôme) = une capture `isGhostPoint = true`. Chaque fausse
+ *     alerte est un événement propre (aucune fenêtre à dédupliquer).
+ *   - Total « déclarations » = points uniques validés + fausses alertes.
+ *   - Précision = points uniques validés / (points uniques validés + fausses alertes).
+ *   - Fenêtres touchées     = `pointId` distincts détectés par au moins un
+ *     observateur (union ; ne déduplique PAS par observateur).
+ * Le relevé brut (`buildGlobalObservations`) conserve TOUTES les captures
+ * certifiées, sans déduplication : c'est la donnée brute.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
+
+const OBSERVER_POINT_SEP = '|' // séparateur de clé (jamais présent dans les ids)
+
+/** Clés `(observateur, pointId)` des captures certifiées non fantômes. */
+function uniqueValidPointKeys(rows: readonly GlobalExportRow[]): Set<string> {
+  const keys = new Set<string>()
+  for (const row of rows) {
+    if (row.isGhostPoint) continue
+    if (!row.pointId) continue
+    keys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+  }
+  return keys
+}
 
 /** Champs de projet nécessaires à l'export (tous réellement persistés). */
 export type GlobalExportProject = {
@@ -58,17 +89,26 @@ export type InterObserverAgreement = {
 /** Synthèse du projet (feuille 1). */
 export type ProjectSummary = {
   project: GlobalExportProject
+  /**
+   * Total des « déclarations » = points uniques validés (`validatedCount`) +
+   * fausses alertes (`ghostCount`). Nombre mixte (points uniques + événements
+   * fantômes), volontaire : c'est le dénominateur commun de la précision.
+   * Ne correspond PAS au nombre de captures brutes (voir `buildGlobalObservations`).
+   */
   totalObservations: number
+  /** Points uniques validés : couples distincts (observateur, pointId) non fantômes. */
   validatedCount: number
+  /** Fausses alertes : chaque capture hors trame (`isGhostPoint`) compte pour 1 événement. */
   ghostCount: number
+  /** Captures brutes sans type d'observation (attribut transversal, non dédupliqué). */
   untypedCount: number
   /** Observateurs distincts ayant soumis au moins une capture. */
   observerCount: number
-  /** Fenêtres (points) trouvées par au moins un observateur. */
+  /** Fenêtres (points) distinctes touchées par au moins un observateur (union). */
   windowsHit: number
   firstSubmittedAt: string | null
   lastSubmittedAt: string | null
-  /** Répartition par type d'observation configuré. */
+  /** Répartition par type d'observation configuré (volume de captures brutes). */
   perType: Array<{ type: string; count: number }>
   agreement: InterObserverAgreement
 }
@@ -80,15 +120,20 @@ export type ObserverMatrixEntry = {
   username: string | null
   email: string | null
   anonymousId: string
-  /** Nombre de captures par type d'observation (clé = libellé exact). */
+  /** Nombre de captures brutes par type d'observation (clé = libellé exact). */
   perType: Record<string, number>
+  /** « Déclarations » de l'observateur = points uniques validés + fausses alertes. */
   total: number
-  /** « Point trouvé ? » = captures validées (isGhostPoint false). */
+  /** « Point trouvé ? » = points uniques validés (fenêtres distinctes non fantômes). */
   pointFound: number
+  /** Fausses alertes : captures hors trame (événements, non dédupliquées). */
   ghosts: number
-  /** Fenêtres (points) distinctes touchées par cet observateur. */
+  /** Fenêtres (points) distinctes touchées par cet observateur (= `pointFound`). */
   windowsHit: number
-  /** Précision individuelle 0..1 ; null si aucune capture. */
+  /**
+   * Précision individuelle 0..1 = points uniques validés / déclarations ;
+   * null si aucune déclaration.
+   */
   precision: number | null
 }
 
@@ -101,21 +146,22 @@ export type ObserverMatrix = {
 /**
  * Statistiques agrégées par type d'observation (feuille dédiée du classeur
  * global). Chaque type porte ses compteurs TOTAUX (tous observateurs), calculés
- * sur le sous-ensemble filtré transmis au classeur.
+ * sur le sous-ensemble filtré transmis au classeur. Les compteurs « points »
+ * suivent la règle du point unique (dédupliqués par (observateur, pointId)).
  */
 export type TypeStatistic = {
   type: string
-  /** Captures totales portant ce type. */
+  /** Déclarations de ce type = points uniques validés + fausses alertes. */
   total: number
-  /** Captures validées (point trouvé, `isGhostPoint === false`). */
+  /** Points uniques validés de ce type : couples distincts (observateur, pointId). */
   validated: number
-  /** Captures hors trame / fausses alertes. */
+  /** Fausses alertes de ce type (événements, non dédupliquées). */
   ghosts: number
   /** Observateurs distincts ayant produit au moins une capture de ce type. */
   observers: number
-  /** Fenêtres (points) distinctes touchées par ce type. */
+  /** Fenêtres (points) distinctes touchées par ce type (union). */
   windowsHit: number
-  /** Précision 0..1 (validées / total) ; null si aucune capture de ce type. */
+  /** Précision 0..1 = points uniques validés / déclarations ; null si aucune. */
   precision: number | null
 }
 
@@ -129,17 +175,16 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
   const configured = cleanConfiguredTypes(project.observationTypes)
 
   type Acc = {
-    total: number
-    validated: number
     ghosts: number
     observers: Set<string>
     windows: Set<string>
+    validKeys: Set<string>
   }
   const stats = new Map<string, Acc>()
   const ensure = (type: string): Acc => {
     let acc = stats.get(type)
     if (!acc) {
-      acc = { total: 0, validated: 0, ghosts: 0, observers: new Set(), windows: new Set() }
+      acc = { ghosts: 0, observers: new Set(), windows: new Set(), validKeys: new Set() }
       stats.set(type, acc)
     }
     return acc
@@ -152,11 +197,15 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
     if (!type) continue
     if (!configured.includes(type)) observedUnknown.add(type)
     const acc = ensure(type)
-    acc.total += 1
-    if (row.isGhostPoint) acc.ghosts += 1
-    else acc.validated += 1
     acc.observers.add(row.userId)
-    if (row.pointId) acc.windows.add(row.pointId)
+    if (row.isGhostPoint) {
+      acc.ghosts += 1
+      continue
+    }
+    if (row.pointId) {
+      acc.validKeys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+      acc.windows.add(row.pointId)
+    }
   }
 
   const types = [
@@ -169,14 +218,17 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
     if (!acc) {
       return { type, total: 0, validated: 0, ghosts: 0, observers: 0, windowsHit: 0, precision: null }
     }
+    const validated = acc.validKeys.size
+    const ghosts = acc.ghosts
+    const total = validated + ghosts
     return {
       type,
-      total: acc.total,
-      validated: acc.validated,
-      ghosts: acc.ghosts,
+      total,
+      validated,
+      ghosts,
       observers: acc.observers.size,
       windowsHit: acc.windows.size,
-      precision: acc.total > 0 ? acc.validated / acc.total : null,
+      precision: total > 0 ? validated / total : null,
     }
   })
 }
@@ -236,6 +288,88 @@ export function cleanConfiguredTypes(observationTypes: readonly string[]): strin
     cleaned.push(trimmed)
   }
   return cleaned
+}
+
+// ——— Règle produit « point unique » : primitives pures de déduplication ———
+// Un point = une fenêtre temporelle (`pointId`). Pour UN observateur, plusieurs
+// captures dans la même fenêtre comptent pour UN point. Ces fonctions sont le
+// SEUL endroit qui déduplique : le tableau de bord, l'Excel, le CSV et le PDF
+// utilisent exactement les mêmes compteurs.
+
+/** Nombre d'événements fantômes (fausses alertes) : chaque capture hors trame compte. */
+export function countGhostEvents(rows: readonly GlobalExportRow[]): number {
+  let count = 0
+  for (const row of rows) if (row.isGhostPoint) count += 1
+  return count
+}
+
+/**
+ * Nombre de points uniques validés dans le sous-ensemble transmis : couples
+ * distincts `(observateur, pointId)` parmi les captures non fantômes. Si les
+ * lignes concernent un observateur unique, c'est le nombre de fenêtres distinctes
+ * qu'il a détectées (règle produit) ; si elles en couvrent plusieurs, c'est la
+ * somme, pour chaque observateur, de ses fenêtres distinctes.
+ */
+export function countUniquePoints(rows: readonly GlobalExportRow[]): number {
+  return uniqueValidPointKeys(rows).size
+}
+
+/**
+ * Fenêtres (pointId) distinctes touchées par au moins un observateur (union).
+ * Contrairement à `countUniquePoints`, deux observateurs sur la même fenêtre ne
+ * comptent qu'une fois.
+ */
+export function countWindowsHit(rows: readonly GlobalExportRow[]): number {
+  const windows = new Set<string>()
+  for (const row of rows) {
+    if (row.isGhostPoint) continue
+    if (row.pointId) windows.add(row.pointId)
+  }
+  return windows.size
+}
+
+/**
+ * Total « déclarations » = points uniques validés + fausses alertes. Nombre mixte
+ * utilisé comme dénominateur commun de la précision.
+ */
+export function countTotalClaims(rows: readonly GlobalExportRow[]): number {
+  return countUniquePoints(rows) + countGhostEvents(rows)
+}
+
+/**
+ * Précision 0..1 = points uniques validés / (points uniques validés + fausses
+ * alertes) ; null s'il n'y a aucune déclaration.
+ */
+export function precisionFromUniquePoints(rows: readonly GlobalExportRow[]): number | null {
+  const unique = countUniquePoints(rows)
+  const ghosts = countGhostEvents(rows)
+  const total = unique + ghosts
+  return total > 0 ? unique / total : null
+}
+
+/**
+ * Nombre de points uniques validés PAR TYPE d'observation. Pour chaque type
+ * (normalisé : trim), couples distincts `(observateur, pointId)` parmi les
+ * captures non fantômes portant ce type. Une même fenêtre annotée sous deux types
+ * compte donc une fois dans chaque type.
+ */
+export function countUniquePointsByType(rows: readonly GlobalExportRow[]): Map<string, number> {
+  const byType = new Map<string, Set<string>>()
+  for (const row of rows) {
+    if (row.isGhostPoint) continue
+    if (!row.pointId) continue
+    const type = row.observationType?.trim()
+    if (!type) continue
+    let keys = byType.get(type)
+    if (!keys) {
+      keys = new Set<string>()
+      byType.set(type, keys)
+    }
+    keys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+  }
+  const out = new Map<string, number>()
+  for (const [type, keys] of byType) out.set(type, keys.size)
+  return out
 }
 
 /**
@@ -298,8 +432,8 @@ export function buildProjectSummary(source: GlobalExportSource): ProjectSummary 
   const configured = cleanConfiguredTypes(project.observationTypes)
 
   const byObserver = new Set<string>()
-  const windowsHit = new Set<string>()
-  let validatedCount = 0
+  const validWindows = new Set<string>()
+  const validKeys = new Set<string>()
   let ghostCount = 0
   let untypedCount = 0
   let first: string | null = null
@@ -310,13 +444,17 @@ export function buildProjectSummary(source: GlobalExportSource): ProjectSummary 
 
   for (const row of rows) {
     byObserver.add(row.userId)
-    if (row.pointId) windowsHit.add(row.pointId)
-    if (row.isGhostPoint) ghostCount += 1
-    else validatedCount += 1
 
     const createdAt = row.createdAt
     if (first === null || createdAt < first) first = createdAt
     if (last === null || createdAt > last) last = createdAt
+
+    if (row.isGhostPoint) {
+      ghostCount += 1
+    } else if (row.pointId) {
+      validKeys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+      validWindows.add(row.pointId)
+    }
 
     const type = row.observationType?.trim()
     if (!type) {
@@ -331,14 +469,20 @@ export function buildProjectSummary(source: GlobalExportSource): ProjectSummary 
     }
   }
 
+  // Points uniques validés : couples distincts (observateur, pointId).
+  const validatedCount = validKeys.size
+  // Fausses alertes : chaque capture hors trame est un événement.
+  // Total « déclarations » = points uniques validés + fausses alertes.
+  const totalObservations = validatedCount + ghostCount
+
   return {
     project,
-    totalObservations: rows.length,
+    totalObservations,
     validatedCount,
     ghostCount,
     untypedCount,
     observerCount: byObserver.size,
-    windowsHit: windowsHit.size,
+    windowsHit: validWindows.size,
     firstSubmittedAt: first,
     lastSubmittedAt: last,
     perType: Array.from(perTypeMap.entries())
@@ -371,17 +515,25 @@ export function buildObserverMatrix(source: GlobalExportSource): ObserverMatrix 
   const observers = Array.from(byObserver.entries())
     .map(([observerId, observerRows]) => {
       const perType: Record<string, number> = {}
-      const windowsHit = new Set<string>()
-      let pointFound = 0
+      const validWindows = new Set<string>()
+      const validKeys = new Set<string>()
       let ghosts = 0
       for (const row of observerRows) {
         const type = row.observationType?.trim()
         if (type) perType[type] = (perType[type] ?? 0) + 1
-        if (row.isGhostPoint) ghosts += 1
-        else pointFound += 1
-        if (row.pointId) windowsHit.add(row.pointId)
+        if (row.isGhostPoint) {
+          ghosts += 1
+          continue
+        }
+        if (row.pointId) {
+          validKeys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+          validWindows.add(row.pointId)
+        }
       }
-      const total = observerRows.length
+      // « Point trouvé ? » = points uniques validés (fenêtres distinctes).
+      const pointFound = validKeys.size
+      // Déclarations = points uniques validés + fausses alertes (dénominateur précision).
+      const total = pointFound + ghosts
       const sample = observerRows[0]
       return {
         observerId,
@@ -393,7 +545,7 @@ export function buildObserverMatrix(source: GlobalExportSource): ObserverMatrix 
         total,
         pointFound,
         ghosts,
-        windowsHit: windowsHit.size,
+        windowsHit: validWindows.size,
         precision: total > 0 ? pointFound / total : null,
       }
     })

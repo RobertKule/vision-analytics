@@ -55,7 +55,8 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
   }
 
   const observations = await prisma.observation.findMany({
-    where: { projectId },
+    // Données CERTIFIÉES uniquement (une session « en cours » n'est jamais exportée).
+    where: { projectId, isVerified: true },
     include: {
       user: { select: { username: true, email: true, anonymousId: true } },
       point: { select: { id: true, pointName: true } },
