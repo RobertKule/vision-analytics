@@ -43,12 +43,14 @@ et reprend où il s'était arrêté.
 **Observation**
 - Double insu : l'observateur ne voit jamais les fenêtres cibles, les benchmarks ni les autres observateurs.
 - Participation **anonyme** via `/observe` ou **connectée** via `/experience`.
-- Capture annotée à l'image : horodatage vidéo, type d'observation, image annotée.
-- **Persistance immédiate par capture** : la capture confirmée est enregistrée aussitôt (image + référence en base),
-  avec un indicateur « Enregistrement en cours… » → « ✓ Capture enregistrée ».
-- **Résilience hors-ligne** : captures en attente conservées sur l'appareil, re-synchronisées à la reconnexion ;
+- Capture annotée à l'image : horodatage vidéo, type d'observation, image annotée **compressée en WebP** avant envoi.
+- **Persistance immédiate par capture** : la capture confirmée est enregistrée aussitôt (image dans **Google Drive** +
+  référence en base), avec des états honnêtes « Compression en cours… » → « Enregistrement en cours… » → « ✓ Capture enregistrée ».
+- **Résilience hors-ligne** : états `PENDING` / `SYNCING` / `SYNCED` / `FAILED`, captures en attente conservées sur
+  l'appareil, re-synchronisées à la reconnexion, **jamais renvoyées une fois synchronisées** (`clientKey`) ;
   reprise de session après rechargement ou coupure, **aucune donnée perdue**.
-- Soumission finale **légère** : validation de la session, certification, passage au statut final — pas de re-téléversement global.
+- Soumission finale **légère** : validation de la session, certification, passage au statut final — elle ne fait que
+  finaliser des captures déjà persistées, sans re-téléversement global.
 - Idempotence : `clientKey` + contrainte unique `(projectId, clientKey)` → aucune capture dupliquée après reprise.
 
 **Pilotage (Admin / Analyste)**
@@ -57,19 +59,27 @@ et reprend où il s'était arrêté.
 - Comptes (Admin) : création, activation / désactivation, suppression ; partage entre analystes.
 
 **Analyse & statistiques**
-- **Points uniques dédupliqués** : pour un observateur, plusieurs captures dans la même fenêtre temporelle
-  du même type comptent pour **un** point détecté — par type et par fenêtre. Le relevé brut conserve, lui,
-  chaque capture individuelle.
+- **Une détection analytique par (observateur + type/décalage + trame)** : plusieurs captures du même
+  observateur dans la même trame (fenêtre/type) comptent pour **une seule** détection. La règle est
+  identique partout — tableau de bord, analyses, Excel global, Excel par observateur, PDF.
+- **Probabilité de détection** : `P(détection) = Détections / (Nombre de points/trames configurés × Nombre
+  d'observateurs) × 100`.
+- **Relevés bruts** (Données brutes) : conservent **toujours** chaque capture individuelle.
 - Précision, concordance inter-observateurs, délai moyen de détection, répartition des fantômes —
-  par fenêtre cible, par passe vidéo, par observateur.
+  par fenêtre cible, par type/décalage, par observateur.
 - Graphiques (Recharts) : distribution temporelle des détections, ventilation valides / fantômes.
 
 **Exports & rapports**
-- **Excel global** (`ONA_Field_*`) : synthèse, matrice observateurs × types, relevé brut.
-- **ZIP global hiérarchique** : CSV projet + classeur Excel + captures annotées par observateur + manifeste.
-- **ZIP des captures** et classeur de données par observateur.
-- **Rapport PDF** (`ONA_Field_Rapport_<Projet>_<Date>.pdf`) : titre, métadonnées, statistiques et graphiques réels.
+- **Excel global** `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` : feuille Synthèse (Décalage / Nombre de points /
+  Observations possibles / Détections / Probabilité empirique / Interprétation, + DÉTAIL PAR POINT +
+  SYNTHÈSE PAR OBSERVATEUR), feuille Méthodologie (procédure d'analyse 1-7), une feuille par type/décalage
+  (grille Point / Trame vidéo / Observateur en 1/0, Détections, Probabilité) et Données_Brutes_Globales.
+- **Excel par observateur** `ONA_Field_Observateur_<Nom>_<Date>.xlsx` : Synthèse (points uniques détectés /
+  possibles), une feuille par type/décalage, Données brutes.
+- **Rapport PDF** `ONA_Field_Rapport_<Projet>_<Date>.pdf` : vrai fichier PDF téléchargeable via « Télécharger le
+  rapport PDF » (pas `window.print`), graphiques réels incorporés.
 - **Export PNG des graphiques** en haute résolution.
+- RBAC : l'ADMIN exporte tout ; l'ANALYST uniquement ses projets ; l'OBSERVER uniquement ses exports.
 - Chaque export est **traçé dans le journal d'audit** et **ré-authentifié côté serveur** (projet + rôle).
 
 **Plateforme**
@@ -96,8 +106,8 @@ jamais sur le proxy). Les routes d'export vérifient `session + accès projet` a
 1. L'observateur ouvre une expérience active (anonyme `/observe` ou connecté `/experience`) et **démarre une session**.
 2. Il charge sa propre copie de la vidéo (la plateforme ne diffuse jamais le média).
 3. À chaque événement, il met en pause, clique sur l'image et **confirme la capture**.
-4. **La capture est enregistrée immédiatement** : petite requête par image (upload Cloudinary + référence en base),
-   marquée « non finalisée » — elle n'apparaît dans aucune statistique.
+4. **La capture est enregistrée immédiatement** : compression WebP puis petite requête par image (upload serveur →
+   Google Drive + référence en base), marquée « non finalisée » — elle n'apparaît dans aucune statistique.
 5. En cas de coupure réseau, la capture reste **en attente sur l'appareil** (état `pending`/`failed`) et est
    re-synchronisée automatiquement à la reconnexion. La session peut être reprise après rechargement.
 6. Quand le protocole est terminé, l'observateur **soumet** : la session est validée, ses captures sont
@@ -113,8 +123,12 @@ La re-soumission est idempotente ; la confirmation ne re-téléverse pas l'ensem
 - Les fenêtres cibles (`ProjectPoint`) restent **confidentielles** ; l'affectation capture → fenêtre est
   calculée **serveur** au moment de la certification de la session.
 - Seules les sessions **certifiées** (`isVerified`) alimentent les statistiques, le tableau de bord et les exports.
-- Règle « point unique » : pour un observateur, dans une même fenêtre temporelle et un même type, une seule
-  détection est comptée (déduplication centralisée). Le relevé brut conserve toutes les captures.
+- Règle « détection analytique » : pour un observateur, plusieurs captures dans la même trame (fenêtre) du même
+  type/décalage comptent pour **une seule** détection — appliquée à l'identique au tableau de bord, aux analyses,
+  à l'Excel global, à l'Excel par observateur et au PDF. Les exports bruts (Données brutes) conservent toutes les
+  captures.
+- **Probabilité empirique de détection** : `P(détection) = Détections / (Nombre de points/trames configurés × Nombre
+  d'observateurs) × 100`.
 - Métriques : précision (détections uniques valides / total), concordance (partage d'une fenêtre entre
   observateurs), délai moyen de détection (par événement), répartition des fantômes.
 
@@ -124,22 +138,22 @@ La re-soumission est idempotente ; la confirmation ne re-téléverse pas l'ensem
 
 | Format | Contenu | Fichier |
 |--------|---------|---------|
-| Excel global | 3 feuilles : synthèse, matrice observateurs × types, relevé brut | `ONA_Field_<Projet>_*.xlsx` |
-| ZIP global | CSV projet + Excel par observateur + captures annotées + manifeste | `ONA_Field_<Projet>_*.zip` |
-| ZIP captures | captures annotées d'un projet / observateur | `*.zip` |
-| Données observateur | CSV / JSON par observateur | `*.csv` / `*.json` |
+| Excel global | Synthèse (Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation + DÉTAIL PAR POINT + SYNTHÈSE PAR OBSERVATEUR), Méthodologie (procédure 1-7), une feuille par type/décalage, Données brutes globales (chaque capture, Drive File ID inclus) | `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` |
+| Excel observateur | Synthèse (points uniques détectés / possibles), une feuille par type/décalage, Données brutes | `ONA_Field_Observateur_<Nom>_<Date>.xlsx` |
 | Rapport PDF | titre, métadonnées, KPI, graphiques réels | `ONA_Field_Rapport_<Projet>_<Date>.pdf` |
 | Graphique PNG | graphique en haute résolution | selon export |
 
-La génération Excel/ZIP/PDF est **exclusivement serveur** ; les graphiques du PDF sont rastérisés côté
-client puis ré-embarqués et **validés** avant montage. Chaque export est journalisé avec son projet et son format.
+La génération Excel/PDF est **exclusivement serveur** ; les graphiques du PDF sont rastérisés côté
+client puis ré-embarqués et **validés** avant montage. Chaque export est journalisé (`EXPORT_GLOBAL`,
+`EXPORT_OBSERVER`, `EXPORT_PDF`, `EXPORT_CHART`) avec utilisateur + projet — append-only, sans secret.
 
 ---
 
 ## Journal d'audit
 
 Toutes les actions importantes sont écrites dans un journal **append-only** (`AuditLog`) : authentification,
-comptes, projets, vidéos, observations, exports (`EXPORT_EXCEL`, `EXPORT_GLOBAL`, `EXPORT_CHART`, `EXPORT_PDF`).
+comptes, projets, vidéos, observations, téléversement/suppression d'images de capture et exports
+(`IMAGE_UPLOADED`, `IMAGE_DELETED`, `EXPORT_GLOBAL`, `EXPORT_OBSERVER`, `EXPORT_PDF`, `EXPORT_CHART`).
 Les métadonnées ne contiennent **jamais** de mot de passe, jeton ou secret. L'Admin lit le journal global et le
 filtre ; chaque autre utilisateur ne lit que sa propre activité.
 
@@ -171,19 +185,22 @@ filtre ; chaque autre utilisateur ne lit que sa propre activité.
        └───────────────┬─────────────────┴──────────────────────────┬───────┘
                        ▼                                             ▼
               ┌─────────────────────────┐                  ┌────────────────────────┐
-              │  PostgreSQL (Neon)      │                  │  Cloudinary            │
-              │  User · Project · Video │  migration      │  images des captures   │
-              │  ProjectPoint ·        │  additive       │  (deleteCloudinaryAsset)│
-              │  Observation · AuditLog│  ◄────────────  │  avant suppression DB   │
-              │  ProjectAccess         │                 └────────────────────────┘
+              │  PostgreSQL (Neon)      │                  │  Google Drive           │
+              │  User · Project · Video │  (serveur)      │  images des captures    │
+              │  ProjectPoint ·        │  upload/delete   │  (compte de service —   │
+              │  Observation · AuditLog│ ───────────────► │   jamais le navigateur) │
+              │  ProjectAccess         │                  └─────────────────────────┘
               └─────────────────────────┘
 ```
 
 Points clés :
 - Les pages rendent côté serveur ; les mutations passent par des **Server Actions gardées**.
 - Le proxy ne couvre pas `/api/*` : chaque route **s'authentifie elle-même** (cookie de session signé + garde d'accès projet).
-- Les médias vivent chez **Cloudinary** ; la base ne conserve que des **références** (`imageUrl` + `imagePublicId`).
-  Toute suppression d'une capture supprime l'asset Cloudinary **avant** la ligne en base (jamais d'orphelin silencieux).
+- Les nouvelles images des captures vivent dans **Google Drive** via une couche serveur dédiée (compte de service) ;
+  la base ne conserve que `imageUrl` (lien public) + `driveFileId` (interne serveur). Le navigateur ne dialogue
+  jamais avec Drive ni n'en voit les identifiants. Les anciennes lignes de l'ère Cloudinary restent lisibles par URL,
+  sans téléversement ni suppression via un SDK tiers. Toute suppression d'une capture supprime son fichier Drive
+  **avant** la ligne en base (jamais d'orphelin silencieux).
 - Le client **anonyme** `/observe` reste hors du proxy et hors des routes d'administration.
 
 ---
@@ -192,7 +209,7 @@ Points clés :
 
 - **Next.js 16** (App Router, Turbopack) · **React 19** · TypeScript strict
 - **Prisma 5** + **PostgreSQL (Neon)**
-- **Cloudinary** (stockage des captures annotées)
+- **Google Drive API** (stockage des captures annotées — compte de service, serveur uniquement)
 - **Tailwind CSS v4** (palette éditoriale) + **next-themes**
 - **Recharts** (graphiques), **exceljs** / **jszip** (serveur), **pdf-lib** (rapport PDF), **sonner** (toasts)
 - **Vitest** (tests unitaires purs), **ESLint 9**
@@ -222,7 +239,8 @@ npm run dev            # http://localhost:3000
 |----------|------|
 | `DATABASE_URL` | Connexion application PostgreSQL (pooler) |
 | `DIRECT_URL` | Connexion directe pour Prisma CLI / migrations |
-| `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Stockage des captures annotées |
+| `GOOGLE_DRIVE_CLIENT_EMAIL` / `GOOGLE_DRIVE_PRIVATE_KEY` | Stockage des captures annotées (compte de service Google Drive — clé PEM, retours à la ligne échappés acceptés) |
+| `GOOGLE_DRIVE_FOLDER_ID` | Optionnel mais **recommandé** — dossier Drive racine des captures. **Le dossier doit appartenir à un Google Shared Drive dont le compte de service est membre** (« Contributeur » au minimum) : un compte de service n'a pas de quota de stockage personnel, et ne peut écrire des fichiers que dans un Shared Drive. S'il est omis, le code cible la racine du compte de service, laquelle refuse les écritures (HTTP 403 « no storage quota »). |
 | `AUTH_SECRET` | Signature du cookie de session (obligatoire en production) |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | Optionnel — bootstrap du premier administrateur (`db:seed`) |
 
@@ -241,7 +259,7 @@ Modèles principaux (`prisma/schema.prisma`) :
 | `Project` | Étude (`ownerId`, `observationTypes`, `isArchived`) |
 | `Video` | Passe vidéo (`projectId`, type associé, benchmark confidentiel optionnel) |
 | `ProjectPoint` | Fenêtre cible de validation (`videoId`, `trameDebut`, `trameFin`, `pointType`) |
-| `Observation` | Capture (`clientKey`, `sessionRunId`, `isGhostPoint`, `isVerified`, `imageUrl`, `imagePublicId`), contrainte unique `(projectId, clientKey)` |
+| `Observation` | Capture (`clientKey`, `sessionRunId`, `isGhostPoint`, `isVerified`, `imageUrl` lien public, `driveFileId` interne serveur ; `imagePublicId` historique conservé en lecture seule), contrainte unique `(projectId, clientKey)` |
 | `AuditLog` | Journal append-only (`action`, `actorId`, `targetUserId`, `projectId`, `metadata`) |
 | `ProjectAccess` | Partage projet ↔ analyste |
 
@@ -266,11 +284,12 @@ Règle de production : **migrations additives uniquement**, appliquées avec `np
 ## Tests
 
 Tests unitaires **purs** (aucune base, aucun navigateur) sous `src/lib/__tests__/` : extraction des références
-Cloudinary, règles de comptage / déduplication des points uniques, gestionnaires de capture, exports, etc.
+Google Drive (URL publiques) et authentification du compte de service, règle de comptage des détections
+analytiques, gestionnaires de capture, exports, etc.
 
 ```bash
 npm test                    # suite complète
-npx vitest run src/lib/__tests__/cloudinaryRef.test.ts   # un fichier
+npx vitest run src/lib/__tests__/driveRef.test.ts   # un fichier
 ```
 
 Gates de qualité : `npx tsc --noEmit` · `npx eslint src` · `npm test` · `npm run build`.

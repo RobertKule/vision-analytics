@@ -2,22 +2,19 @@
  * Validation des variables d'environnement requises au démarrage du serveur.
  * Un message d'erreur clair est levé si une variable obligatoire est absente ou vide.
  * Ce module ne doit être importé que depuis du code serveur (Server Actions, API Routes, lib serveur).
+ *
+ * Les identifiants Google Drive (service account) ne sont PAS validés ici : ils ne sont
+ * requis qu'au moment d'une opération de stockage réelle (`src/lib/drive.ts` les résout
+ * paresseusement), pour ne pas bloquer le démarrage d'un environnement sans stockage
+ * configuré.
  */
 
 type EnvSchema = {
   DATABASE_URL: string
-  CLOUDINARY_CLOUD_NAME: string
-  CLOUDINARY_API_KEY: string
-  CLOUDINARY_API_SECRET: string
 }
 
 function validateEnv(): EnvSchema {
-  const required = [
-    'DATABASE_URL',
-    'CLOUDINARY_CLOUD_NAME',
-    'CLOUDINARY_API_KEY',
-    'CLOUDINARY_API_SECRET',
-  ] as const
+  const required = ['DATABASE_URL'] as const
 
   const missing: string[] = []
 
@@ -38,9 +35,6 @@ function validateEnv(): EnvSchema {
 
   return {
     DATABASE_URL: process.env.DATABASE_URL!,
-    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME!,
-    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY!,
-    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET!,
   }
 }
 
