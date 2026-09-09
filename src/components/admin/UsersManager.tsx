@@ -5,17 +5,22 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   AtSign,
+  BadgeCheck,
   CalendarClock,
   CirclePlus,
+  Clock3,
   Layers,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   UserRound,
   X,
 } from 'lucide-react'
 import {
+  approveUserAccount,
   createUserByAdmin,
   deleteUserByAdmin,
+  rejectUserAccount,
   setUserActive,
   setUserRole,
   type UserAdminRole,
@@ -38,6 +43,7 @@ type UsersManagerProps = {
 }
 
 type RoleTab = UserAdminRole
+type AdminTab = RoleTab | 'REQUESTS'
 
 /** Date courte + heure, localisée (dernière activité d'un observateur). */
 function formatActivityDate(iso: string, locale: Locale): string {
@@ -50,20 +56,31 @@ function formatActivityDate(iso: string, locale: Locale): string {
 
 export default function UsersManager({ locale, t, roleName, currentUserId, users }: UsersManagerProps) {
   const [adding, setAdding] = useState(false)
-  const [tab, setTab] = useState<RoleTab>('OBSERVER')
+  // Si des demandes d'accès sont en attente, on ouvre directement cet onglet.
+  const [tab, setTab] = useState<AdminTab>(() =>
+    users.some((user) => user.accountStatus !== 'APPROVED') ? 'REQUESTS' : 'OBSERVER',
+  )
+
+  // Les comptes en attente/refusés n'appartiennent pas encore aux effectifs par rôle.
+  const approved = users.filter((user) => user.accountStatus === 'APPROVED')
+  const requests = users.filter((user) => user.accountStatus !== 'APPROVED')
 
   const counts: Record<RoleTab, number> = { OBSERVER: 0, ANALYST: 0, ADMIN: 0 }
-  for (const user of users) {
+  for (const user of approved) {
     if (user.role in counts) counts[user.role as RoleTab]++
   }
 
-  const visibleUsers = users.filter((user) => user.role === tab)
-
-  const tabItems = [
+  const tabItems: Array<{ id: AdminTab; label: string; count: number }> = []
+  if (requests.length > 0) {
+    tabItems.push({ id: 'REQUESTS', label: t.requestsTab, count: requests.length })
+  }
+  tabItems.push(
     { id: 'OBSERVER', label: t.roleTabObservers, count: counts.OBSERVER },
     { id: 'ANALYST', label: t.roleTabAnalysts, count: counts.ANALYST },
     { id: 'ADMIN', label: t.roleTabAdmins, count: counts.ADMIN },
-  ]
+  )
+
+  const visibleUsers = approved.filter((user) => user.role === tab)
 
   return (
     <div className="flex flex-col gap-5">
@@ -80,23 +97,27 @@ export default function UsersManager({ locale, t, roleName, currentUserId, users
         <span className="text-xs text-zinc-400 dark:text-zinc-500">{t.subtitle}</span>
       </div>
 
-      {/* ——— Onglets par rôle : Observateurs · Analystes · Administrateurs ——— */}
+      {/* ——— Onglets : Demandes (si présentes) puis par rôle ——— */}
       <Tabs
         items={tabItems}
         active={tab}
-        onChange={(id) => setTab(id as RoleTab)}
+        onChange={(id) => setTab(id as AdminTab)}
         ariaLabel={t.title}
       />
 
       <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="flex flex-col gap-4">
-        <MembersTable
-          users={visibleUsers}
-          currentUserId={currentUserId}
-          t={t}
-          roleName={roleName}
-          locale={locale}
-          showObserverMeta={tab === 'OBSERVER'}
-        />
+        {tab === 'REQUESTS' ? (
+          <RequestsTable users={requests} t={t} roleName={roleName} locale={locale} />
+        ) : (
+          <MembersTable
+            users={visibleUsers}
+            currentUserId={currentUserId}
+            t={t}
+            roleName={roleName}
+            locale={locale}
+            showObserverMeta={tab === 'OBSERVER'}
+          />
+        )}
       </div>
 
       {adding ? (
@@ -105,10 +126,156 @@ export default function UsersManager({ locale, t, roleName, currentUserId, users
           locale={locale}
           t={t}
           roleName={roleName}
-          initialRole={tab}
+          initialRole={tab === 'REQUESTS' ? 'ANALYST' : tab}
           onClose={() => setAdding(false)}
         />
       ) : null}
+    </div>
+  )
+}
+
+/* ————————————————————————————————————————————————————————————————
+ * Demandes d'accès (inscription publique) — validation par l'ADMIN
+ * ———————————————————————————————————————————————————————————————— */
+
+function RequestsTable({
+  users,
+  t,
+  roleName,
+  locale,
+}: {
+  users: UserAdminDto[]
+  t: UsersText
+  roleName: RolesText
+  locale: Locale
+}) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+
+  const runApprove = (user: UserAdminDto) => {
+    startTransition(async () => {
+      const result = await approveUserAccount({ userId: user.id }).catch((error: unknown) => ({
+        ok: false,
+        error: friendlyActionError(error, locale),
+      }))
+      router.refresh()
+      if (result.ok) toast.success(t.approved, { description: user.email })
+      else toast.error(t.actionFailed, { description: result.error })
+    })
+  }
+
+  const runReject = (user: UserAdminDto) => {
+    toast.warning(t.rejectAsk, {
+      description: user.username || user.email,
+      action: {
+        label: t.rejectCta,
+        onClick: () => {
+          void rejectUserAccount({ userId: user.id })
+            .then((r) => {
+              router.refresh()
+              if (r.ok) toast.success(t.rejected, { description: user.email })
+              else toast.error(t.actionFailed, { description: r.error })
+            })
+            .catch((error: unknown) => {
+              toast.error(t.actionFailed, { description: friendlyActionError(error, locale) })
+            })
+        },
+      },
+      cancel: { label: t.cancel, onClick: () => {} },
+    })
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">{t.requestsSubtitle}</p>
+      {users.length === 0 ? (
+        <div className="rounded-2xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-14 text-center dark:border-zinc-700 dark:bg-zinc-900">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">{t.noRequests}</p>
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-3">
+          {users.map((user) => {
+            const pending = user.accountStatus === 'PENDING'
+            return (
+              <li
+                key={user.id}
+                className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm transition-colors dark:border-white/10 dark:bg-[#161b22]"
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-300">
+                    {user.username ? (
+                      <UserRound aria-hidden="true" className="h-5 w-5" />
+                    ) : (
+                      <AtSign aria-hidden="true" className="h-5 w-5" />
+                    )}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                        {user.username || user.email}
+                      </p>
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                          pending
+                            ? 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200'
+                            : 'bg-clay-500/10 text-clay-600 dark:bg-clay-500/15 dark:text-clay-300'
+                        }`}
+                      >
+                        {pending ? (
+                          <Clock3 aria-hidden="true" className="h-3 w-3" />
+                        ) : (
+                          <ShieldAlert aria-hidden="true" className="h-3 w-3" />
+                        )}
+                        {pending ? t.requestPending : t.requestRejected}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                      <span className="inline-flex items-center gap-1">
+                        <AtSign aria-hidden="true" className="h-3 w-3 text-gold-600 dark:text-gold-400" />
+                        {user.email}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <CalendarClock
+                          aria-hidden="true"
+                          className="h-3 w-3 text-gold-600 dark:text-gold-400"
+                        />
+                        {t.requestedLabel} {formatActivityDate(user.createdAt, locale)}
+                      </span>
+                    </p>
+                  </div>
+
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
+                    <ShieldCheck aria-hidden="true" className="mr-1 h-3 w-3" />
+                    {roleName[user.role as SessionRole]}
+                  </span>
+
+                  {pending ? (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={isPending}
+                        onClick={() => runApprove(user)}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
+                      >
+                        <BadgeCheck aria-hidden="true" className="h-4 w-4" />
+                        {t.approveCta}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runReject(user)}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-semibold text-zinc-600 transition-colors hover:border-clay-400 hover:bg-clay-50 hover:text-clay-600 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-clay-500 dark:hover:bg-clay-500/15 dark:hover:text-clay-300"
+                      >
+                        {t.rejectCta}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }
