@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { toast } from 'sonner'
+import { useTheme } from 'next-themes'
+import { Toaster as SonnerToaster, toast } from 'sonner'
 import {
   ArrowDown,
   ArrowRight,
@@ -63,6 +64,8 @@ import {
   declaredVideoIdentity,
   expectedVideoClientState,
 } from '@/lib/expectedVideo'
+import { findDuplicateCapture } from '@/lib/captureDedup'
+import { isCaptureTrulyRecorded } from '@/lib/captureNotify'
 import {
   clearStoredDraft,
   filterObservationsToPasses,
@@ -141,6 +144,14 @@ type TabPass = {
 
 /** Clé de la passe générique héritée (vide) — captures sans `videoId` rattaché. */
 const GENERIC_TAB_KEY = ''
+
+/**
+ * Toaster dédié « Capture enregistrée », rendu DANS la scène plein écran : le plein
+ * écran natif masque le conteneur global (hors de l'élément agrandi), ce second
+ * toaster (ciblé par `toasterId`) garde la notification visible pendant le plein
+ * écran sans jamais doubler celle du toaster global.
+ */
+const CAPTURE_ACK_TOASTER_ID = 'capture-ack'
 
 function normalizeTypeKey(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase()
@@ -304,6 +315,7 @@ export default function VideoAnnotator({
   initialRunId,
   singleShot,
 }: VideoAnnotatorProps) {
+  const { resolvedTheme } = useTheme()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -321,6 +333,8 @@ export default function VideoAnnotator({
   const readyRef = useRef(false)
   const playingRef = useRef(false)
   const controlsTimerRef = useRef<number | null>(null)
+  /** Miroir de `isFullscreen` lisible par la file asynchrone (aucune dépendance d'effet). */
+  const fullscreenRef = useRef(false)
 
   /**
    * Passes vidéo du projet, dans l'ordre des onglets. Une passe porte soit un type
@@ -557,6 +571,9 @@ export default function VideoAnnotator({
         await attemptServerDelete(id)
         return
       }
+      // Une capture déjà `synced` avant l'envoi (re-confirmation sans réelle
+      // transition) ne doit pas déclencher une seconde notification.
+      const alreadySyncedAtStart = current?.status === 'synced'
       const observation = observationsRef.current.find((item) => item.id === id)
       const projectIdNow = projectId
       if (!observation || !projectIdNow) {
@@ -595,7 +612,23 @@ export default function VideoAnnotator({
       }
       const deleteRequested = syncStatesRef.current[id]?.pendingServerDelete === true
       if (result.ok && !deleteRequested) {
+        // Notification GLOBALE « ✓ Capture enregistrée » : émise UNIQUEMENT quand la
+        // capture passe réellement à l'état enregistré (acquittement serveur) — jamais
+        // au clic si l'envoi est en cours ou a échoué, jamais pour un statut déjà synced.
         updateSyncMap((prev) => markSynced(prev, id))
+        if (
+          isCaptureTrulyRecorded({
+            serverOk: true,
+            deleteRequested: false,
+            alreadySynced: alreadySyncedAtStart,
+          })
+        ) {
+          if (fullscreenRef.current) {
+            toast.success(t.annotator.saveDone, { toasterId: CAPTURE_ACK_TOASTER_ID })
+          } else {
+            toast.success(t.annotator.saveDone)
+          }
+        }
         return
       }
       if (result.ok && deleteRequested) {
@@ -617,7 +650,15 @@ export default function VideoAnnotator({
         )
       }
     },
-    [attemptServerDelete, locale, projectId, t.annotator.saveFailedNetwork, t.annotator.saveFailedServer, updateSyncMap],
+    [
+      attemptServerDelete,
+      locale,
+      projectId,
+      t.annotator.saveDone,
+      t.annotator.saveFailedNetwork,
+      t.annotator.saveFailedServer,
+      updateSyncMap,
+    ],
   )
 
   /** Un passage complet : chaque capture en attente une fois, puis les suppressions orphelines. */
@@ -931,6 +972,12 @@ export default function VideoAnnotator({
       }
     }
   }, [])
+
+  // Miroir de l'état plein écran pour la file asynchrone (notification « Capture
+  // enregistrée » ciblée vers le toaster de la scène quand le plein écran est actif).
+  useEffect(() => {
+    fullscreenRef.current = isFullscreen
+  }, [isFullscreen])
 
   /**
    * Type → vidéo attendue (Partie U) : relation affichée à l'observateur ET contrôle
@@ -1361,6 +1408,21 @@ export default function VideoAnnotator({
     if (!canvas || !ctx || !video) return
     if (video.readyState < 2) return
     if (circlesRef.current.length === 0) return
+    // Garde anti-doublon : on n'accepte pas deux captures pour un même temps vidéo
+    // (même passe, même type d'observation) — l'observateur vient de l'enregistrer.
+    const duplicate = findDuplicateCapture({
+      records: observationsRef.current,
+      videoId: activeKey === GENERIC_TAB_KEY ? null : activeKey,
+      observationType: lockedType ?? (typeRequired ? nextObservationType.trim() : null),
+      timestamp: video.currentTime,
+    })
+    if (duplicate) {
+      setErrorMessage(t.annotator.captureDuplicateTime)
+      return
+    }
+    // Une capture à un instant distinct démarre avec un message propre : aucun libellé
+    // périmé (doublon précédent, type manquant…) ne reste affiché sur le nouvel essai.
+    setErrorMessage(null)
     // Recalibre le buffer avant d'y figer la frame (résolution × DPR).
     syncCanvasSize()
     const dpr = scaleRef.current || 1
@@ -1451,6 +1513,7 @@ export default function VideoAnnotator({
     projectId,
     redraw,
     syncCanvasSize,
+    t.annotator.captureDuplicateTime,
     t.annotator.remoteTaintError,
     typeRequired,
     updateCompressingMap,
@@ -2471,6 +2534,21 @@ export default function VideoAnnotator({
                   ) : null}
                 </div>
               </div>
+            ) : null}
+
+            {/* Pendant le plein écran natif, le toaster global (hors de l'élément
+                agrandi) est masqué par le navigateur : un toaster dédié, rendu dans la
+                scène et ciblé par `toasterId`, garde « ✓ Capture enregistrée » visible. */}
+            {isFullscreen ? (
+              <SonnerToaster
+                id={CAPTURE_ACK_TOASTER_ID}
+                theme={resolvedTheme === 'dark' ? 'dark' : 'light'}
+                position="bottom-center"
+                richColors
+                closeButton
+                offset={96}
+                toastOptions={{ duration: 5000 }}
+              />
             ) : null}
           </div>
         ) : (

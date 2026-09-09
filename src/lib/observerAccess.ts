@@ -17,6 +17,7 @@ import { cookies } from 'next/headers'
 import { Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
+import { classifyObserverLink } from '@/lib/observerLinkClaim'
 import {
   OBSERVER_COOKIE_NAME,
   OBSERVER_SCOPE_TTL_SECONDS,
@@ -143,10 +144,13 @@ export type OpenObserverAccessResult =
   | { kind: 'invalid' }
   | { kind: 'revoked' }
   | { kind: 'expired' }
+  | { kind: 'used' }
 
 /**
  * Valide un jeton brut reçu sur `/share/<token>` et ouvre (ou reprend) la session.
  * Le jeton brut n'est utilisé que pour calculer son empreinte — jamais stocké ni loggé.
+ * Un jeton déjà rattaché à un observateur et rouvert depuis un autre navigateur est
+ * refusé (`used`) : voir `classifyObserverLink`.
  */
 export async function openObserverAccess(rawToken: string): Promise<OpenObserverAccessResult> {
   const tokenHash = hashObserverToken(rawToken)
@@ -205,6 +209,31 @@ export async function openObserverAccess(rawToken: string): Promise<OpenObserver
     return { kind: 'expired' }
   }
 
+  // ——— Lien déjà « pris » : refus d'un autre navigateur. ———
+  // Un lien n'ouvre qu'une session pour UN observateur : dès que le jeton est
+  // rattaché (premier passage du lien, lié au navigateur de l'observateur), seul le
+  // navigateur d'origine (cookie de portée correspondant) peut le rouvrir. Tout autre
+  // navigateur est refusé — que la session soit encore EN COURS (une autre personne ne
+  // la rejoint pas) ou déjà SOUMISE (on n'expose jamais les captures du premier
+  // observateur : dès la soumission, le jeton est devenu invalide pour tout nouvel accès).
+  const ownerCookie = await readObserverScopeFromCookies()
+  const linkClaim = classifyObserverLink({
+    tokenId: token.id,
+    claimedObserverId: token.observerId,
+    cookieTokenId: ownerCookie?.tokenId ?? null,
+    cookieUid: ownerCookie?.uid ?? null,
+  })
+  if (linkClaim.kind === 'used') {
+    await recordAudit({
+      userId: null,
+      action: AUDIT_ACTIONS.observerAccessFailure,
+      entityType: 'share',
+      entityId: token.id,
+      metadata: { projectId: token.projectId, reason: 'used' },
+    })
+    return { kind: 'used' }
+  }
+
   // ——— Session ouverte (ACTIVE) ou déjà clôturée (COMPLETED → lecture seule) ———
   const completed = token.status === 'COMPLETED'
 
@@ -225,8 +254,8 @@ export async function openObserverAccess(rawToken: string): Promise<OpenObserver
     observerId = observer.id
   }
 
-  // `sessionRunId` stable : la reprise (autre navigateur, rechargement) conserve la
-  // même session d'observation.
+  // `sessionRunId` stable : la reprise depuis le navigateur d'origine (rechargement,
+  // retour via le lien) conserve la même session d'observation.
   const runId = token.sessionRunId ?? randomUUID()
   const updateData: { observerId: string; sessionRunId?: string; lastAccessedAt: Date } = {
     observerId,
