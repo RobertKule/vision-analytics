@@ -76,15 +76,47 @@ const en = {
     navHome: 'Home',
     navExperiments: 'Experiments',
     navDocs: 'Documentation',
+    navGitHub: 'View the code on GitHub',
     loginCta: 'Sign in',
     participateCta: 'Participate',
     badge: 'INDEPENDENT OBSERVATION LABORATORY',
-    heroTitleLead: 'Scientific precision &',
-    heroTitleAccent: 'visual analysis',
+    heroEyebrow: 'Scientific Observation Platform',
+    heroTitleLead: 'ONA',
+    heroTitleAccent: 'FIELD',
     heroSub:
-      'ONA Field — a scientific observation platform: join independent video-observation sessions, annotate every event, and analyze the results through cross-validated review.',
-    heroCtaPrimary: 'Start the experiment',
-    heroCtaSecondary: 'Analyst space / Sign in',
+      'A scientific platform for independent video observation. Observers annotate events in complete temporal blindness; the engine computes cross-validated concordance, ready for publication.',
+    heroCtaPrimary: 'Access the platform',
+    heroCtaSecondary: 'Read the documentation',
+    // ——— Section produit (deux colonnes) ———
+    productEyebrow: 'The observation workspace',
+    productTitle: 'Capture every event, without ever seeing the verdict.',
+    productLead:
+      'Researchers configure per-type video passes and target windows. Observers work through a dedicated annotator — fullscreen video, precise captures and offline-safe drafts that synchronize on submission.',
+    productPoints: [
+      {
+        title: 'Blind by design',
+        desc: 'Validation windows are never revealed to the observer during the session — no bias, no crossed information.',
+      },
+      {
+        title: 'Typed video passes',
+        desc: 'Each observation type is bound to its expected video; the server enforces the match before any capture is kept.',
+      },
+      {
+        title: 'Rigorous exports',
+        desc: 'Concordance, reaction delays and per-observer precision export to Excel, CSV and a printable PDF report.',
+      },
+    ],
+    productCta: 'Explore the documentation',
+    productAlt: 'ONA Field observation annotator in action',
+    // ——— Vidéo de démonstration (YouTube — emplacement préparé, URL fournie plus tard) ———
+    demoEyebrow: 'Demonstration',
+    demoTitle: 'See ONA Field in action',
+    demoLead:
+      'A short guided look at the platform — from an observer’s blind session to the validated, exportable record.',
+    demoPlay: 'Watch the demonstration',
+    demoFrameLabel: 'ONA Field demonstration video',
+    demoPlaceholderTitle: 'Demonstration video coming soon',
+    demoPlaceholderHint: 'A short guided tour will be embedded here.',
     brandLead: 'ONA',
     brandAccent: 'FIELD',
     protocolLabel: 'Protocol 2026',
@@ -195,6 +227,10 @@ const en = {
     obsTypePlaceholder: 'Select a type…',
     obsTypeMissing: 'Select the observation type of this capture.',
     lockedTypeTag: 'Fixed type',
+    // — Relation Type → vidéo attendue (contrôle client cohérent, Partie U) —
+    expectedVideoLabel: 'Expected video',
+    expectedVideoMatchTag: 'Video matches the configuration',
+    expectedVideoMismatchTag: 'Video does not match',
     // — Passes vidéo multi-vidéo / multi-types —
     tabBarAria: 'Video passes',
     tabCountLabel: '{{n}} captures',
@@ -333,7 +369,13 @@ const en = {
     loginSubtitle: 'Researchers and analysts sign in with their email or username.',
     registerTitle: 'Create your account',
     registerSubtitle:
-      'Choose an observer or analyst profile. Administrators are provisioned by the platform.',
+      'Open an analyst account: an administrator validates each request before your first sign-in.',
+    registerAnalystNote:
+      'Only analyst accounts can be created by registration. An administrator reviews and validates each request before activation.',
+    registerPendingTitle: 'Request submitted',
+    registerPendingBody:
+      'Your analyst account request has been sent. An administrator must approve it before your first sign-in — you will receive access once validated.',
+    registerPendingHint: 'Need access sooner? Contact the project administrator.',
     identifierLabel: 'Email or username',
     identifierPlaceholder: 'researcher@institute.edu',
     passwordLabel: 'Password',
@@ -553,6 +595,19 @@ const en = {
     stepsOf: 'Step {{current}} of {{total}}',
     addUserStep1: 'Account',
     addUserStep2: 'Role',
+    // — Demandes d'accès (inscription publique → validation ADMIN) —
+    requestsTab: 'Pending requests',
+    requestsSubtitle:
+      'Accounts opened by public registration must be approved by an administrator before their first sign-in.',
+    requestPending: 'Pending',
+    requestRejected: 'Rejected',
+    approveCta: 'Approve',
+    rejectCta: 'Reject',
+    approved: 'Account approved',
+    rejected: 'Request rejected',
+    requestedLabel: 'Requested on',
+    rejectAsk: 'Reject this access request?',
+    noRequests: 'No pending access request.',
   },
   analytics: {
     eyebrow: 'Scientific analytics',
@@ -682,6 +737,32 @@ const en = {
       export: 'Export',
     },
   },
+  // ——— Liens d'accès observateur (/share/…) ———
+  shareAccess: {
+    invalidTitle: 'Invalid access link',
+    invalidBody: 'This access link is not valid. Please check the link address or ask the project administrator for a new one.',
+    inactiveTitle: 'This access link is no longer active',
+    inactiveBody: 'This access link has expired or has been revoked. Ask the project administrator for a new one.',
+    closedTitle: 'This project is closed',
+    closedBody: 'The project behind this access link is no longer open for new observation sessions.',
+    contactHint: 'Contact the project administrator to receive a new link.',
+    ctaHome: 'Back to home',
+    ctaDocs: 'Documentation',
+    // ——— Accès à une session (aucun lien ouvert dans ce navigateur) ———
+    inviteOnlyTitle: 'Observation sessions are by invitation',
+    inviteOnlyBody:
+      'To take part in an observation session, open the personal access link sent to you by the project administrator. Your link opens a single project.',
+    // ——— Consultation en lecture seule (session déjà terminée) ———
+    readonlyTitle: 'Session finished',
+    readonlyBody:
+      'You have already completed this observation session. Your captures have been recorded — the project is now available in read-only mode.',
+    statValid: 'Validation windows detected',
+    statGhost: 'False alerts',
+    captureChip: 'Capture {{t}}',
+    emptyCaption: 'No capture recorded for this session.',
+    validTag: 'Detected',
+    ghostTag: 'False alert',
+  },
 }
 
 const fr: typeof en = {
@@ -740,15 +821,47 @@ const fr: typeof en = {
     navHome: 'Accueil',
     navExperiments: 'Expériences',
     navDocs: 'Documentation',
+    navGitHub: 'Voir le code sur GitHub',
     loginCta: 'Connexion',
     participateCta: 'Participer',
     badge: 'LABORATOIRE D’OBSERVATION INDÉPENDANTE',
-    heroTitleLead: 'Précision Scientifique &',
-    heroTitleAccent: 'Analyse Visuelle',
+    heroEyebrow: 'Plateforme scientifique d’observation',
+    heroTitleLead: 'ONA',
+    heroTitleAccent: 'FIELD',
     heroSub:
-      'ONA Field — plateforme scientifique d’observation : participez à des sessions d’observation vidéo indépendantes, annotez chaque événement et analysez les résultats par validation croisée.',
-    heroCtaPrimary: 'Commencer l’expérience',
-    heroCtaSecondary: 'Espace Analyste / Connexion',
+      'Une plateforme scientifique d’observation vidéo indépendante : les observateurs annotent les événements en aveugle total, le moteur calcule la concordance inter-observateurs, prête pour la publication.',
+    heroCtaPrimary: 'Accéder à la plateforme',
+    heroCtaSecondary: 'Lire la documentation',
+    // ——— Section produit (deux colonnes) ———
+    productEyebrow: 'L’espace d’observation',
+    productTitle: 'Capturez chaque événement, sans jamais voir le verdict.',
+    productLead:
+      'Les chercheurs configurent des passes vidéo par type et des fenêtres cibles. Les observateurs travaillent dans un annotateur dédié — vidéo plein écran, captures précises et brouillons sûrs hors-ligne synchronisés à la soumission.',
+    productPoints: [
+      {
+        title: 'Aveugle par conception',
+        desc: 'Les fenêtres de validation ne sont jamais révélées à l’observateur pendant la session — aucun biais, aucune information croisée.',
+      },
+      {
+        title: 'Passes vidéo typées',
+        desc: 'Chaque type d’observation est lié à sa vidéo attendue ; le serveur contrôle la correspondance avant de conserver toute capture.',
+      },
+      {
+        title: 'Exports rigoureux',
+        desc: 'Concordance, délais de réaction et précision par observateur s’exportent en Excel, CSV et rapport PDF imprimable.',
+      },
+    ],
+    productCta: 'Consulter la documentation',
+    productAlt: 'L’annotateur d’observation ONA Field en action',
+    // ——— Vidéo de démonstration (YouTube — emplacement préparé, URL fournie plus tard) ———
+    demoEyebrow: 'Démonstration',
+    demoTitle: 'Voir ONA Field en action',
+    demoLead:
+      'Un aperçu guidé et court de la plateforme — de la session en aveugle d’un observateur jusqu’à l’enregistrement validé et exportable.',
+    demoPlay: 'Voir la démonstration',
+    demoFrameLabel: 'Vidéo de démonstration ONA Field',
+    demoPlaceholderTitle: 'Vidéo de démonstration à venir',
+    demoPlaceholderHint: 'Une courte visite guidée sera intégrée ici.',
     brandLead: 'ONA',
     brandAccent: 'FIELD',
     protocolLabel: 'Protocole 2026',
@@ -859,6 +972,10 @@ const fr: typeof en = {
     obsTypePlaceholder: 'Sélectionnez un type…',
     obsTypeMissing: 'Sélectionnez le type d’observation de cette capture.',
     lockedTypeTag: 'Type fixé',
+    // — Relation Type → vidéo attendue (contrôle client cohérent, Partie U) —
+    expectedVideoLabel: 'Vidéo attendue',
+    expectedVideoMatchTag: 'Vidéo conforme',
+    expectedVideoMismatchTag: 'Vidéo non conforme',
     // — Passes vidéo multi-vidéo / multi-types —
     tabBarAria: 'Passes vidéo',
     tabCountLabel: '{{n}} capture(s)',
@@ -998,7 +1115,14 @@ const fr: typeof en = {
       'Chercheurs et analystes se connectent avec leur email ou leur nom d’utilisateur.',
     registerTitle: 'Créez votre compte',
     registerSubtitle:
-      'Choisissez un profil observateur ou analyste. Les administrateurs sont provisionnés par la plateforme.',
+      'Ouvrez un compte analyste : un administrateur valide chaque demande avant votre première connexion.',
+    registerAnalystNote:
+      'Seuls des comptes analyste peuvent être créés par inscription. Un administrateur examine puis valide chaque demande avant activation.',
+    registerPendingTitle: 'Demande envoyée',
+    registerPendingBody:
+      'Votre demande de compte analyste a bien été envoyée. Un administrateur doit la valider avant votre première connexion — vous aurez accès dès validation.',
+    registerPendingHint:
+      'Besoin d’un accès plus rapide ? Contactez l’administrateur du projet.',
     identifierLabel: 'Email ou nom d’utilisateur',
     identifierPlaceholder: 'chercheur@institut.fr',
     passwordLabel: 'Mot de passe',
@@ -1217,6 +1341,19 @@ const fr: typeof en = {
     stepsOf: 'Étape {{current}} sur {{total}}',
     addUserStep1: 'Compte',
     addUserStep2: 'Rôle',
+    // — Demandes d'accès (inscription publique → validation ADMIN) —
+    requestsTab: 'Demandes en attente',
+    requestsSubtitle:
+      'Les comptes ouverts par inscription publique doivent être validés par un administrateur avant leur première connexion.',
+    requestPending: 'En attente',
+    requestRejected: 'Refusée',
+    approveCta: 'Valider',
+    rejectCta: 'Refuser',
+    approved: 'Compte validé',
+    rejected: 'Demande refusée',
+    requestedLabel: 'Demandé le',
+    rejectAsk: 'Refuser cette demande d’accès ?',
+    noRequests: 'Aucune demande d’accès en attente.',
   },
   analytics: {
     eyebrow: 'Analyses scientifiques',
@@ -1347,6 +1484,32 @@ const fr: typeof en = {
       export: 'Export',
     },
   },
+  // ——— Liens d'accès observateur (/share/…) ———
+  shareAccess: {
+    invalidTitle: 'Lien d’accès invalide',
+    invalidBody: 'Ce lien d’accès n’est pas valide. Vérifiez l’adresse du lien ou demandez un nouveau lien à l’administrateur du projet.',
+    inactiveTitle: 'Ce lien d’accès n’est plus actif',
+    inactiveBody: 'Ce lien d’accès a expiré ou a été révoqué. Demandez un nouveau lien à l’administrateur du projet.',
+    closedTitle: 'Ce projet est clôturé',
+    closedBody: 'Le projet associé à ce lien d’accès n’accepte plus de nouvelles sessions d’observation.',
+    contactHint: 'Contactez l’administrateur du projet pour obtenir un nouveau lien.',
+    ctaHome: 'Retour à l’accueil',
+    ctaDocs: 'Documentation',
+    // ——— Accès à une session (aucun lien ouvert dans ce navigateur) ———
+    inviteOnlyTitle: 'Les sessions d’observation sont sur invitation',
+    inviteOnlyBody:
+      'Pour participer à une session d’observation, ouvrez le lien d’accès personnel qui vous a été envoyé par l’administrateur du projet. Votre lien ouvre un projet unique.',
+    // ——— Consultation en lecture seule (session déjà terminée) ———
+    readonlyTitle: 'Session terminée',
+    readonlyBody:
+      'Vous avez déjà terminé cette session d’observation. Vos captures ont été enregistrées — le projet est désormais consultable en lecture seule.',
+    statValid: 'Fenêtres de validation détectées',
+    statGhost: 'Fausses alertes',
+    captureChip: 'Capture {{t}}',
+    emptyCaption: 'Aucune capture enregistrée pour cette session.',
+    validTag: 'Détecté',
+    ghostTag: 'Fausse alerte',
+  },
 }
 
 export const dictionaries: Record<Locale, typeof en> = { en, fr }
@@ -1366,6 +1529,7 @@ export type DashboardText = Dictionary['dashboard']
 export type AnalystText = Dictionary['analyst']
 export type UsersText = Dictionary['users']
 export type AnalyticsText = Dictionary['analytics']
+export type ShareAccessText = Dictionary['shareAccess']
 
 /** Remplit un gabarit `{{cle}}` avec les valeurs fournies. */
 export function fill(template: string, values: Record<string, string | number>): string {

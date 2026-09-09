@@ -42,7 +42,7 @@ et reprend où il s'était arrêté.
 
 **Observation**
 - Double insu : l'observateur ne voit jamais les fenêtres cibles, les benchmarks ni les autres observateurs.
-- Participation **anonyme** via `/observe` ou **connectée** via `/experience`.
+- Participation **invitée par projet** via un lien de partage (`/share/<jeton>` → `/observe/<projet>`) ou **connectée** via `/experience`.
 - Capture annotée à l'image : horodatage vidéo, type d'observation, image annotée **compressée en WebP** avant envoi.
 - **Persistance immédiate par capture** : la capture confirmée est enregistrée aussitôt (image dans **Google Drive** +
   référence en base), avec des états honnêtes « Compression en cours… » → « Enregistrement en cours… » → « ✓ Capture enregistrée ».
@@ -52,11 +52,14 @@ et reprend où il s'était arrêté.
 - Soumission finale **légère** : validation de la session, certification, passage au statut final — elle ne fait que
   finaliser des captures déjà persistées, sans re-téléversement global.
 - Idempotence : `clientKey` + contrainte unique `(projectId, clientKey)` → aucune capture dupliquée après reprise.
+- **Vidéo attendue stricte** : quand un type d'observation est lié à une vidéo configurée, l'observateur doit charger **exactement** cette vidéo (identifiant de passe, sinon nom de fichier exact — jamais un préfixe). Toute autre vidéo, y compris celle d'un autre type, est refusée côté serveur (« Vidéo non autorisée ») ; côté client, la relation `Type ↓ Vidéo attendue` est affichée et l'annotation reste **désactivée** tant que la vidéo chargée ne correspond pas.
 
 **Pilotage (Admin / Analyste)**
 - Projets : contexte & protocole, types d'observation, passes vidéo (association type ↔ passe).
+- Passes vidéo : associer chaque type à sa **vidéo attendue exacte** ; **dupliquer** une passe (nouvelle entité : fenêtres copiées, jamais d'observations/captures/historique) ou la **modifier** (confirmation explicite si le type a déjà des observations — jamais de réécriture de l'historique).
 - Fenêtres de validation confidentielles en `MM:SS`, benchmark vidéo optionnel.
-- Comptes (Admin) : création, activation / désactivation, suppression ; partage entre analystes.
+- Filtre de consultation **par type** : observations, passes et fenêtres d'un projet peuvent être restreintes à un **seul** type à la fois, piloté par les types configurés (jamais codé en dur).
+- Comptes (Admin) : création, **validation des demandes d'inscription des analystes** (approbation / rejet), activation / désactivation, suppression ; partage entre analystes.
 
 **Analyse & statistiques**
 - **Une détection analytique par (observateur + type/décalage + trame)** : plusieurs captures du même
@@ -94,17 +97,27 @@ et reprend où il s'était arrêté.
 |------------|-----------|
 | **ADMIN**  | Tout : projets, utilisateurs, journal d'audit global, statistiques plateforme. Accès `/admin`. |
 | **ANALYST**| Uniquement les projets qu'il possède ou qui lui sont partagés (`ProjectAccess`) + leurs analyses/exports. |
-| **OBSERVER** | Ses propres sessions d'observation et les expériences actives. Une session connectée **écrase toujours** un identifiant d'observateur (anti-usurpation). |
+| **OBSERVER** | Les expériences ouvertes par son **lien de partage** (un jeton = un projet) et ses propres sessions. Une session connectée **écrase toujours** un identifiant d'observateur (anti-usurpation). |
 
 L'accès est revérifié à **chaque** Server Action et à **chaque** route `/api` (les routes ne s'appuient
 jamais sur le proxy). Les routes d'export vérifient `session + accès projet` avant de servir le moindre octet.
+
+### Comptes & validation
+
+- Les **analystes s'inscrivent eux-mêmes** depuis `/register` (rôle `ANALYST` fixe, aucune sélection de rôle) ;
+  le compte est créé **inactif** (`accountStatus` `PENDING`) et **aucune session n'est ouverte** à l'inscription.
+- Un compte en attente ne peut pas se connecter : un **ADMIN doit l'approuver** (ou le rejeter) depuis `/admin`.
+  L'ADMIN peut aussi désactiver / réactiver un compte ; la connexion d'un compte en attente, rejeté ou inactif
+  est bloquée (jamais de session ouverte).
+- Les **observateurs n'ont pas d'inscription publique** : leur accès provient d'un lien de partage (`/share`)
+  ou d'un compte créé par un ADMIN.
 
 ---
 
 ## Flux d'observation
 
-1. L'observateur ouvre une expérience active (anonyme `/observe` ou connecté `/experience`) et **démarre une session**.
-2. Il charge sa propre copie de la vidéo (la plateforme ne diffuse jamais le média).
+1. L'observateur ouvre une expérience : par **lien de partage** (`/share/<jeton>` → `/observe/<projet>`, accès restreint à ce seul projet, re-vérifié à chaque requête) ou **connecté** (`/experience`) — puis **démarre une session**.
+2. Il charge sa propre copie de la vidéo (la plateforme ne diffuse jamais le média). Si la passe est liée à une **vidéo attendue**, sa copie doit être **exactement** cette vidéo : sinon l'annotation reste désactivée et la capture est refusée au serveur.
 3. À chaque événement, il met en pause, clique sur l'image et **confirme la capture**.
 4. **La capture est enregistrée immédiatement** : compression WebP puis petite requête par image (upload serveur →
    Google Drive + référence en base), marquée « non finalisée » — elle n'apparaît dans aucune statistique.
@@ -115,6 +128,15 @@ jamais sur le proxy). Les routes d'export vérifient `session + accès projet` a
 
 La re-soumission est idempotente ; la confirmation ne re-téléverse pas l'ensemble des captures.
 **Aucune position spatiale de clic n'est persistée** — seule l'image annotée l'est, avec son horodatage.
+
+**Vidéo attendue (Type ↓ Vidéo).** Quand un type d'observation est associé à une passe vidéo, le serveur
+**refuse toute capture** qui n'a pas été produite sur la vidéo exactement configurée : comparaison par
+identifiant de passe, sinon par **nom de fichier normalisé exact** (dernier segment d'URL décodé ; aucune
+tolérance de préfixe ni de casse), et jamais la vidéo d'un autre type. L'interface montre la relation
+`Type ↓ Vidéo attendue` ; tant que la vidéo chargée ne correspond pas, l'annotation est désactivée et le
+message suivant s'affiche : « Cette vidéo ne correspond pas à la vidéo configurée pour ce type
+d'observation. Veuillez utiliser la vidéo fournie par l'administrateur. » Aucun contournement n'est possible
+en altérant la requête (`videoId` ou type inconnus, source absente ou différente → refus).
 
 ---
 
@@ -138,10 +160,14 @@ La re-soumission est idempotente ; la confirmation ne re-téléverse pas l'ensem
 
 | Format | Contenu | Fichier |
 |--------|---------|---------|
-| Excel global | Synthèse (Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation + DÉTAIL PAR POINT + SYNTHÈSE PAR OBSERVATEUR), Méthodologie (procédure 1-7), une feuille par type/décalage, Données brutes globales (chaque capture, Drive File ID inclus) | `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` |
-| Excel observateur | Synthèse (points uniques détectés / possibles), une feuille par type/décalage, Données brutes | `ONA_Field_Observateur_<Nom>_<Date>.xlsx` |
+| Excel global | Synthèse (Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation + DÉTAIL PAR POINT + SYNTHÈSE PAR OBSERVATEUR), Méthodologie (procédure 1-7), une feuille par type/décalage, Données brutes globales (chaque capture avec son **Lien image** Drive + Drive File ID) | `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` |
+| Excel observateur | Synthèse (points uniques détectés / possibles), une feuille par type/décalage, Données brutes (Lien image par capture le cas échéant) | `ONA_Field_Observateur_<Nom>_<Date>.xlsx` |
 | Rapport PDF | titre, métadonnées, KPI, graphiques réels | `ONA_Field_Rapport_<Projet>_<Date>.pdf` |
 | Graphique PNG | graphique en haute résolution | selon export |
+
+Chaque ligne brute d'un export inclut une colonne **« Lien image »** : le lien public
+`https://drive.google.com/file/d/<id>/view` de la capture quand son fichier Drive existe, **vide sinon** — un
+même format partout (exports globaux, par observateur et données brutes).
 
 La génération Excel/PDF est **exclusivement serveur** ; les graphiques du PDF sont rastérisés côté
 client puis ré-embarqués et **validés** avant montage. Chaque export est journalisé (`EXPORT_GLOBAL`,
@@ -164,7 +190,7 @@ filtre ; chaque autre utilisateur ne lit que sa propre activité.
 ```
                   ┌────────────────────────────────────────────────┐
                   │                 Navigateur                     │
-                  │  /observe · /experience · /admin · /analyst    │
+                  │  /share·/observe · /experience · /admin…       │
                   │  (annotation, brouillons IndexedDB, sync)      │
                   └───────────────────────┬────────────────────────┘
                                           │ HTTPS
@@ -201,7 +227,11 @@ Points clés :
   jamais avec Drive ni n'en voit les identifiants. Les anciennes lignes de l'ère Cloudinary restent lisibles par URL,
   sans téléversement ni suppression via un SDK tiers. Toute suppression d'une capture supprime son fichier Drive
   **avant** la ligne en base (jamais d'orphelin silencieux).
-- Le client **anonyme** `/observe` reste hors du proxy et hors des routes d'administration.
+- `/observe` (client observateur) reste **hors du proxy** et hors des routes d'administration.
+- L'accès observateur est **par invitation** (`/share/<jeton>` → `/observe/<projet>`) : le jeton est stocké
+  **haché**, un compte observateur lié est créé une seule fois, et un cookie signé `va_observer` (portée =
+  **un seul projet**) est re-vérifié en base à **chaque** requête — jeton révoqué ou expiré → refus.
+  `/observe` n'énumère aucune expérience : hors lien valide, il affiche un panneau « sur invitation ».
 
 ---
 
@@ -255,13 +285,14 @@ Modèles principaux (`prisma/schema.prisma`) :
 
 | Modèle | Rôle |
 |--------|------|
-| `User` | Compte (`role` : OBSERVER / ANALYST / ADMIN, `isActive`) |
+| `User` | Compte (`role` : OBSERVER / ANALYST / ADMIN, `isActive`, `accountStatus` : PENDING / APPROVED / REJECTED) |
 | `Project` | Étude (`ownerId`, `observationTypes`, `isArchived`) |
-| `Video` | Passe vidéo (`projectId`, type associé, benchmark confidentiel optionnel) |
+| `Video` | Passe vidéo (`projectId`, type associé, **source vidéo attendue exacte**, benchmark confidentiel optionnel) |
 | `ProjectPoint` | Fenêtre cible de validation (`videoId`, `trameDebut`, `trameFin`, `pointType`) |
 | `Observation` | Capture (`clientKey`, `sessionRunId`, `isGhostPoint`, `isVerified`, `imageUrl` lien public, `driveFileId` interne serveur ; `imagePublicId` historique conservé en lecture seule), contrainte unique `(projectId, clientKey)` |
 | `AuditLog` | Journal append-only (`action`, `actorId`, `targetUserId`, `projectId`, `metadata`) |
 | `ProjectAccess` | Partage projet ↔ analyste |
+| `ObserverAccessToken` | Jeton de partage observateur par projet (stocké **haché**, statut, lien vers l'observateur créé) |
 
 Règle de production : **migrations additives uniquement**, appliquées avec `npm run db:deploy`.
 
@@ -285,7 +316,8 @@ Règle de production : **migrations additives uniquement**, appliquées avec `np
 
 Tests unitaires **purs** (aucune base, aucun navigateur) sous `src/lib/__tests__/` : extraction des références
 Google Drive (URL publiques) et authentification du compte de service, règle de comptage des détections
-analytiques, gestionnaires de capture, exports, etc.
+analytiques, validation de la vidéo attendue (parties Q/U), décisions de duplication des passes vidéo (partie T),
+filtre de consultation par type (partie S), gestionnaires de capture, exports, etc.
 
 ```bash
 npm test                    # suite complète
@@ -318,7 +350,7 @@ notamment `AUTH_SECRET` (obligatoire en production), et appliquer les migrations
 ```
 src/
  ├── app/
- │   ├── (public)/            # accueil, /docs, /observe, /login, /register
+ │   ├── (public)/            # accueil, /docs, /share, /observe, /login, /register
  │   ├── (app)/               # zones connectées
  │   │   ├── admin/           # projets, utilisateurs, historique, analyses
  │   │   ├── analyst/         # projets analyste + analyses
@@ -332,7 +364,7 @@ src/
  │   ├── ui/                  # Sheet, StepperRail, VideoUrlPicker…
  │   ├── admin/  analyst/  observe/
  │   └── charts/              # ClientChart (Recharts, sûr pour le SSR)
- ├── lib/                     # auth, session, prisma, i18n, audit, exports, docs…
+ ├── lib/                     # auth, session, observerAccess, prisma, i18n, audit, exports, docs…
  ├── proxy.ts                 # middleware Next 16 — redirections RBAC
 prisma/
  ├── schema.prisma
@@ -346,7 +378,14 @@ prisma/
 
 - Mots de passe **hachés** ; sessions en cookies **signés httpOnly** ; secret via `AUTH_SECRET`.
 - Chaque Server Action et chaque route `/api` **re-vérifie** session, rôle et accès projet.
-- `/observe` reste **anonyme** et n'est pas couvert par les routes d'administration.
+- Accès observateur **par invitation** : `/share/<jeton>` ouvre un projet précis via un jeton **haché** (cookie
+  signé `va_observer`, portée = un projet, re-vérifié en base) ; `/share` et `/observe` ne relèvent d'aucune
+  route d'administration.
+- **Intégrité vidéo** : une passe typée exige sa vidéo exacte — comparaison serveur par identifiant de passe
+  puis nom de fichier normalisé (aucun préfixe) ; un `videoId`, un type ou une source altérés à la main sont
+  refusés **avant tout stockage**.
+- **Inscriptions encadrées** : les analystes s'inscrivent en `PENDING` (inactifs, aucune session) ; les
+  observateurs n'ont pas d'inscription publique (jeton de partage ou compte ADMIN) ; seul un ADMIN approuve ou rejette.
 - Anti-usurpation : une session connectée prime sur tout identifiant d'observateur fourni.
 - Confidentialité : les fenêtres cibles et benchmarks n'atteignent jamais le client observateur.
 - Journal d'audit **append-only**, sans secret ; les exports sont tracés avec projet et format.
