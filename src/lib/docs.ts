@@ -73,9 +73,9 @@ const en: DocsLocale = {
         {
           kind: 'ol',
           items: [
-            'Open the experiment page (/experience) signed in, or the public session page (/observe) as an anonymous participant.',
-            'Choose an active experiment, then start an observation session.',
-            'Load the experiment video (your own copy — the platform never streams it).',
+            'Open the experiment: signed in on the experiments page (/experience), or through your personal share link (`/share/<token>`) when an administrator invited you — each link opens exactly one project and is re-checked on every request.',
+            'Start an observation session, then load the experiment video (your own copy — the platform never streams it).',
+            'When the video pass is bound to an expected video for its observation type, the interface shows `Type ↓ Expected video`: load exactly that video. Any other file — even a similar name — is refused, and annotation stays disabled until the loaded video matches.',
             'Watch, and at each event to record, pause, click on the frame, then confirm the capture.',
             'Each confirmed capture is compressed to WebP on the device, then saved to the server immediately (upload + reference). Honest per-capture statuses — “Compression en cours…”, “Enregistrement en cours…”, then “✓ Capture enregistrée” — confirm each step; you can keep watching without waiting.',
             'Select the observation type if the study offers several, or let the video pass impose its bound type.',
@@ -98,12 +98,14 @@ const en: DocsLocale = {
         {
           kind: 'ol',
           items: [
+            'No account yet? Register on the public page (/register): your Analyst account is created pending and becomes usable only after an Administrator approves it.',
             'Consult your projects in the analyst space; each one is yours or shared with you.',
             'Create an experiment: title, context & protocol, then a target video.',
+            'Bind each observation type to the exact expected video (or keep a generic pass); duplicate a pass to build a new one or edit it when the protocol changes — a type that already has observations keeps its history, never rewritten.',
             'Define the confidential validation windows (time bounds, MM:SS) against which observer captures will be judged.',
             'Share the project with an analyst colleague by username when a review is needed.',
             'Open the analytics of a project to read precision, concordance and the ghost distribution.',
-            'Filter by observation type, video or observer, then export the results.',
+            'Restrict the consultation to a single observation type (driven by the configured types) or watch everything, then export the results.',
           ],
         },
         {
@@ -120,9 +122,11 @@ const en: DocsLocale = {
         {
           kind: 'ol',
           items: [
-            'Create projects, configure their observation types and associate video passes.',
+            'Validate pending sign-up requests: newly registered Analysts arrive as pending accounts — approve or reject them, and manage accounts (create Observers, Analysts and Administrators, activate, deactivate or delete). Only approved accounts can sign in.',
+            'Create projects, configure their observation types and associate video passes; bind each type to its exact expected video or keep a generic pass.',
+            'Duplicate a video pass to derive a new one (its windows are copied, its observation history is never) or edit an existing pass — editing a type that already has observations asks for an explicit confirmation and never rewrites history.',
             'Define target validation windows (they stay secret from observers) and the optional video benchmark.',
-            'Manage accounts: create Observers, Analysts and Administrators, activate, deactivate or delete them.',
+            'Restrict the project consultation to a single observation type, or browse everything.',
             'Archive a finished project (data is kept) or restore it.',
             'Read the activity log (who did what, on which resource, when) with filters by user, action, resource type, project and date.',
             'Follow the real statistics on the dashboard: projects, users, videos, validation rate.',
@@ -144,6 +148,10 @@ const en: DocsLocale = {
         {
           kind: 'p',
           text: 'ONA Field is a Next.js 16 App Router application (React 19, Turbopack). Pages render on the server; mutations go through Server Actions guarded on every call. A proxy (Next 16 middleware convention) redirects by role, and every /api route also authenticates itself. Tailwind v4 provides the milk / cream / ink / slate / gold editorial palette.',
+        },
+        {
+          kind: 'p',
+          text: 'The public invitation routes (`/share`, `/observe`) sit outside the proxy and outside every admin route: they self-gate on the signed observer token (`va_observer`), bound to one project and re-validated against the database on each request. `/observe` never enumerates experiments — without a valid link it only shows an invitation panel.',
         },
       ],
     },
@@ -183,7 +191,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'PostgreSQL (Neon) accessed through Prisma. Core models: User (role, isActive), Project (owner, observationTypes, isArchived), Video (bound observation type, confidential benchmark), ProjectPoint (confidential validation windows), Observation (clientKey + sessionRunId), AuditLog (append-only journal), ProjectAccess (sharing).',
+          text: 'PostgreSQL (Neon) accessed through Prisma. Core models: User (role, isActive, accountStatus — PENDING / APPROVED / REJECTED), Project (owner, observationTypes, isArchived), Video (bound observation type + exact expected video source, confidential benchmark), ProjectPoint (confidential validation windows), Observation (clientKey + sessionRunId), AuditLog (append-only journal), ProjectAccess (sharing), ObserverAccessToken (per-project share token, stored hashed, linked to its observer).',
         },
         {
           kind: 'p',
@@ -199,6 +207,10 @@ const en: DocsLocale = {
           kind: 'p',
           text: 'Passwords are hashed; sessions are signed httpOnly cookies, parsed read-only by the proxy and trusted by Server Actions. Authentication events (login success/failure, logout) are written to the audit log.',
         },
+        {
+          kind: 'p',
+          text: 'Observers have no public sign-up: an OBSERVER identity is created when a per-project share token is opened (`/share/<token>`). The raw token is hashed before storage; opening a valid link creates (once) the linked OBSERVER account and sets a signed, project-scoped HttpOnly cookie (`va_observer`) that the database re-verifies on every request — revoked or expired tokens are refused. Analysts self-register on the public page: the account is created inactive (accountStatus PENDING, no session opened) and cannot sign in until an ADMIN approves or rejects it — login of a pending/rejected/inactive account always fails without opening a session.',
+        },
       ],
     },
     {
@@ -210,7 +222,7 @@ const en: DocsLocale = {
           items: [
             'ADMIN: everything — all projects, users and the global audit log.',
             'ANALYST: only projects they own or that are shared with them (ProjectAccess).',
-            'OBSERVER: their own sessions and authorized experiments; a logged-in session always overrides an observer identifier (anti-impersonation).',
+            'OBSERVER: their own sessions and the experiments opened by their share token (one token per project); a logged-in session always overrides an observer identifier (anti-impersonation).',
             'Audit log protection: ADMIN sees all logs, ANALYST and OBSERVER only their own — the server never accepts a target userId.',
           ],
         },
@@ -239,7 +251,16 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'A project offers a set of observation types. Videos can be bound to a type: their pass then forces that type on the observer. Legacy single-video projects keep a generic pass. The observer never sees a video duration or benchmark.',
+          text: 'A project offers a set of observation types. Each video pass (Video) can be bound to one type AND to the exact expected video source. Legacy single-video projects keep a generic pass (no video bound). The observer never sees a video duration or benchmark.',
+        },
+        {
+          kind: 'ul',
+          items: [
+            'Strict expected-video validation (server, on every capture before it is stored): the pass must exist and belong to the submitted type; the declared video must be the expected one — matched by video/pass identifier, otherwise by the exact normalized file name (decoded last URL path segment; no prefix tolerance, no case folding). A video from another type, a forged videoId, an edited type or a missing source are all refused with one user-facing message and no technical detail leaked.',
+            'Client gate coherent with the server: the annotator displays the relation `Type ↓ Expected video` and disables annotation/capture while the loaded video does not match, so the refusal never surprises the observer mid-protocol. The identity policy is a single pure module shared by server and client.',
+            'Admin tooling: a video pass can be duplicated (a NEW entity — id, video and windows copied; observations, captures, drive file ids, clientKeys and audit history are never copied; targeting another configured type is allowed) or edited; editing a type that already has observations asks for an explicit confirmation and never rewrites historical data.',
+            'Consultation filter: observations, passes and windows of a project can be restricted to ONE observation type at a time, from options derived from the project’s configured types (never hardcoded).',
+          ],
         },
       ],
     },
@@ -260,8 +281,8 @@ const en: DocsLocale = {
         {
           kind: 'ul',
           items: [
-            'Global Excel export `ONA_Field_Export_Global_<Projet>_<Date>.xlsx`: a Synthèse sheet (table of Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation, with a DÉTAIL PAR POINT section and a SYNTHÈSE PAR OBSERVATEUR section), a Méthodologie sheet (PROCÉDURE D’ANALYSE 1–7 and the note that frames are the observation unit — several captures of the same observer inside the same frame count as one analytical detection), one sheet per type/décalage (grid of Point / Trame vidéo / Observer cells in 1/0, plus Détections and Probabilité), and a Données_Brutes_Globales sheet listing every capture (including its Drive file id).',
-            'Per-observer Excel export `ONA_Field_Observateur_<Nom>_<Date>.xlsx`: a Synthèse sheet (unique points detected over possible), one sheet per type/décalage and a Données_Brutes sheet.',
+            'Global Excel export `ONA_Field_Export_Global_<Projet>_<Date>.xlsx`: a Synthèse sheet (table of Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation, with a DÉTAIL PAR POINT section and a SYNTHÈSE PAR OBSERVATEUR section), a Méthodologie sheet (PROCÉDURE D’ANALYSE 1–7 and the note that frames are the observation unit — several captures of the same observer inside the same frame count as one analytical detection), one sheet per type/décalage (grid of Point / Trame vidéo / Observer cells in 1/0, plus Détections and Probabilité), and a Données_Brutes_Globales sheet listing every capture (including its Drive file id and a public Image link when the file exists).',
+            'Per-observer Excel export `ONA_Field_Observateur_<Nom>_<Date>.xlsx`: a Synthèse sheet (unique points detected over possible), one sheet per type/décalage and a Données_Brutes sheet (same Image link column).',
             'Scientific report as a real PDF file (title, metadata, KPIs and the report charts) — download button “Télécharger le rapport PDF”, filename ONA_Field_Rapport_<Projet>_<Date>.pdf.',
             'Chart PNG export (high resolution) from the analytics views.',
           ],
@@ -321,7 +342,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'code',
-          text: 'src/\n ├── app/\n │   ├── (public)/        # home, /docs, /observe, /login, /register\n │   ├── (app)/            # authed areas\n │   │   ├── admin/        # projects, users, history\n │   │   ├── analyst/      # analyst projects + analytics\n │   │   ├── dashboard/    # overview, history, activity, settings\n │   │   └── experience/   # signed-in observation\n │   ├── actions/          # Server Actions (guarded per zone)\n │   └── api/              # route handlers (self-authenticated exports)\n ├── components/\n │   ├── app/              # shell, sidebar, user actions\n │   ├── public/           # public header / footer\n │   └── ui, admin, analyst, observe…\n ├── lib/                  # auth, prisma, i18n, audit, export helpers…\n ├── proxy.ts              # Next 16 middleware — RBAC redirects\nprisma/\n ├── schema.prisma\n └── migrations/',
+          text: 'src/\n ├── app/\n │   ├── (public)/        # home, /docs, /share, /observe, /login, /register\n │   ├── (app)/            # authed areas\n │   │   ├── admin/        # projects, users, history\n │   │   ├── analyst/      # analyst projects + analytics\n │   │   ├── dashboard/    # overview, history, activity, settings\n │   │   └── experience/   # signed-in observation\n │   ├── actions/          # Server Actions (guarded per zone)\n │   └── api/              # route handlers (self-authenticated exports)\n ├── components/\n │   ├── app/              # shell, sidebar, user actions\n │   ├── public/           # public header / footer\n │   └── ui, admin, analyst, observe…\n ├── lib/                  # auth, observerAccess, prisma, i18n, audit, exports…\n ├── proxy.ts              # Next 16 middleware — RBAC redirects\nprisma/\n ├── schema.prisma\n └── migrations/',
         },
       ],
     },
@@ -363,9 +384,9 @@ const fr: DocsLocale = {
         {
           kind: 'ol',
           items: [
-            'Ouvrez la page des expériences (/experience) connecté, ou la session publique (/observe) en participant anonyme.',
-            'Choisissez une expérience active, puis démarrez une session d’observation.',
-            'Chargez la vidéo de l’expérience (votre propre copie — la plateforme ne la diffuse jamais).',
+            'Ouvrez l’expérience : connecté sur la page des expériences (/experience), ou via votre lien de partage personnel (`/share/<jeton>`) lorsqu’un administrateur vous a invité — chaque lien ouvre un seul projet et est re-vérifié à chaque requête.',
+            'Démarrez une session d’observation, puis chargez la vidéo de l’expérience (votre propre copie — la plateforme ne la diffuse jamais).',
+            'Lorsque la passe vidéo est liée à une vidéo attendue pour son type d’observation, l’interface affiche `Type ↓ Vidéo attendue` : chargez exactement cette vidéo. Tout autre fichier — même un nom proche — est refusé, et l’annotation reste désactivée tant que la vidéo chargée ne correspond pas.',
             'Regardez, puis à chaque événement à relever, mettez en pause, cliquez sur l’image puis confirmez la capture.',
             'Chaque capture confirmée est compressée en WebP sur l’appareil puis enregistrée sur le serveur immédiatement (téléversement + référence). Des états honnêtes par capture — « Compression en cours… », « Enregistrement en cours… », puis « ✓ Capture enregistrée » — le confirment ; vous pouvez continuer à regarder sans attendre.',
             'Sélectionnez le type d’observation si l’étude en propose plusieurs, ou laissez la passe vidéo imposer son type associé.',
@@ -388,12 +409,14 @@ const fr: DocsLocale = {
         {
           kind: 'ol',
           items: [
+            'Pas encore de compte ? Inscrivez-vous sur la page publique (/register) : votre compte Analyste est créé en attente et ne devient utilisable qu’après approbation par un administrateur.',
             'Consultez vos projets dans l’espace analyste ; chacun vous appartient ou vous est partagé.',
             'Créez une expérience : titre, contexte & protocole, puis une vidéo cible.',
+            'Associez chaque type d’observation à sa vidéo attendue exacte (ou gardez une passe générique) ; dupliquez une passe pour en dériver une nouvelle ou modifiez-la quand le protocole change — un type qui a déjà des observations conserve son historique, jamais réécrit.',
             'Définissez les fenêtres de validation confidentielles (bornes temporelles, MM:SS) contre lesquelles les captures des observateurs seront jugées.',
             'Partagez le projet avec un collègue analyste (par nom d’utilisateur) lorsqu’une relecture est nécessaire.',
             'Ouvrez les analyses d’un projet pour lire précision, concordance et répartition des fantômes.',
-            'Filtrez par type d’observation, vidéo ou observateur, puis exportez les résultats.',
+            'Restreignez la consultation à un seul type d’observation (piloté par les types configurés) ou parcourez tout, puis exportez les résultats.',
           ],
         },
         {
@@ -410,9 +433,11 @@ const fr: DocsLocale = {
         {
           kind: 'ol',
           items: [
-            'Créez les projets, configurez leurs types d’observation et associez les passes vidéo.',
+            'Validez les demandes d’inscription en attente : les analystes nouvellement inscrits arrivent en compte en attente — approuvez-les ou rejetez-les, et gérez les comptes (créez observateurs, analystes et administrateurs, activez, désactivez ou supprimez). Seuls les comptes approuvés peuvent se connecter.',
+            'Créez les projets, configurez leurs types d’observation et associez les passes vidéo ; liez chaque type à sa vidéo attendue exacte ou gardez une passe générique.',
+            'Dupliquez une passe vidéo pour en dériver une nouvelle (ses fenêtres sont copiées, jamais son historique d’observations) ou modifiez une passe existante — modifier un type qui possède déjà des observations demande une confirmation explicite et ne réécrit jamais l’historique.',
             'Définissez les fenêtres cibles de validation (confidentielles pour les observateurs) et le benchmark vidéo optionnel.',
-            'Gérez les comptes : créez observateurs, analystes et administrateurs, activez, désactivez ou supprimez.',
+            'Restreignez la consultation du projet à un seul type d’observation, ou parcourez tout.',
             'Archivez un projet terminé (les données sont conservées) ou restaurez-le.',
             'Consultez le journal d’activité (qui a fait quoi, sur quelle ressource, quand) avec des filtres par utilisateur, action, type de ressource, projet et date.',
             'Suivez les statistiques réelles du tableau de bord : projets, utilisateurs, vidéos, taux de validation.',
@@ -434,6 +459,10 @@ const fr: DocsLocale = {
         {
           kind: 'p',
           text: 'ONA Field est une application Next.js 16 App Router (React 19, Turbopack). Les pages sont rendues côté serveur ; les mutations passent par des Server Actions gardées à chaque appel. Un proxy (convention middleware Next 16) redirige selon le rôle, et chaque route /api s’authentifie également elle-même. Tailwind v4 fournit la palette éditoriale lait / crème / encre / ardoise / or.',
+        },
+        {
+          kind: 'p',
+          text: 'Les routes publiques d’invitation (`/share`, `/observe`) sont hors du proxy et hors de toute route d’administration : elles s’autogardent sur le jeton observateur signé (`va_observer`), lié à un seul projet et re-validé en base à chaque requête. `/observe` n’énumère jamais d’expériences — sans lien valide, il n’affiche qu’un panneau « sur invitation ».',
         },
       ],
     },
@@ -473,7 +502,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'PostgreSQL (Neon) via Prisma. Modèles principaux : User (role, isActive), Project (propriétaire, observationTypes, isArchived), Video (type associé, benchmark confidentiel), ProjectPoint (fenêtres de validation confidentielles), Observation (clientKey + sessionRunId), AuditLog (journal append-only), ProjectAccess (partage).',
+          text: 'PostgreSQL (Neon) via Prisma. Modèles principaux : User (role, isActive, accountStatus — PENDING / APPROVED / REJECTED), Project (propriétaire, observationTypes, isArchived), Video (type associé + source vidéo attendue exacte, benchmark confidentiel), ProjectPoint (fenêtres de validation confidentielles), Observation (clientKey + sessionRunId), AuditLog (journal append-only), ProjectAccess (partage), ObserverAccessToken (jeton de partage par projet, stocké haché, lié à son observateur).',
         },
         {
           kind: 'p',
@@ -489,6 +518,10 @@ const fr: DocsLocale = {
           kind: 'p',
           text: 'Les mots de passe sont hachés ; les sessions sont des cookies signés httpOnly, lus en lecture seule par le proxy et fiabilisés par les Server Actions. Les événements d’authentification (succès/échec de connexion, déconnexion) sont écrits dans le journal d’audit.',
         },
+        {
+          kind: 'p',
+          text: 'Les observateurs n’ont pas d’inscription publique : une identité OBSERVER est créée à l’ouverture d’un jeton de partage par projet (`/share/<jeton>`). Le jeton brut est haché avant stockage ; ouvrir un lien valide crée (une seule fois) le compte observateur lié et pose un cookie signé HttpOnly limité au projet (`va_observer`), re-vérifié en base à chaque requête — un jeton révoqué ou expiré est refusé. Les analystes s’inscrivent sur la page publique : le compte est créé inactif (accountStatus PENDING, aucune session ouverte) et ne peut se connecter qu’après approbation ou rejet par un ADMIN — la connexion d’un compte en attente, rejeté ou inactif échoue toujours sans ouvrir de session.',
+        },
       ],
     },
     {
@@ -500,7 +533,7 @@ const fr: DocsLocale = {
           items: [
             'ADMIN : tout — tous les projets, utilisateurs et le journal d’audit global.',
             'ANALYST : uniquement ses projets ou ceux partagés avec lui (ProjectAccess).',
-            'OBSERVER : ses propres sessions et expériences autorisées ; une session connectée écrase toujours un identifiant d’observateur (anti-usurpation).',
+            'OBSERVER : ses propres sessions et les expériences ouvertes par son jeton de partage (un jeton = un projet) ; une session connectée écrase toujours un identifiant d’observateur (anti-usurpation).',
             'Protection du journal : l’ADMIN voit tous les journaux, ANALYST et OBSERVER uniquement les leurs — le serveur n’accepte jamais un userId cible.',
           ],
         },
@@ -529,7 +562,16 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Un projet propose un ensemble de types d’observation. Les vidéos peuvent être associées à un type : leur passe impose alors ce type à l’observateur. Les projets historiques à vidéo unique conservent une passe générique. L’observateur ne voit jamais la durée ni le benchmark d’une vidéo.',
+          text: 'Un projet propose un ensemble de types d’observation. Chaque passe vidéo (Video) peut être liée à un type ET à la source vidéo attendue exacte. Les projets historiques à vidéo unique conservent une passe générique (aucune vidéo liée). L’observateur ne voit jamais la durée ni le benchmark d’une vidéo.',
+        },
+        {
+          kind: 'ul',
+          items: [
+            'Validation stricte de la vidéo attendue (serveur, sur chaque capture avant tout stockage) : la passe doit exister et appartenir au type soumis ; la vidéo déclarée doit être celle attendue — égalité par identifiant de passe, sinon par nom de fichier normalisé exact (dernier segment d’URL décodé ; aucune tolérance de préfixe, aucune insensibilité à la casse). La vidéo d’un autre type, un videoId forgé, un type modifié ou une source absente sont refusés avec un seul message utilisateur, sans fuite de détail technique.',
+            'Contrôle client cohérent avec le serveur : l’annotateur affiche la relation `Type ↓ Vidéo attendue` et désactive annotation/capture tant que la vidéo chargée ne correspond pas, si bien que le refus ne surprend jamais l’observateur en cours de protocole. La politique d’identité est un module pur unique partagé par le serveur et le client.',
+            'Outillage admin : une passe vidéo peut être dupliquée (une NOUVELLE entité — identifiant, vidéo et fenêtres copiés ; observations, captures, identifiants Drive, clientKeys et historique d’audit jamais copiés ; viser un autre type configuré est permis) ou modifiée ; modifier un type qui possède déjà des observations demande une confirmation explicite et ne réécrit jamais l’historique.',
+            'Filtre de consultation : observations, passes et fenêtres d’un projet peuvent être restreintes à UN seul type d’observation à la fois, à partir d’options dérivées des types configurés du projet (jamais codé en dur).',
+          ],
         },
       ],
     },
@@ -550,8 +592,8 @@ const fr: DocsLocale = {
         {
           kind: 'ul',
           items: [
-            'Export global Excel `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` : une feuille Synthèse (tableau Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation, avec une section DÉTAIL PAR POINT et une section SYNTHÈSE PAR OBSERVATEUR), une feuille Méthodologie (PROCÉDURE D’ANALYSE 1–7 et la note « Les trames constituent l’unité d’observation. Plusieurs captures d’un même observateur dans une même trame constituent une seule détection analytique. »), une feuille par type/décalage (grille Point / Trame vidéo / Observateur en cellules 1/0, avec Détections et Probabilité), et une feuille Données_Brutes_Globales listant chaque capture (identifiant Drive inclus).',
-            'Export Excel par observateur `ONA_Field_Observateur_<Nom>_<Date>.xlsx` : une feuille Synthèse (points uniques détectés sur possibles), une feuille par type/décalage et une feuille Données_Brutes.',
+            'Export global Excel `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` : une feuille Synthèse (tableau Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation, avec une section DÉTAIL PAR POINT et une section SYNTHÈSE PAR OBSERVATEUR), une feuille Méthodologie (PROCÉDURE D’ANALYSE 1–7 et la note « Les trames constituent l’unité d’observation. Plusieurs captures d’un même observateur dans une même trame constituent une seule détection analytique. »), une feuille par type/décalage (grille Point / Trame vidéo / Observateur en cellules 1/0, avec Détections et Probabilité), et une feuille Données_Brutes_Globales listant chaque capture (identifiant Drive inclus et lien public « Lien image » vers le fichier quand il existe).',
+            'Export Excel par observateur `ONA_Field_Observateur_<Nom>_<Date>.xlsx` : une feuille Synthèse (points uniques détectés sur possibles), une feuille par type/décalage et une feuille Données_Brutes (même colonne Lien image).',
             'Rapport scientifique en vrai fichier PDF (titre, métadonnées, indicateurs et graphiques du rapport) — bouton « Télécharger le rapport PDF », fichier ONA_Field_Rapport_<Projet>_<Date>.pdf.',
             'Export PNG des graphiques (haute résolution) depuis les vues d’analyses.',
           ],
@@ -611,7 +653,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'code',
-          text: 'src/\n ├── app/\n │   ├── (public)/        # accueil, /docs, /observe, /login, /register\n │   ├── (app)/            # zones connectées\n │   │   ├── admin/        # projets, utilisateurs, historique\n │   │   ├── analyst/      # projets analyste + analyses\n │   │   ├── dashboard/    # vue d’ensemble, historique, activité, réglages\n │   │   └── experience/   # observation connectée\n │   ├── actions/          # Server Actions (gardées par zone)\n │   └── api/              # gestionnaires de routes (exports auto-authentifiés)\n ├── components/\n │   ├── app/              # coquille, barre latérale, actions utilisateur\n │   ├── public/           # en-tête / pied de page publics\n │   └── ui, admin, analyst, observe…\n ├── lib/                  # auth, prisma, i18n, audit, exports…\n ├── proxy.ts              # middleware Next 16 — redirections RBAC\nprisma/\n ├── schema.prisma\n └── migrations/',
+          text: 'src/\n ├── app/\n │   ├── (public)/        # accueil, /docs, /share, /observe, /login, /register\n │   ├── (app)/            # zones connectées\n │   │   ├── admin/        # projets, utilisateurs, historique\n │   │   ├── analyst/      # projets analyste + analyses\n │   │   ├── dashboard/    # vue d’ensemble, historique, activité, réglages\n │   │   └── experience/   # observation connectée\n │   ├── actions/          # Server Actions (gardées par zone)\n │   └── api/              # gestionnaires de routes (exports auto-authentifiés)\n ├── components/\n │   ├── app/              # coquille, barre latérale, actions utilisateur\n │   ├── public/           # en-tête / pied de page publics\n │   └── ui, admin, analyst, observe…\n ├── lib/                  # auth, observerAccess, prisma, i18n, audit, exports…\n ├── proxy.ts              # middleware Next 16 — redirections RBAC\nprisma/\n ├── schema.prisma\n └── migrations/',
         },
       ],
     },

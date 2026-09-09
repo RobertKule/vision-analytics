@@ -5,7 +5,6 @@ import {
   closeSession,
   getCurrentSession,
   registerUser,
-  type RegisterableRole,
 } from '@/lib/auth'
 import type { SessionRole } from '@/lib/session'
 import type { Locale } from '@/lib/i18n'
@@ -21,16 +20,35 @@ export type SessionInfo = {
   role: SessionRole
 } | null
 
-/** Messages d'erreur localisés (EN / FR) selon la langue de l'interface. */
-function loginMessages(locale: Locale, code: 'invalid_credentials' | 'account_inactive') {
-  const en =
-    code === 'invalid_credentials'
-      ? 'Invalid email / username or password.'
-      : 'This account has been deactivated. Please contact an administrator.'
-  const fr =
-    code === 'invalid_credentials'
-      ? 'Email / nom d’utilisateur ou mot de passe invalide.'
-      : 'Ce compte a été désactivé. Contactez un administrateur.'
+/**
+ * Messages d'erreur localisés (EN / FR) selon la langue de l'interface.
+ *
+ * `account_pending` / `account_rejected` couvrent l'état d'une demande de compte
+ * ANALYST issue de l'inscription publique (validée / refusée par un ADMIN).
+ */
+function loginMessages(
+  locale: Locale,
+  code: 'invalid_credentials' | 'account_inactive' | 'account_pending' | 'account_rejected',
+) {
+  const pairs: Record<typeof code, [string, string]> = {
+    invalid_credentials: [
+      'Invalid email / username or password.',
+      'Email / nom d’utilisateur ou mot de passe invalide.',
+    ],
+    account_inactive: [
+      'This account has been deactivated. Please contact an administrator.',
+      'Ce compte a été désactivé. Contactez un administrateur.',
+    ],
+    account_pending: [
+      'Your request is pending validation. An administrator must approve your account before you can sign in.',
+      'Votre demande est en attente de validation. Un administrateur doit valider votre compte avant votre première connexion.',
+    ],
+    account_rejected: [
+      'Your access request has been declined. Please contact the project administrator.',
+      'Votre demande d’accès a été refusée. Contactez l’administrateur du projet.',
+    ],
+  }
+  const [en, fr] = pairs[code]
   return locale === 'fr' ? fr : en
 }
 
@@ -78,12 +96,15 @@ export async function login(input: {
   }
 }
 
-/** Inscription publique (ANALYST / OBSERVER) — ouvre la session immédiatement. */
+/**
+ * Inscription publique — dépose une demande de compte ANALYST (rôle unique de
+ * l'inscription). Aucune session n'est ouverte : le compte reste inactif jusqu'à
+ * la validation par un ADMIN (`approveUserAccount`).
+ */
 export async function register(input: {
   username: string
   email: string
   password: string
-  role: RegisterableRole
   locale?: Locale
 }): Promise<AuthResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : 'en'
@@ -91,23 +112,17 @@ export async function register(input: {
     username: input?.username ?? '',
     email: input?.email ?? '',
     password: input?.password ?? '',
-    role: input?.role ?? 'OBSERVER',
   })
 
   if (result.ok) {
     await recordAudit({
-      userId: result.session.uid,
-      action: AUDIT_ACTIONS.userCreated,
+      userId: result.userId,
+      action: AUDIT_ACTIONS.userSignupRequested,
       entityType: 'user',
-      entityId: result.session.uid,
-      metadata: { role: result.session.role, source: 'self-registration' },
+      entityId: result.userId,
+      metadata: { role: 'ANALYST', status: 'PENDING', source: 'self-registration' },
     })
-    return {
-      ok: true,
-      email: result.session.email,
-      username: result.session.username,
-      role: result.session.role,
-    }
+    return { ok: true, email: result.email, username: null, role: 'ANALYST' }
   }
 
   /** Union des codes d'erreur retournés par registerUser (dérivée, sans dérive possible). */
@@ -129,10 +144,6 @@ export async function register(input: {
     username_taken: [
       'This username is already taken.',
       'Ce nom d’utilisateur est déjà pris.',
-    ],
-    invalid_role: [
-      'This role cannot be created through registration.',
-      'Ce rôle ne peut pas être créé par inscription.',
     ],
   }
   const [en, fr] = messages[result.code]

@@ -74,6 +74,56 @@ function freezeAndFilter(worksheet: ExcelJS.Worksheet, lastColumn: number, rowCo
   }
 }
 
+/**
+ * Largeur lisible des colonnes du relevé brut (indexées par en-tête). Les URL et
+ * identifiants Drive sont volontairement plus larges que la largeur générique.
+ */
+const LEDGER_COLUMN_WIDTHS: Record<string, number> = {
+  'Minuterie (MM:SS)': 16,
+  "Type d'observation": 22,
+  'Point trouvé ?': 16,
+  'Fenêtre cible': 24,
+  'Trame vidéo': 26,
+  Observateur: 24,
+  Email: 26,
+  'Identifiant anonyme': 20,
+  'Coordonnées (X, Y)': 18,
+  Statut: 26,
+  'Image (URL)': 50,
+  'Drive File ID': 26,
+  'Lien image': 54,
+  'Date de Capture': 22,
+}
+
+function ledgerWidth(header: string): number {
+  return LEDGER_COLUMN_WIDTHS[header] ?? Math.max(header.length + 6, 18)
+}
+
+/**
+ * Valeurs d'une ligne de relevé brut, indexées par en-tête — un SEUL endroit qui
+ * mappe une `LedgerObservation` vers les colonnes partagées (Parties R & V : la
+ * colonne « Lien image » dérive du `driveFileId`, vide si absente). Utilisé par
+ * le relevé global ET le relevé individuel (mêmes en-têtes, même source).
+ */
+function ledgerRowValues(observation: LedgerObservation): Record<string, string | number> {
+  return {
+    [LEDGER_HEADERS[0]]: observation.timecode,
+    [LEDGER_HEADERS[1]]: observation.observationType ?? '',
+    [LEDGER_HEADERS[2]]: observation.pointFound,
+    [LEDGER_HEADERS[3]]: observation.pointLabel ?? '',
+    [LEDGER_HEADERS[4]]: observation.videoName,
+    [LEDGER_HEADERS[5]]: observation.observerName,
+    [LEDGER_HEADERS[6]]: observation.email ?? '',
+    [LEDGER_HEADERS[7]]: observation.anonymousId,
+    [LEDGER_HEADERS[8]]: '', // Coordonnées (X, Y) — non persistées
+    [LEDGER_HEADERS[9]]: observation.status,
+    [LEDGER_HEADERS[10]]: observation.imageUrl,
+    [LEDGER_HEADERS[11]]: observation.driveFileId,
+    [LEDGER_HEADERS[12]]: observation.imageLink,
+    [LEDGER_HEADERS[13]]: observation.capturedAt,
+  }
+}
+
 function addDataBars(
   worksheet: ExcelJS.Worksheet,
   range: string,
@@ -392,27 +442,13 @@ function writeLedgerSheet(
   sheet.columns = LEDGER_HEADERS.map((header) => ({
     header,
     key: header,
-    width: Math.max(header.length + 6, 18),
+    width: ledgerWidth(header),
   }))
 
   styleHeaderRow(sheet.getRow(1))
 
   ledger.forEach((observation) => {
-    sheet.addRow({
-      [LEDGER_HEADERS[0]]: observation.timecode,
-      [LEDGER_HEADERS[1]]: observation.observationType ?? '',
-      [LEDGER_HEADERS[2]]: observation.pointFound,
-      [LEDGER_HEADERS[3]]: observation.pointLabel ?? '',
-      [LEDGER_HEADERS[4]]: observation.videoName,
-      [LEDGER_HEADERS[5]]: observation.observerName,
-      [LEDGER_HEADERS[6]]: observation.email ?? '',
-      [LEDGER_HEADERS[7]]: observation.anonymousId,
-      [LEDGER_HEADERS[8]]: '', // Coordonnées (X, Y) — non persistées
-      [LEDGER_HEADERS[9]]: observation.status,
-      [LEDGER_HEADERS[10]]: observation.imageUrl,
-      [LEDGER_HEADERS[11]]: observation.driveFileId,
-      [LEDGER_HEADERS[12]]: observation.capturedAt,
-    })
+    sheet.addRow(ledgerRowValues(observation))
   })
 
   freezeAndFilter(sheet, LEDGER_HEADERS.length, sheet.rowCount)
@@ -642,12 +678,14 @@ function writeObserverTypeDetailSheet(
     'Trame vidéo',
     'Statut',
     'Image (URL)',
+    'Drive File ID',
+    'Lien image',
     'Date de Capture',
   ]
   sheet.columns = headers.map((header, index) => ({
     header,
     key: header,
-    width: [18, 16, 24, 24, 26, 58, 24][index] ?? 20,
+    width: [18, 16, 24, 24, 26, 50, 26, 54, 24][index] ?? 20,
   }))
   styleHeaderRow(sheet.getRow(1))
 
@@ -670,7 +708,9 @@ function writeObserverTypeDetailSheet(
       [headers[3]]: observation.videoName,
       [headers[4]]: observation.status,
       [headers[5]]: observation.imageUrl,
-      [headers[6]]: observation.capturedAt,
+      [headers[6]]: observation.driveFileId,
+      [headers[7]]: observation.imageLink,
+      [headers[8]]: observation.capturedAt,
     })
   })
 
@@ -687,26 +727,12 @@ function writeObserverLedgerSheet(
   sheet.columns = LEDGER_HEADERS.map((header) => ({
     header,
     key: header,
-    width: Math.max(header.length + 4, 16),
+    width: ledgerWidth(header),
   }))
   styleHeaderRow(sheet.getRow(1))
 
   ledger.forEach((observation) => {
-    sheet.addRow({
-      [LEDGER_HEADERS[0]]: observation.timecode,
-      [LEDGER_HEADERS[1]]: observation.observationType ?? '',
-      [LEDGER_HEADERS[2]]: observation.pointFound,
-      [LEDGER_HEADERS[3]]: observation.pointLabel ?? '',
-      [LEDGER_HEADERS[4]]: observation.videoName,
-      [LEDGER_HEADERS[5]]: observation.observerName,
-      [LEDGER_HEADERS[6]]: observation.email ?? '',
-      [LEDGER_HEADERS[7]]: observation.anonymousId,
-      [LEDGER_HEADERS[8]]: '', // Coordonnées (X, Y) — non persistées
-      [LEDGER_HEADERS[9]]: observation.status,
-      [LEDGER_HEADERS[10]]: observation.imageUrl,
-      [LEDGER_HEADERS[11]]: observation.driveFileId,
-      [LEDGER_HEADERS[12]]: observation.capturedAt,
-    })
+    sheet.addRow(ledgerRowValues(observation))
   })
 
   freezeAndFilter(sheet, LEDGER_HEADERS.length, sheet.rowCount)

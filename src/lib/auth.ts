@@ -9,8 +9,10 @@
  *   par le seed (`prisma/seed.ts`) à partir de SEED_ADMIN_EMAIL /
  *   SEED_ADMIN_PASSWORD (stratégie de bootstrap, optionnelle et idempotente),
  *   puis géré comme n'importe quel utilisateur de la base.
- * — Les comptes ANALYST / OBSERVER sont créés par inscription (registerUser) —
- *   jamais de rôle ADMIN via l'inscription publique.
+ * — L'inscription publique ne crée QUE des demandes de compte ANALYST (en attente
+ *   de validation ADMIN). Les comptes OBSERVER sont créés par un ADMIN (users
+ *   management) ou via le mécanisme d'accès par jeton projet ; ADMIN jamais par
+ *   l'inscription publique.
  * — Cookie de session signé via src/lib/session.ts (unique pour tous les rôles).
  *
  * En production, AUTH_SECRET (clé de signature des sessions) est obligatoire.
@@ -35,9 +37,6 @@ const ROLE_TO_SESSION: Record<Role, SessionRole> = {
   [Role.ANALYST]: 'ANALYST',
   [Role.OBSERVER]: 'OBSERVER',
 }
-
-/** Rôles ouverts à l'inscription publique (ADMIN est réservé au seed / aux administrateurs). */
-export type RegisterableRole = 'ANALYST' | 'OBSERVER'
 
 // ——— Cookies de session ———
 
@@ -99,10 +98,10 @@ export async function getCurrentAdmin(): Promise<Session | null> {
   return session?.role === 'ADMIN' ? session : null
 }
 
-// ——— Inscription publique (ANALYST / OBSERVER) ———
+// ——— Inscription publique (ANALYST uniquement, validée par un ADMIN) ———
 
 export type RegisterResult =
-  | { ok: true; session: Session }
+  | { ok: true; userId: string; email: string }
   | {
       ok: false
       code:
@@ -111,7 +110,6 @@ export type RegisterResult =
         | 'weak_password'
         | 'email_taken'
         | 'username_taken'
-        | 'invalid_role'
     }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -121,21 +119,24 @@ function normalizeEmail(value: string): string {
   return value.trim().toLowerCase()
 }
 
-/** Inscrit un compte ANALYST ou OBSERVER et ouvre immédiatement sa session. */
+/**
+ * Dépose une DEMANDE de compte ANALYST (rôle unique de l'inscription publique).
+ *
+ * Le compte est créé inactif (`isActive = false`) en attente de validation
+ * (`accountStatus = 'PENDING'`) et AUCUNE session n'est ouverte : un ADMIN doit
+ * l'approuver (voir `approveUserAccount`) avant la première connexion. Les rôles
+ * OBSERVER et ADMIN ne sont jamais créés par l'inscription publique — OBSERVER
+ * provient d'un ADMIN ou du mécanisme d'accès par jeton projet.
+ */
 export async function registerUser(input: {
   username: string
   email: string
   password: string
-  role: RegisterableRole
 }): Promise<RegisterResult> {
   const email = normalizeEmail(input?.email ?? '')
   const username = (input?.username ?? '').trim()
   const password = typeof input?.password === 'string' ? input.password : ''
-  const role = input?.role
 
-  if (role !== 'ANALYST' && role !== 'OBSERVER') {
-    return { ok: false, code: 'invalid_role' }
-  }
   if (!EMAIL_PATTERN.test(email)) {
     return { ok: false, code: 'invalid_email' }
   }
@@ -163,16 +164,12 @@ export async function registerUser(input: {
         email,
         username,
         password: await hashPassword(password),
-        role: role === 'ANALYST' ? Role.ANALYST : Role.OBSERVER,
+        role: Role.ANALYST,
+        isActive: false,
+        accountStatus: 'PENDING',
       },
     })
-    const session = await openSessionForUser({
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      role: user.role,
-    })
-    return { ok: true, session }
+    return { ok: true, userId: user.id, email: user.email }
   } catch (error) {
     console.error('Erreur lors de l’inscription :', error)
     return { ok: false, code: 'email_taken' }
@@ -183,7 +180,14 @@ export async function registerUser(input: {
 
 export type LoginResult =
   | { ok: true; session: Session }
-  | { ok: false; code: 'invalid_credentials' | 'account_inactive' }
+  | {
+      ok: false
+      code:
+        | 'invalid_credentials'
+        | 'account_inactive' // Désactivé par un ADMIN (compte approuvé)
+        | 'account_pending' // Inscription publique en attente de validation ADMIN
+        | 'account_rejected' // Demande d'accès refusée par un ADMIN
+    }
 
 /**
  * Connecte un compte par email ou username en recherchant UNIQUEMENT l'utilisateur
@@ -213,10 +217,16 @@ export async function authenticateUser(input: {
   })
 
   if (!user) return { ok: false, code: 'invalid_credentials' }
-  if (!user.isActive) return { ok: false, code: 'account_inactive' }
 
+  // Vérification du mot de passe AVANT toute révélation d'état : un compte inexistant
+  // ou un mot de passe erroné retournent le même code (pas d'énumération de comptes).
   const passwordOk = await verifyPassword(password, user.password).catch(() => false)
   if (!passwordOk) return { ok: false, code: 'invalid_credentials' }
+
+  // État de la demande d'accès (inscription publique → validation ADMIN).
+  if (user.accountStatus === 'PENDING') return { ok: false, code: 'account_pending' }
+  if (user.accountStatus === 'REJECTED') return { ok: false, code: 'account_rejected' }
+  if (!user.isActive) return { ok: false, code: 'account_inactive' }
 
   const session = await openSessionForUser({
     id: user.id,

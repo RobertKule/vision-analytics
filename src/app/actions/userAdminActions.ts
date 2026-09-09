@@ -48,6 +48,7 @@ export async function listUsers(): Promise<UserAdminDto[]> {
       username: true,
       role: true,
       isActive: true,
+      accountStatus: true,
       createdAt: true,
       _count: { select: { observations: true, ownedProjects: true } },
     },
@@ -86,6 +87,7 @@ export async function listUsers(): Promise<UserAdminDto[]> {
       username: user.username,
       role: user.role,
       isActive: user.isActive,
+      accountStatus: user.accountStatus,
       createdAt: user.createdAt.toISOString(),
       observationCount,
       ownedProjectsCount: user._count.ownedProjects,
@@ -160,6 +162,107 @@ export async function createUserByAdmin(input: {
   } catch (error) {
     console.error('Erreur lors de la création du compte :', error)
     return { ok: false, error: msg(locale, 'Unable to create the user.', 'Impossible de créer l’utilisateur.') }
+  }
+}
+
+/**
+ * Valide une demande d'accès (inscription publique) : le compte devient actif et
+ * utilisable. Réservé à un ADMIN ; la cible doit être une demande non encore traitée
+ * (`accountStatus = 'PENDING'`). Un ADMIN ne peut pas être créé par cette voie.
+ */
+export async function approveUserAccount(input: { userId: string; locale?: Locale }): Promise<ActionResult> {
+  const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
+  const blocked = await requireAdmin(locale)
+  if (blocked) return blocked
+
+  const session = await getCurrentSession()
+  const target = await prisma.user.findUnique({
+    where: { id: input?.userId },
+    select: { accountStatus: true, role: true },
+  })
+  if (!target) return { ok: false, error: msg(locale, 'User not found.', 'Utilisateur introuvable.') }
+  if (target.accountStatus !== 'PENDING') {
+    return {
+      ok: false,
+      error: msg(
+        locale,
+        'This access request was already processed.',
+        'Cette demande d’accès a déjà été traitée.',
+      ),
+    }
+  }
+  try {
+    await prisma.user.update({
+      where: { id: input.userId },
+      data: {
+        accountStatus: 'APPROVED',
+        isActive: true,
+        approvedById: session?.uid ?? null,
+        approvedAt: new Date(),
+      },
+    })
+    await recordAudit({
+      userId: session?.uid ?? null,
+      action: AUDIT_ACTIONS.userAccessApproved,
+      entityType: 'user',
+      entityId: input.userId,
+      metadata: { role: target.role },
+    })
+    revalidatePath('/admin/users')
+    return { ok: true }
+  } catch (error) {
+    console.error('Erreur lors de la validation de la demande :', error)
+    return { ok: false, error: msg(locale, 'Unable to approve this request.', 'Impossible de valider cette demande.') }
+  }
+}
+
+/**
+ * Refuse une demande d'accès (inscription publique). Le compte reste bloqué
+ * (`accountStatus = 'REJECTED'`, inactif) : son titulaire ne peut pas se connecter.
+ */
+export async function rejectUserAccount(input: { userId: string; locale?: Locale }): Promise<ActionResult> {
+  const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
+  const blocked = await requireAdmin(locale)
+  if (blocked) return blocked
+
+  const target = await prisma.user.findUnique({
+    where: { id: input?.userId },
+    select: { accountStatus: true },
+  })
+  if (!target) return { ok: false, error: msg(locale, 'User not found.', 'Utilisateur introuvable.') }
+  if (target.accountStatus !== 'PENDING') {
+    return {
+      ok: false,
+      error: msg(
+        locale,
+        'This access request was already processed.',
+        'Cette demande d’accès a déjà été traitée.',
+      ),
+    }
+  }
+  const session = await getCurrentSession()
+  try {
+    await prisma.user.update({
+      where: { id: input.userId },
+      data: {
+        accountStatus: 'REJECTED',
+        isActive: false,
+        approvedById: session?.uid ?? null,
+        approvedAt: new Date(),
+      },
+    })
+    await recordAudit({
+      userId: session?.uid ?? null,
+      action: AUDIT_ACTIONS.userAccessRejected,
+      entityType: 'user',
+      entityId: input.userId,
+      metadata: { role: 'ANALYST' },
+    })
+    revalidatePath('/admin/users')
+    return { ok: true }
+  } catch (error) {
+    console.error('Erreur lors du refus de la demande :', error)
+    return { ok: false, error: msg(locale, 'Unable to reject this request.', 'Impossible de refuser cette demande.') }
   }
 }
 

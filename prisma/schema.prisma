@@ -14,6 +14,23 @@ enum Role {
   OBSERVER
 }
 
+/// État de la demande d'accès d'un compte (inscription publique → validation ADMIN).
+/// APPROVED = accès normal ; PENDING = demande en attente de validation ; REJECTED = demande refusée.
+enum AccountStatus {
+  APPROVED
+  PENDING
+  REJECTED
+}
+
+/// Cycle de vie d'un lien d'accès observateur (jeton projet). Le jeton brut n'est
+/// jamais stocké : seul son hash (SHA-256) est persisté dans `ObserverAccessToken.tokenHash`.
+enum ObserverTokenStatus {
+  ACTIVE
+  COMPLETED
+  REVOKED
+  EXPIRED
+}
+
 model User {
   id            String          @id @default(uuid())
   email         String          @unique
@@ -21,10 +38,19 @@ model User {
   password      String
   role          Role            @default(OBSERVER)
   isActive      Boolean         @default(true) // Compte désactivable par un administrateur
+  /// État de la demande d'accès. APPROVED (défaut) : compte utilisable ; PENDING : demande
+  /// d'inscription publique (rôle ANALYST) non encore validée par un ADMIN ; REJECTED : refusée.
+  accountStatus AccountStatus   @default(APPROVED)
+  /// ADMIN ayant validé la demande d'accès (null tant que non traitée / créée directement).
+  approvedById  String?
+  approvedBy    User?           @relation("AccountApproval", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt    DateTime?
   anonymousId   String          @unique @default(uuid())
   observations  Observation[]
   ownedProjects Project[]       @relation("ProjectOwner")
   grantedAccess ProjectAccess[]
+  observerTokens ObserverAccessToken[]
+  approvedAccounts User[]       @relation("AccountApproval")
   auditLogs     AuditLog[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @default(now()) @updatedAt
@@ -64,6 +90,7 @@ model Project {
   observations     Observation[]
   videos           Video[]         // Passes vidéo du projet (multi-vidéo : chaque vidéo peut être rattachée à un type d'observation)
   accessList       ProjectAccess[] // Partage ANALYST → ANALYST (par username)
+  accessTokens     ObserverAccessToken[] // Liens d'accès observateur (jetons par projet)
   createdAt        DateTime        @default(now())
 }
 
@@ -103,6 +130,34 @@ model ProjectAccess {
 
   @@unique([projectId, userId])
   @@index([userId])
+}
+
+/// Lien d'accès observateur par projet : un jeton aléatoire à haute entropie (dont seul le
+/// hash SHA-256 est persisté dans `tokenHash`) ouvre une session d'observation liée à un seul
+/// projet. Le jeton brut n'existe que dans l'URL partagée — jamais en base, jamais dans les
+/// journaux. Une session terminée (`COMPLETED`) passe le projet en consultation (lecture seule).
+model ObserverAccessToken {
+  id             String              @id @default(uuid())
+  tokenHash      String              @unique // SHA-256 du jeton brut — le brut n'est jamais stocké
+  projectId      String
+  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Observateur rattaché à la session (résolu à la première ouverture du lien) ; null tant
+  /// que le lien n'a jamais été ouvert.
+  observerId     String?
+  observer       User?               @relation(fields: [observerId], references: [id], onDelete: SetNull)
+  status         ObserverTokenStatus @default(ACTIVE)
+  createdAt      DateTime            @default(now())
+  expiresAt      DateTime? // null = sans expiration
+  lastAccessedAt DateTime?
+  completedAt    DateTime?
+  revokedAt      DateTime?
+  /// Session d'observation logique (runId) stable pour ce lien : la reprise du travail et la
+  /// finalisation s'appuient dessus (jamais exposé à l'observateur).
+  sessionRunId   String?
+
+  @@index([projectId])
+  @@index([observerId])
+  @@index([status])
 }
 
 model ProjectPoint {

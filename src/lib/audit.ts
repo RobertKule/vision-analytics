@@ -49,6 +49,16 @@ export const AUDIT_ACTIONS = {
   userDeactivated: 'USER_DEACTIVATED',
   userReactivated: 'USER_REACTIVATED',
   userDeleted: 'USER_DELETED',
+  // Demandes d'accès (inscription publique → validation ADMIN)
+  userSignupRequested: 'USER_SIGNUP_REQUESTED',
+  userAccessApproved: 'USER_ACCESS_APPROVED',
+  userAccessRejected: 'USER_ACCESS_REJECTED',
+  // Accès observateur par jeton projet (le jeton brut n'est jamais journalisé)
+  observerAccessTokenCreated: 'OBSERVER_ACCESS_TOKEN_CREATED',
+  observerAccessRevoked: 'OBSERVER_ACCESS_REVOKED',
+  observerAccessSuccess: 'OBSERVER_ACCESS_SUCCESS',
+  observerAccessFailure: 'OBSERVER_ACCESS_FAILURE',
+  observerSessionCompleted: 'OBSERVER_SESSION_COMPLETED',
   // Projets
   projectCreated: 'PROJECT_CREATED',
   projectUpdated: 'PROJECT_UPDATED',
@@ -59,6 +69,7 @@ export const AUDIT_ACTIONS = {
   videoAdded: 'VIDEO_ADDED',
   videoUpdated: 'VIDEO_UPDATED',
   videoRemoved: 'VIDEO_REMOVED',
+  videoDuplicated: 'VIDEO_DUPLICATED',
   // Observations
   observationSubmitted: 'OBSERVATION_SUBMITTED',
   sessionFinalized: 'SESSION_FINALIZED',

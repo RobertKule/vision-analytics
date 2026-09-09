@@ -7,6 +7,10 @@ import { getCurrentAdmin } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { deleteManyDriveFiles } from '@/lib/drive'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import {
+  resolveDuplicateName,
+  resolveDuplicateTypeLabel,
+} from '@/lib/videoCopy'
 import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
 import type {
   ActionResult,
@@ -766,6 +770,108 @@ export async function updateProjectVideo(input: VideoPayload): Promise<ActionRes
   } catch (error) {
     console.error('Erreur lors de la mise à jour de la vidéo :', error)
     return { ok: false, error: 'Impossible d’enregistrer la vidéo. Réessayez.' }
+  }
+}
+
+/** Désactive / duplique une configuration vidéo — voir `duplicateProjectVideo`. */
+type DuplicateVideoPayload = {
+  videoId: string
+  /** Libellé de la copie ; vide ⇒ « <nom source> — Copie » auto. */
+  name?: string | null
+  /** Type cible (issu de Project.observationTypes) ; null = copie générique ; absent = garde le type de la source. */
+  typeLabel?: string | null
+}
+
+/**
+ * Duplique la CONFIGURATION d'une passe vidéo (Partie T).
+ *
+ * Crée une NOUVELLE entité (nouvel identifiant, nouveaux identifiants de fenêtres)
+ * en copiant la configuration : source, libellé, type d'observation rattaché,
+ * benchmark et fenêtres de validation (points). Les OBSERVATIONS ne sont jamais
+ * copiées : ni captures, ni driveFileId, ni clientKey, ni historique — la copie
+ * démarre vierge et reste indépendante de l'originale (la modifier n'affecte
+ * jamais les données observées). La duplication peut cibler un AUTRE type
+ * d'observation (le type B reçoit sa propre configuration, aucune observation du
+ * type A n'est recopiée).
+ */
+export async function duplicateProjectVideo(input: DuplicateVideoPayload): Promise<ActionResult> {
+  if (!(await getCurrentAdmin())) {
+    return { ok: false, error: 'Accès réservé aux administrateurs.' }
+  }
+  try {
+    const videoId = (input?.videoId ?? '').trim()
+    if (!videoId) return { ok: false, error: 'Identifiant de vidéo invalide.' }
+
+    const source = await prisma.video.findUnique({
+      where: { id: videoId },
+      include: {
+        project: { select: { id: true, isArchived: true, observationTypes: true } },
+        points: { select: { pointName: true, trameDebut: true, trameFin: true } },
+      },
+    })
+    if (!source) return { ok: false, error: 'Vidéo introuvable.' }
+    if (source.project.isArchived) {
+      return { ok: false, error: 'Ce projet est archivé : la configuration est figée.' }
+    }
+
+    // Type cible de la copie : absent ⇒ on conserve celui de la source ; null ⇒ copie
+    // générique ; sinon le libellé doit appartenir à la configuration du projet.
+    // Règle partagée (`videoCopy`) avec le formulaire admin pour un seul comportement.
+    const typeResolution = resolveDuplicateTypeLabel(
+      source.typeLabel,
+      input?.typeLabel,
+      source.project.observationTypes,
+    )
+    if (!typeResolution.ok) return typeResolution
+    const typeLabel = typeResolution.typeLabel
+
+    // Libellé : demandé quand nécessaire, sinon « <libellé/type source> — Copie ».
+    const name = resolveDuplicateName(input?.name, source.name, source.typeLabel, source.source)
+
+    const orderIndex = await prisma.video.count({ where: { projectId: source.project.id } })
+
+    const created = await prisma.$transaction(async (tx) => {
+      const copy = await tx.video.create({
+        data: {
+          projectId: source.project.id,
+          source: source.source,
+          typeLabel,
+          name,
+          orderIndex,
+          benchmarkSeconds: source.benchmarkSeconds,
+        },
+        select: { id: true },
+      })
+      if (source.points.length > 0) {
+        await tx.projectPoint.createMany({
+          data: source.points.map((point) => ({
+            projectId: source.project.id,
+            videoId: copy.id,
+            pointName: point.pointName,
+            trameDebut: point.trameDebut,
+            trameFin: point.trameFin,
+          })),
+        })
+      }
+      return copy
+    })
+
+    await adminAudit({
+      action: AUDIT_ACTIONS.videoDuplicated,
+      entityType: 'video',
+      entityId: created.id,
+      metadata: {
+        projectId: source.project.id,
+        duplicatedFrom: videoId,
+        typeLabel,
+        name,
+      },
+    })
+    revalidateProject(source.project.id)
+    return { ok: true, id: created.id }
+  } catch (error) {
+    console.error('Erreur lors de la duplication de la configuration :', error)
+    return { ok: false, error: 'Impossible de dupliquer la configuration. Réessayez.' }
   }
 }
 
