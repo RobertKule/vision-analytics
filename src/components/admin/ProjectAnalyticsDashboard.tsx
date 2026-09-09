@@ -322,7 +322,8 @@ export default function ProjectAnalyticsDashboard({
   const handleOpenReport = () => {
     setIsReportModalOpen(true)
     toast.info('Rapport exécutif ouvert', {
-      description: 'Utilisez « Imprimer » puis « Enregistrer en PDF » depuis votre navigateur.',
+      description:
+        'Consultez l’aperçu puis cliquez sur « Télécharger le rapport PDF » pour obtenir le fichier réel.',
     })
   }
 

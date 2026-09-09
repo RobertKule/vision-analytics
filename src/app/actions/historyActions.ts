@@ -16,7 +16,10 @@ export async function getObserverHistory(): Promise<ObserverSessionSummaryDto[]>
 
   const lowerEmail = session.email.toLowerCase()
   const observations = await prisma.observation.findMany({
-    where: { user: { email: lowerEmail } },
+    // Seules les captures CERTIFIÉES figurent dans l'historique agrégé : une
+    // session « en cours » (isVerified false) reste visible uniquement dans le
+    // client d'observation lui-même, jamais dans les synthèses par projet.
+    where: { user: { email: lowerEmail }, isVerified: true },
     select: {
       isGhostPoint: true,
       createdAt: true,

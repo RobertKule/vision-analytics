@@ -107,13 +107,15 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     projectId: string
     observationType?: string
     videoId?: string | null
-  } = { projectId }
+    isVerified?: boolean
+  } = { projectId, isVerified: true }
   if (observationType) where.observationType = observationType
   if (videoFilterDefined) {
     where.videoId =
       videoIdRaw === LEGACY_GENERIC_VIDEO_ID ? null : videoIdRaw
   }
 
+  // Données CERTIFIÉES uniquement (une session « en cours » n'est jamais exportée).
   const observations = await prisma.observation.findMany({
     where,
     include: {
@@ -245,9 +247,13 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       {
         project: { id: project.id, title: project.title },
         exportedAt: new Date().toISOString(),
-        totalObservations: rows.length,
-        validated: rows.filter((row) => !row.isGhostPoint).length,
-        ghosts: rows.filter((row) => row.isGhostPoint).length,
+        // Comptes au niveau des LIGNES exportées (chaque capture certifiée est une ligne
+        // du relevé). Les statistiques agrégées (points uniques validés, revendications)
+        // sont celles du classeur / rapport, calculées en déduplication — non reproduites
+        // ici pour ne pas confondre les deux échelles.
+        totalRows: rows.length,
+        validRows: rows.filter((row) => !row.isGhostPoint).length,
+        ghostRows: rows.filter((row) => row.isGhostPoint).length,
         appliedFilter: appliedFilterContext,
         files: {
           excel: `${rootFolder}/Export_Global.xlsx`,

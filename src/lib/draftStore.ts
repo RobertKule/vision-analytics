@@ -1,4 +1,9 @@
 import type { CaptureRecord } from '@/lib/types'
+import type { CaptureSyncMap, CaptureSyncState } from '@/lib/captureSyncState'
+import {
+  isSyncStatus,
+  normalizeResumedSync,
+} from '@/lib/captureSyncState'
 
 /**
  * Brouillons de session d'observation — persistance locale non soumise.
@@ -34,6 +39,17 @@ export type StoredObservationDraft = {
   /** Onglet vidéo actif au moment de la sauvegarde ('' = passe générique). */
   activeTab: string
   observations: CaptureRecord[]
+  /**
+   * Jeton de session logique, stable pour toute la durée de la session (observateur,
+   * projet). Régénéré uniquement quand aucun brouillon ne le porte encore.
+   */
+  runId?: string
+  /**
+   * État de synchronisation de chaque capture (id local = `clientKey` serveur).
+   * Les entrées peuvent dépasser `observations` : une capture retirée localement
+   * mais dont la suppression serveur reste en attente doit survivre au rechargement.
+   */
+  syncByKey?: CaptureSyncMap
 }
 
 /**
@@ -72,9 +88,42 @@ function isCaptureShape(value: unknown): boolean {
   return true
 }
 
+/** Vrai quand l'objet ressemble à un état de synchronisation persistable. */
+function isSyncStateShape(value: unknown): value is CaptureSyncState {
+  if (!isRecord(value)) return false
+  if (!isSyncStatus(value.status)) return false
+  if (value.pendingServerDelete !== undefined && typeof value.pendingServerDelete !== 'boolean') {
+    return false
+  }
+  if (value.imageUrl !== undefined && value.imageUrl !== null && typeof value.imageUrl !== 'string') {
+    return false
+  }
+  return true
+}
+
+/** Relit la table de synchronisation d'un brouillon (entrées valides uniquement). */
+function parseSyncByKey(raw: unknown): CaptureSyncMap | undefined {
+  if (!isRecord(raw)) return undefined
+  const syncByKey: CaptureSyncMap = {}
+  for (const [id, value] of Object.entries(raw)) {
+    if (typeof id !== 'string' || id.trim() === '') continue
+    if (!isSyncStateShape(value)) continue
+    const status = value.status === 'syncing' ? 'pending' : value.status
+    syncByKey[id] = {
+      status,
+      pendingServerDelete: value.pendingServerDelete === true,
+      imageUrl: value.imageUrl ?? null,
+    }
+  }
+  return syncByKey
+}
+
 /**
  * Valide et normalise un brouillon brut (par ex. relu depuis IndexedDB). Renvoie
  * `null` si la structure est invalide ; les captures malformées sont écartées.
+ * Les nouveaux champs (`runId`, `syncByKey`) sont acceptés et préservés ; un
+ * brouillon antérieur (sans ces champs) reste lisible, ses captures repartant en
+ * attente d'envoi (`pending`).
  */
 export function parseStoredDraft(raw: unknown): StoredObservationDraft | null {
   if (!isRecord(raw)) return null
@@ -100,6 +149,12 @@ export function parseStoredDraft(raw: unknown): StoredObservationDraft | null {
     })
   }
 
+  const rawSync = parseSyncByKey(raw.syncByKey)
+  // Les entrées `syncing` d'un brouillon sont un envoi interrompu : on les repasse
+  // en attente. Une capture disparue des observations n'est conservée que si sa
+  // suppression serveur est en attente.
+  const syncByKey = rawSync ? normalizeResumedSync(rawSync, observations) : undefined
+
   return {
     version: 1,
     projectId: raw.projectId,
@@ -107,6 +162,8 @@ export function parseStoredDraft(raw: unknown): StoredObservationDraft | null {
     savedAt,
     activeTab: raw.activeTab,
     observations,
+    runId: typeof raw.runId === 'string' && raw.runId.trim() ? raw.runId : undefined,
+    syncByKey,
   }
 }
 

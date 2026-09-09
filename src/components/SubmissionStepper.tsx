@@ -5,23 +5,29 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
-  CloudUpload,
+  CloudOff,
   EyeOff,
-  RefreshCw,
+  Loader2,
   Timer,
   Trash,
   TriangleAlert,
   X,
 } from 'lucide-react'
-import type { CaptureRecord, SubmissionResultDto } from '@/lib/types'
-import { submitObservations } from '@/app/actions/observationActions'
+import type { CaptureRecord } from '@/lib/types'
 import type { Locale, StepperText } from '@/lib/i18n'
 import { computeTypeCompletion } from '@/lib/captureCompletion'
-import {
-  getAnonymousObserverId,
-  newSessionToken,
-  rotateAnonymousObserverId,
-} from '@/lib/draftStore'
+import { countSyncStates, type CaptureSyncMap } from '@/lib/captureSyncState'
+
+/**
+ * Phase de la finalisation signalée par l'annotateur pendant `onFinalize`.
+ *  — `draining` : les captures restantes (pending/failed) sont enregistrées ;
+ *  — `finalizing` : la session est certifiée côté serveur (fenêtres, vérification).
+ */
+export type FinalizePhase = 'draining' | 'finalizing'
+
+export type FinalizeOutcome =
+  | { ok: true; finalizedCount: number; alreadyFinalized?: boolean }
+  | { ok: false; error: string; offline?: boolean }
 
 type SubmissionStepperProps = {
   isOpen: boolean
@@ -37,6 +43,14 @@ type SubmissionStepperProps = {
   t: StepperText
   onDeleteCapture: (captureId: string) => void
   onSubmissionSuccess: (submittedCount: number) => void
+  /** Identité d'observation figée au montage — chaque capture est déjà enregistrée sous elle. */
+  observerIdentifier: string
+  /** Jeton de session stable (persisté avec le brouillon). */
+  runId: string
+  /** État de synchronisation de chaque capture (pending → syncing → synced | failed). */
+  syncByKey: CaptureSyncMap
+  /** Vidange des captures restantes puis certification de la session côté serveur. */
+  onFinalize: (onPhase: (phase: FinalizePhase) => void) => Promise<FinalizeOutcome>
 }
 
 function formatTime(totalSeconds: number): string {
@@ -59,57 +73,6 @@ function pluralLabel(unit: { one: string; many: string }, count: number): string
   return count === 1 ? unit.one : unit.many
 }
 
-/**
- * Nombre de captures envoyées par lot. Les captures sont soumises en plusieurs
- * appels serveur séquentiels afin d'afficher une progression réelle
- * (« Envoi… 3/8 », barre à x %) pendant le téléversement Cloudinary.
- */
-const SUBMIT_BATCH_SIZE = 5
-
-/**
- * Tentatives automatiques d'un lot en cas d'échec de TRANSPORT (réseau coupé,
- * proxy, serveur momentanément injoignable) — pas sur un refus de validation
- * serveur. Chaque nouvelle tentative est idempotente (clientKey) : aucun doublon.
- */
-const MAX_TRANSPORT_ATTEMPTS = 3
-/** Backoff de base (ms) entre deux tentatives : ~800, ~1600. */
-const TRANSPORT_BACKOFF_BASE_MS = 800
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-/** Attend que `navigator.onLine` redevienne vrai — au plus `maxMs`, sinon passe. */
-async function waitUntilOnline(maxMs: number): Promise<void> {
-  const start = Date.now()
-  while (
-    typeof navigator !== 'undefined' &&
-    navigator.onLine === false &&
-    Date.now() - start < maxMs
-  ) {
-    await wait(400)
-  }
-  // Laisse respirer le réseau entre deux tentatives même si l'état est « en ligne ».
-  await wait(120)
-}
-
-type SubmitPayload = Parameters<typeof submitObservations>[0]
-
-/** Soumet un lot en réessayant automatiquement sur erreur de transport. */
-async function submitBatchWithRetry(payload: SubmitPayload): Promise<SubmissionResultDto> {
-  for (let attempt = 1; attempt <= MAX_TRANSPORT_ATTEMPTS; attempt++) {
-    try {
-      return await submitObservations(payload)
-    } catch (error) {
-      if (attempt >= MAX_TRANSPORT_ATTEMPTS) throw error
-      const delayMs = TRANSPORT_BACKOFF_BASE_MS * 2 ** (attempt - 1)
-      await waitUntilOnline(delayMs)
-    }
-  }
-  // Inatteignable — les tentatives renvoient ou relancent dans la boucle.
-  throw new Error('Submission transport error')
-}
-
 export default function SubmissionStepper(props: SubmissionStepperProps) {
   if (!props.isOpen) return null
   return <SubmissionStepperModal {...props} />
@@ -117,48 +80,28 @@ export default function SubmissionStepper(props: SubmissionStepperProps) {
 
 function SubmissionStepperModal({
   onClose,
-  projectId,
   projectTitle,
   captures,
   requiredTypes = [],
   onContinueToType,
-  locale,
   t,
   onDeleteCapture,
   onSubmissionSuccess,
-}: Omit<SubmissionStepperProps, 'isOpen'>) {
+  observerIdentifier,
+  syncByKey,
+  onFinalize,
+}: Omit<SubmissionStepperProps, 'isOpen' | 'locale' | 'runId' | 'projectId'>) {
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1)
-  const [identityMode, setIdentityMode] = useState<'anonymous' | 'email'>('anonymous')
-  const [anonymousId, setAnonymousId] = useState<string>(getAnonymousObserverId)
-  /**
-   * Jeton de cette « session » logique, stable pour tous les lots d'une même soumission
-   * (y compris une reprise après échec partiel) : comptage de sessions sans doublon.
-   */
-  const [sessionRunId] = useState<string>(newSessionToken)
-  const [email, setEmail] = useState<string>('')
   const [errorNotice, setErrorNotice] = useState<string | null>(null)
   const [isSuccess, setIsSuccess] = useState(false)
   const [submittedCount, setSubmittedCount] = useState(0)
-  /** Confirmation explicite requise avant d'envoyer une session avec types manquants. */
+  /** Confirmation explicite requise avant de finaliser une session avec types manquants. */
   const [acknowledgeGaps, setAcknowledgeGaps] = useState(false)
+  /** Phase courante de la finalisation (vidange puis certification). */
+  const [sendPhase, setSendPhase] = useState<'idle' | FinalizePhase>('idle')
 
-  /** Phase d'envoi réel (progress bar) : inactif → lots séquentiels → certification. */
-  const [sendPhase, setSendPhase] = useState<'idle' | 'sending' | 'finalizing'>('idle')
-  /** Progression courante (lot en cours / nombre total de lots). */
-  const [sendProgress, setSendProgress] = useState<{ done: number; total: number } | null>(null)
-  /** Lots déjà persistés côté serveur — sert de point de reprise après un échec partiel. */
-  const [sentBatches, setSentBatches] = useState(0)
-  /** Garde anti double-soumission : un envoi est déjà en cours. */
   const inFlightRef = useRef(false)
-
   const [isPending, startTransition] = useTransition()
-
-  /** Un échec a persisté au moins un lot : la session ne peut que reprendre ou annuler en connaissance de cause. */
-  const hasPartialSend = sentBatches > 0 && !isSuccess
-  /** Verrouille navigation/fermeture pendant un envoi en cours ou une reprise obligatoire. */
-  const lockSession = isPending || isSuccess || hasPartialSend
-  /** Pourcentage affiché : lot courant / total (100 % pendant la certification). */
-  const percentShown = sendProgress ? Math.round((sendProgress.done / sendProgress.total) * 100) : 100
 
   /** Couverture des types requis par les captures de la session. */
   const completion = useMemo(
@@ -168,12 +111,27 @@ function SubmissionStepperModal({
   /** Vrai quand des types requis attendent encore une capture. */
   const gapsPresent = completion.totalRequired > 0 && !completion.allRequiredCovered
 
-  const handleRegenerateId = () => {
-    setAnonymousId(rotateAnonymousObserverId())
-  }
+  /** État de synchronisation réel des captures (les entrées sans état sont ignorées). */
+  const syncCounts = useMemo(
+    () => countSyncStates(syncByKey, captures),
+    [captures, syncByKey],
+  )
+  const allSynced =
+    captures.length > 0 &&
+    syncCounts.synced === captures.length &&
+    syncCounts.pending === 0 &&
+    syncCounts.failed === 0 &&
+    syncCounts.syncing === 0
+  const offlineNow = typeof navigator !== 'undefined' && navigator.onLine === false
+  /** Une capture en attente d'envoi : on la voit tant que la file n'est pas vide. */
+  const stillSyncing = captures.length > 0 && !allSynced
 
-  const effectiveIdentifier =
-    identityMode === 'anonymous' ? anonymousId.trim() : email.trim().toLowerCase()
+  /** Barre de progression : captures déjà enregistrées / total retenu. */
+  const progressPercent =
+    captures.length > 0 ? Math.round((syncCounts.synced / captures.length) * 100) : 100
+
+  /** Verrouille navigation/fermeture pendant une finalisation en cours ou réussie. */
+  const lockSession = isPending || isSuccess
 
   const handleGoToStep2 = () => {
     if (captures.length === 0) {
@@ -185,12 +143,8 @@ function SubmissionStepperModal({
   }
 
   const handleGoToStep3 = () => {
-    if (!effectiveIdentifier) {
-      setErrorNotice(identityMode === 'anonymous' ? t.errorIdentifier : t.errorEmailRequired)
-      return
-    }
-    if (identityMode === 'email' && !effectiveIdentifier.includes('@')) {
-      setErrorNotice(t.errorEmailInvalid)
+    if (!observerIdentifier.trim()) {
+      setErrorNotice(t.errorIdentifier)
       return
     }
     setErrorNotice(null)
@@ -199,13 +153,8 @@ function SubmissionStepperModal({
     setCurrentStep(3)
   }
 
-  /**
-   * Envoi séquentiel des lots. Après un échec partiel (réseau ou refus serveur),
-   * `sentBatches` garde la position : un nouvel envoi ne reprend qu'à partir du lot
-   * non persisté, sans jamais re-soumettre ceux déjà enregistrés (anti-doublon).
-   */
-  const handleExecuteSubmission = () => {
-    if (inFlightRef.current) return // anti double-soumission
+  const handleExecuteFinalize = () => {
+    if (inFlightRef.current) return // anti double-finalisation
     if (gapsPresent && !acknowledgeGaps) {
       setErrorNotice(t.typeGapTitle)
       return
@@ -213,64 +162,20 @@ function SubmissionStepperModal({
     setErrorNotice(null)
     inFlightRef.current = true
     startTransition(async () => {
-      const totalBatches = Math.max(1, Math.ceil(captures.length / SUBMIT_BATCH_SIZE))
-      let cumulative = submittedCount
-      setSendPhase('sending')
       try {
-        for (let batch = sentBatches; batch < totalBatches; batch++) {
-          const chunk = captures.slice(
-            batch * SUBMIT_BATCH_SIZE,
-            (batch + 1) * SUBMIT_BATCH_SIZE,
-          )
-          if (chunk.length === 0) {
-            setSentBatches(batch + 1)
-            continue
-          }
-          setSendProgress({ done: batch + 1, total: totalBatches })
-          const result: SubmissionResultDto = await submitBatchWithRetry({
-            projectId,
-            observerIdentifier: effectiveIdentifier,
-            locale,
-            runId: sessionRunId,
-            observations: chunk.map((c) => ({
-              timestamp: c.timestamp,
-              imageDataUrl: c.imageDataUrl,
-              observationType: c.observationType,
-              videoId: c.videoId,
-              // Clé de déduplication stable (id local de la capture) : re-soumettre un
-              // brouillon déjà partiellement enregistré ne crée jamais de doublon serveur.
-              clientKey: c.id,
-            })),
-          })
-
-          if (!result.ok) {
-            // Le lot courant est refusé (validation serveur) : on s'arrête et on
-            // propose la reprise — les lots précédents restent persistés.
-            setErrorNotice(result.error)
-            setSendPhase('idle')
-            setSendProgress(null)
-            return
-          }
-          cumulative += result.submittedCount
-          setSentBatches(batch + 1)
-          setSubmittedCount(cumulative)
+        const outcome = await onFinalize((phase) => setSendPhase(phase))
+        setSendPhase('idle')
+        if (outcome.ok) {
+          setSubmittedCount(outcome.finalizedCount)
+          setIsSuccess(true)
+          onSubmissionSuccess(outcome.finalizedCount)
+        } else {
+          setErrorNotice(outcome.error || t.errorNetwork)
         }
-
-        // Tous les lots sont persistés : certification du dossier avant l'écran final.
-        setSendProgress({ done: totalBatches, total: totalBatches })
-        setSendPhase('finalizing')
-        await new Promise((resolve) => window.setTimeout(resolve, 650))
-        setSendProgress(null)
-        setSendPhase('idle')
-        setIsSuccess(true)
-        onSubmissionSuccess(cumulative)
       } catch (error) {
-        // Échec de transport (réseau, serveur redémarré, proxy…) : on ne laisse
-        // jamais une promesse non gérée remonter dans la console.
-        console.error('Submission transport error', error)
-        setErrorNotice(t.errorNetwork)
+        console.error('Finalization failed', error)
         setSendPhase('idle')
-        setSendProgress(null)
+        setErrorNotice(t.errorNetwork)
       } finally {
         inFlightRef.current = false
       }
@@ -513,7 +418,7 @@ function SubmissionStepperModal({
             </div>
           )}
 
-          {/* ÉTAPE 2 : Identité Observateur */}
+          {/* ÉTAPE 2 : Identité Observateur (lecture seule — figée à la session) */}
           {currentStep === 2 && (
             <div className="flex flex-col gap-5">
               <div>
@@ -525,93 +430,26 @@ function SubmissionStepperModal({
                 </p>
               </div>
 
-              {/* Sélecteur de mode d'identification */}
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIdentityMode('anonymous')}
-                  className={`flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-all ${
-                    identityMode === 'anonymous'
-                      ? 'border-gold-600 bg-gold-500/[0.06] shadow-sm dark:border-gold-500 dark:bg-gold-400/10'
-                      : 'border-zinc-200 hover:border-zinc-300 dark:border-white/10 dark:hover:border-white/20'
-                  }`}
-                >
-                  <span className="text-xs font-bold uppercase tracking-wide text-gold-700 dark:text-gold-400">
-                    {t.recommendedTag}
-                  </span>
-                  <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                    {t.anonTitle}
-                  </span>
-                  <span className="text-xs text-zinc-500 dark:text-zinc-400">{t.anonDesc}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setIdentityMode('email')}
-                  className={`flex flex-col items-start gap-1 rounded-xl border p-4 text-left transition-all ${
-                    identityMode === 'email'
-                      ? 'border-gold-600 bg-gold-500/[0.06] shadow-sm dark:border-gold-500 dark:bg-gold-400/10'
-                      : 'border-zinc-200 hover:border-zinc-300 dark:border-white/10 dark:hover:border-white/20'
-                  }`}
-                >
-                  <span className="text-xs font-bold uppercase tracking-wide text-zinc-400">
-                    {t.alternativeTag}
-                  </span>
-                  <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                    {t.emailTitle}
-                  </span>
-                  <span className="text-xs text-zinc-500 dark:text-zinc-400">{t.emailDesc}</span>
-                </button>
-              </div>
-
-              {identityMode === 'anonymous' ? (
-                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                  <label
-                    htmlFor="anon-id-input"
-                    className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300"
-                  >
-                    {t.anonLabel}
-                  </label>
-                  <div className="mt-2 flex items-center gap-2">
-                    <input
-                      id="anon-id-input"
-                      type="text"
-                      value={anonymousId}
-                      onChange={(e) => setAnonymousId(e.target.value)}
-                      className="h-10 flex-1 rounded-lg border border-zinc-300 bg-white px-3 font-mono text-sm text-zinc-900 dark:border-white/15 dark:bg-[#0d1117] dark:text-zinc-100"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleRegenerateId}
-                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-white/15 dark:text-zinc-300 dark:hover:bg-white/5"
-                    >
-                      <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" /> {t.regen}
-                    </button>
-                  </div>
-                  <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{t.anonHint}</p>
-                </div>
-              ) : (
-                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                  <label
-                    htmlFor="observer-email"
-                    className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300"
-                  >
-                    {t.emailLabel}
-                  </label>
-                  <input
-                    id="observer-email"
-                    type="email"
-                    placeholder={t.emailPlaceholder}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="mt-2 h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-sm text-zinc-900 dark:border-white/15 dark:bg-[#0d1117] dark:text-zinc-100"
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {t.recIdentifier}
+                </span>
+                <p className="mt-1.5 break-all font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                  {observerIdentifier}
+                </p>
+                <p className="mt-3 inline-flex items-start gap-1.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                  <Check
+                    aria-hidden="true"
+                    className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gold-700 dark:text-gold-400"
+                    strokeWidth={2.5}
                   />
-                </div>
-              )}
+                  {t.identityLockedHint}
+                </p>
+              </div>
             </div>
           )}
 
-          {/* ÉTAPE 3 : Téléversement & Envoi */}
+          {/* ÉTAPE 3 : Finalisation & certification */}
           {currentStep === 3 && (
             <div className="flex flex-col gap-5 text-center">
               {isSuccess ? (
@@ -634,7 +472,7 @@ function SubmissionStepperModal({
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-1.5 font-mono dark:bg-white/5">
                       <span className="text-zinc-400">{t.recIdentifier}:</span>
                       <strong className="max-w-[10rem] truncate font-semibold text-zinc-800 dark:text-zinc-200">
-                        {effectiveIdentifier}
+                        {observerIdentifier}
                       </strong>
                     </span>
                   </div>
@@ -642,7 +480,7 @@ function SubmissionStepperModal({
               ) : (
                 <div className="flex flex-col items-center py-4">
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-gold-500/10 text-gold-700 dark:bg-gold-400/10 dark:text-gold-400">
-                    <CloudUpload aria-hidden="true" className="h-6 w-6" />
+                    <Check aria-hidden="true" className="h-6 w-6" />
                   </div>
                   <h3 className="mt-3 text-lg font-bold text-zinc-900 dark:text-zinc-100">
                     {t.step3Title}
@@ -667,10 +505,45 @@ function SubmissionStepperModal({
                     <div className="flex justify-between py-1">
                       <span className="text-zinc-500">{t.recIdentifier}:</span>
                       <strong className="max-w-[150px] truncate font-mono font-semibold text-zinc-800 dark:text-zinc-200">
-                        {effectiveIdentifier}
+                        {observerIdentifier}
                       </strong>
                     </div>
                   </div>
+
+                  {/* État de synchronisation réel des captures (déjà enregistrées une à une). */}
+                  {captures.length > 0 ? (
+                    <div className="mx-auto mt-4 w-full max-w-sm rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-left dark:border-white/10 dark:bg-white/[0.03]">
+                      {allSynced ? (
+                        <p className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                          <Check
+                            aria-hidden="true"
+                            className="h-3.5 w-3.5"
+                            strokeWidth={2.5}
+                          />
+                          {fill(t.allSyncedLabel, { n: captures.length })}
+                        </p>
+                      ) : offlineNow ? (
+                        <p className="inline-flex items-start gap-1.5 text-xs font-medium text-clay-700 dark:text-clay-300">
+                          <CloudOff
+                            aria-hidden="true"
+                            className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                          />
+                          {t.waitingSync}
+                        </p>
+                      ) : (
+                        <p className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                          <Loader2
+                            aria-hidden="true"
+                            className="h-3.5 w-3.5 animate-spin text-gold-600 dark:text-gold-400"
+                          />
+                          {fill(t.syncingProgress, {
+                            done: syncCounts.synced,
+                            total: captures.length,
+                          })}
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
 
                   {gapsPresent ? (
                     <div className="mx-auto mt-5 w-full max-w-sm rounded-xl border border-clay-200 bg-clay-50 p-4 text-left dark:border-clay-800 dark:bg-clay-900/30">
@@ -696,33 +569,35 @@ function SubmissionStepperModal({
                     </div>
                   ) : null}
 
-                  {/* Barre de progression réelle (lots séquentiels puis certification). */}
+                  {/* Barre de progression réelle (vidange puis certification). */}
                   {sendPhase !== 'idle' && (
                     <div
                       role="progressbar"
                       aria-valuemin={0}
                       aria-valuemax={100}
-                      aria-valuenow={percentShown}
+                      aria-valuenow={progressPercent}
                       aria-label={t.progressBarAria}
                       className="mt-6 w-full max-w-sm"
                     >
                       <div className="mb-1.5 flex items-center justify-between gap-3 text-xs font-medium text-zinc-600 dark:text-zinc-400">
                         <span className="truncate">
-                          {sendPhase === 'finalizing' || !sendProgress
+                          {sendPhase === 'finalizing'
                             ? t.finalizing
-                            : fill(t.sendingBatch, {
-                                done: sendProgress.done,
-                                total: sendProgress.total,
-                              })}
+                            : offlineNow
+                              ? t.waitingSync
+                              : fill(t.syncingProgress, {
+                                  done: syncCounts.synced,
+                                  total: captures.length,
+                                })}
                         </span>
                         <span className="font-mono font-bold text-zinc-800 dark:text-zinc-200">
-                          {fill(t.progressPercent, { percent: percentShown })}
+                          {fill(t.progressPercent, { percent: progressPercent })}
                         </span>
                       </div>
                       <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-white/10">
                         <div
                           className="h-full rounded-full bg-gold-600 transition-[width] duration-300 ease-out dark:bg-gold-400"
-                          style={{ width: `${percentShown}%` }}
+                          style={{ width: `${progressPercent}%` }}
                         />
                       </div>
                     </div>
@@ -760,16 +635,14 @@ function SubmissionStepperModal({
               </div>
 
               <div className="flex items-center gap-2">
-                {!hasPartialSend && (
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    disabled={isPending}
-                    className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-xs font-medium text-zinc-500 hover:text-zinc-800 disabled:opacity-50 dark:hover:text-zinc-200"
-                  >
-                    {t.cancel}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={isPending}
+                  className="inline-flex h-9 items-center justify-center rounded-lg px-3 text-xs font-medium text-zinc-500 hover:text-zinc-800 disabled:opacity-50 dark:hover:text-zinc-200"
+                >
+                  {t.cancel}
+                </button>
 
                 {currentStep === 1 && (
                   <button
@@ -786,7 +659,7 @@ function SubmissionStepperModal({
                   <button
                     type="button"
                     onClick={handleGoToStep3}
-                    disabled={!effectiveIdentifier}
+                    disabled={!observerIdentifier.trim()}
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-lg bg-ink px-5 text-sm font-semibold text-milk hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
                     {t.nextConfirmation} <ArrowRight aria-hidden="true" className="h-4 w-4" />
@@ -796,15 +669,23 @@ function SubmissionStepperModal({
                 {currentStep === 3 && (
                   <button
                     type="button"
-                    onClick={handleExecuteSubmission}
-                    disabled={isPending || captures.length === 0 || (gapsPresent && !acknowledgeGaps)}
+                    onClick={handleExecuteFinalize}
+                    disabled={
+                      isPending ||
+                      captures.length === 0 ||
+                      (gapsPresent && !acknowledgeGaps) ||
+                      (stillSyncing && offlineNow)
+                    }
                     className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-ink px-6 text-sm font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink dark:hover:bg-white/90"
                   >
-                    {isPending
-                      ? t.uploadingBtn
-                      : hasPartialSend
-                        ? t.retrySend
-                        : t.confirmUpload}
+                    {isPending || sendPhase !== 'idle' ? (
+                      <>
+                        <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                        {t.finalizingBtn}
+                      </>
+                    ) : (
+                      t.confirmFinalize
+                    )}
                   </button>
                 )}
               </div>

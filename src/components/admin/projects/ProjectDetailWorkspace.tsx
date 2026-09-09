@@ -70,12 +70,12 @@ export default function ProjectDetailWorkspace({
           title={
             analytics === null
               ? 'Rapport indisponible (aucune donnée analytique)'
-              : 'Générer le rapport scientifique imprimable (PDF)'
+              : 'Aperçu du rapport scientifique puis téléchargement du PDF (ONA_Field_Rapport_…)'
           }
           className={`${toolbarButton} bg-ink text-milk hover:bg-ink-soft dark:border-white/20 dark:bg-milk dark:text-ink dark:hover:bg-white/90`}
         >
           <FileText aria-hidden="true" className="h-3.5 w-3.5" />
-          Générer le rapport PDF/Imprimable
+          Télécharger le rapport PDF
         </button>
         {isEmpty ? (
           <span

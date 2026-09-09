@@ -1,14 +1,18 @@
 'use client'
 
+import { useState } from 'react'
 import Image from 'next/image'
 import { createPortal } from 'react-dom'
-import { FileText, Printer, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { Download, FileText, Loader2, X } from 'lucide-react'
 import type { ProjectAnalyticsDto } from '@/lib/types'
 import { buildDetectionSeries } from '@/components/charts/chartData'
 import { ReportDetectionChart, ReportSplitRing } from '@/components/admin/ReportCharts'
+import { downloadBlob, exportSvgNodeToPng } from '@/lib/chartPngExport'
+import { sanitizeBaseName } from '@/lib/exportHelpers'
 
 /**
- * Rapport Scientifique Imprimable (aperçu modal + PDF propre).
+ * Rapport Scientifique — Aperçu modal + téléchargement d'un VRAI fichier PDF.
  *
  * Le contenu est rendu dans un PORTAL en fin de <body> : la règle `@media print` de
  * globals.css peut ainsi masquer toute l'application (`body > *:not(#va-report-portal)`)
@@ -47,24 +51,106 @@ const KPIVALUE =
 const TABLEHEAD =
   'border-b border-line bg-zinc-50 text-left text-[11px] font-bold uppercase tracking-wide text-zinc-500'
 
+type ReportChartId = 'detections' | 'ventilation'
+
+/** Fichier PNG d'un graphique du rapport, prêt pour l'assemblage côté serveur. */
+type ReportPdfChartInput = {
+  id: ReportChartId
+  dataUrl: string
+}
+
 export default function ExecutiveReportModal({
   isOpen,
   onClose,
   analytics,
   authorName,
 }: ExecutiveReportModalProps) {
+  const [isDownloading, setIsDownloading] = useState(false)
+
   if (!isOpen || typeof document === 'undefined') return null
 
   const { project, summary, pointsAnalytics, ghostPointsAnalytics, observersMetrics } = analytics
-
-  const handlePrint = () => {
-    window.print()
-  }
 
   const generatedAt = new Date()
   const author = authorName?.trim() || 'Non renseigné'
   const hasObservations = summary.totalObservations > 0
   const detectionSeries = buildDetectionSeries(pointsAnalytics, ghostPointsAnalytics)
+
+  const pdfFallbackName = () => {
+    const dateToken = new Date().toISOString().slice(0, 10)
+    return `ONA_Field_Rapport_${sanitizeBaseName(project.title)}_${dateToken}.pdf`
+  }
+
+  /**
+   * Télécharge le VRAI rapport PDF (généré côté serveur, jamais la boîte de dialogue
+   * d'impression du navigateur). Les deux SVG STATIQUES du rapport (ReportCharts.tsx)
+   * sont rasterisés en PNG haute résolution puis transmis à la route API qui reconstitue
+   * les chiffres depuis la base (isVerified=true) — le client ne fournit que des images.
+   */
+  const handleDownloadPdf = async () => {
+    if (isDownloading) return
+    setIsDownloading(true)
+    try {
+      const charts: ReportPdfChartInput[] = []
+
+      // Rasterisation des graphiques réellement rendus dans l'aperçu. Un échec sur
+      // un graphique ne bloque jamais le rapport : le serveur assemble sans l'image.
+      if (hasObservations) {
+        const chartIds: ReportChartId[] = ['detections', 'ventilation']
+        for (const id of chartIds) {
+          const node = document.querySelector<SVGSVGElement>(
+            `svg[data-report-chart="${id}"]`,
+          )
+          if (!node) continue
+          try {
+            charts.push({ id, dataUrl: await exportSvgNodeToPng(node, 2) })
+          } catch (error) {
+            console.warn(
+              `[rapport PDF] Graphique « ${id} » non intégré (PDF généré sans lui) :`,
+              error,
+            )
+          }
+        }
+      }
+
+      const response = await fetch(
+        `/api/admin/projects/${encodeURIComponent(project.id)}/export-report-pdf`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ charts }),
+        },
+      )
+      if (!response.ok) {
+        let message = 'Le serveur a refusé le rapport PDF.'
+        try {
+          const parsed = (await response.json()) as { error?: string }
+          if (parsed?.error) message = parsed.error
+        } catch {
+          // corps non JSON : on conserve le message générique
+        }
+        throw new Error(message)
+      }
+
+      const blob = await response.blob()
+      // Le nom renvoyé par le serveur fait autorité (ONA_Field_Rapport_<Projet>_<Date>.pdf).
+      const disposition = response.headers.get('content-disposition') ?? ''
+      const filenameMatch = /filename="?([^"]+)"?/.exec(disposition)
+      const fileName = filenameMatch?.[1]
+        ? filenameMatch[1].replace(/["\\]/g, '')
+        : pdfFallbackName()
+      downloadBlob(blob, fileName)
+      toast.success('Rapport PDF téléchargé', {
+        description: `${fileName} — rapport exécutif de concordance ONA Field.`,
+      })
+    } catch (error) {
+      toast.error('Export PDF impossible', {
+        description: error instanceof Error ? error.message : 'Erreur inconnue.',
+      })
+    } finally {
+      setIsDownloading(false)
+    }
+  }
 
   const modal = (
     <div
@@ -82,16 +168,22 @@ export default function ExecutiveReportModal({
               <FileText aria-hidden="true" className="h-4 w-4" />
             </span>
             <h2 id="report-modal-title" className="truncate text-sm font-bold text-zinc-900">
-              Rapport Scientifique — Aperçu & Impression PDF
+              Rapport Scientifique — Aperçu & Téléchargement PDF
             </h2>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              onClick={handlePrint}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-zinc-700"
+              onClick={() => void handleDownloadPdf()}
+              disabled={isDownloading}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-zinc-900 px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-zinc-700 disabled:cursor-wait disabled:opacity-70"
             >
-              <Printer aria-hidden="true" className="h-3.5 w-3.5" /> Imprimer / Enregistrer en PDF
+              {isDownloading ? (
+                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+              {isDownloading ? 'Préparation du PDF…' : 'Télécharger le rapport PDF'}
             </button>
             <button
               type="button"

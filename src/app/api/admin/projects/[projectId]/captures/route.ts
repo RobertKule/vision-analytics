@@ -59,6 +59,8 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
   const rows = await prisma.observation.findMany({
     where: {
       projectId,
+      // Données CERTIFIÉES uniquement (une session « en cours » n'est jamais exportée).
+      isVerified: true,
       ...(observerId ? { userId: observerId } : {}),
     },
     include: {

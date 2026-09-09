@@ -28,6 +28,8 @@ export type DocsLocale = {
   heroEyebrow: string
   heroTitle: string
   heroIntro: string
+  /** Libellé du bloc de navigation latérale (bouton mobile + aria). */
+  navTitle: string
   tocUsers: string
   tocDevs: string
   usersIntro: string
@@ -42,6 +44,7 @@ const en: DocsLocale = {
   heroTitle: 'Guides & technical reference',
   heroIntro:
     'Two reading levels: how to use the platform as an Observer, Analyst or Administrator, then the technical documentation for developers and maintainers.',
+  navTitle: 'Contents',
   tocUsers: 'User guides',
   tocDevs: 'Developer reference',
   usersIntro: 'Practical guides by profile.',
@@ -73,16 +76,17 @@ const en: DocsLocale = {
             'Open the experiment page (/experience) signed in, or the public session page (/observe) as an anonymous participant.',
             'Choose an active experiment, then start an observation session.',
             'Load the experiment video (your own copy — the platform never streams it).',
-            'Watch, and at each event to record, pause and click on the frame to capture it.',
-            'Select the observation type if the study offers several, or let the video tab impose its bound type.',
+            'Watch, and at each event to record, pause, click on the frame, then confirm the capture.',
+            'Each confirmed capture is saved to the server immediately (upload + reference). A small “saving…” then “✓ saved” indicator confirms it — you can keep watching without waiting.',
+            'Select the observation type if the study offers several, or let the video pass impose its bound type.',
             'Move to the next video pass (or type) when required by the protocol.',
-            'Interrupt freely: your captures stay on the device; you can resume the same session later.',
-            'Submit the batch when ready. Only the submission reaches the server.',
+            'Interrupt freely — offline, browser closed: captures waiting for the network stay on the device and synchronize automatically on reconnection. You resume the same session later.',
+            'When the protocol is complete, submit the batch: the server validates the session and certifies its captures. Submitting is light — it never re-uploads the whole set.',
           ],
         },
         {
           kind: 'p',
-          text: 'A capture keeps its video timestamp, its observation type, the image you annotated and — automatically — its validation status (validated or ghost point). The position of your clicks is not recorded, and you never see the study’s reference windows or its benchmarks.',
+          text: 'A capture keeps its video timestamp, its observation type and the annotated image. Certification happens when the session is submitted: the server then judges each capture against the confidential windows (validated or ghost point) without ever sending them to you. The position of your clicks is not recorded, and you never see the study’s reference windows or its benchmarks.',
         },
       ],
     },
@@ -104,7 +108,7 @@ const en: DocsLocale = {
         },
         {
           kind: 'p',
-          text: 'Exports available: Excel global workbook (summary, observers × types matrix, raw ledger), hierarchical ZIP with per-observer workbooks and captures, captures ZIP, and a printable scientific report. Analysts never see another analyst’s projects.',
+          text: 'Exports available: Excel global workbook (summary, observers × types matrix, raw ledger), hierarchical ZIP with per-observer workbooks and captures, captures ZIP, and a scientific report downloadable as a PDF. Analysts never see another analyst’s projects.',
         },
       ],
     },
@@ -217,7 +221,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Independent observation: observers capture frames; the server matches each capture timestamp against the confidential windows of its own video pass and tags the capture validated or ghost (false alert). Reference windows and benchmarks never reach the observer client. Spatial click positions are not persisted.',
+          text: 'Independent observation: each confirmed capture is persisted immediately as a “non-certified” observation (isVerified=false), invisible to statistics. At session finalize the server certifies the whole run (isVerified=true) and matches each capture timestamp against the confidential windows of its own video pass to tag it validated or ghost (false alert). Reference windows and benchmarks never reach the observer client. Spatial click positions are not persisted; the media live on Cloudinary and the database keeps only references.',
         },
         {
           kind: 'ul',
@@ -244,7 +248,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Per-project analytics compute precision (validated captures within windows), concordance between observers, average detection delay and the ghost distribution — per target window, per video pass, per observer. Charts (Recharts) render the time distribution of detections and the validated/ghost split.',
+          text: 'Per-project analytics count unique points (for one observer, several captures inside the same temporal window of the same type count as one detection) to compute precision, concordance between observers, average detection delay and the ghost distribution — per target window, per video pass, per observer. Only certified sessions (isVerified=true) feed the analytics; the raw ledger still lists every capture. Charts (Recharts) render the time distribution of detections and the validated/ghost split.',
         },
       ],
     },
@@ -257,7 +261,9 @@ const en: DocsLocale = {
           items: [
             'Excel global export: 3 sheets — project summary, observers × types matrix, full raw ledger.',
             'Hierarchical global ZIP: project CSV + one Excel workbook + annotated captures per observer + manifest.',
-            'Captures ZIP and per-observer data workbook; printable scientific report (PNG charts exported from the visible view).',
+            'Captures ZIP and per-observer data workbook.',
+            'Scientific report as a real PDF file (title, metadata, KPIs and the report charts) — download button “Télécharger le rapport PDF”, filename ONA_Field_Rapport_<Projet>_<Date>.pdf.',
+            'Chart PNG export (high resolution) from the analytics views.',
           ],
         },
         {
@@ -282,7 +288,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Unsubmitted captures are autosaved on the device (IndexedDB, keyed by owner + project). After a reload or an offline interruption the observer resumes the same session. Confirmed submissions clear the draft; resubmission is idempotent via the clientKey.',
+          text: 'Each confirmed capture is sent to the server as soon as it is taken and tracked locally until confirmed (states pending → syncing → synced; failed while offline). Captures waiting for the network stay on the device (IndexedDB, keyed by owner + project) and are retried on reconnection. A stable session runId lets the observer resume the same session after a reload or an offline interruption — nothing is lost. Finalizing the session clears the draft; every save is idempotent via the clientKey.',
         },
       ],
     },
@@ -328,6 +334,7 @@ const fr: DocsLocale = {
   heroTitle: 'Guides & référence technique',
   heroIntro:
     'Deux niveaux de lecture : utiliser la plateforme en tant qu’observateur, analyste ou administrateur, puis la documentation technique pour développeurs et mainteneurs.',
+  navTitle: 'Table des matières',
   tocUsers: 'Guides utilisateurs',
   tocDevs: 'Référence développeur',
   usersIntro: 'Guides pratiques par profil.',
@@ -359,16 +366,17 @@ const fr: DocsLocale = {
             'Ouvrez la page des expériences (/experience) connecté, ou la session publique (/observe) en participant anonyme.',
             'Choisissez une expérience active, puis démarrez une session d’observation.',
             'Chargez la vidéo de l’expérience (votre propre copie — la plateforme ne la diffuse jamais).',
-            'Regardez, puis à chaque événement à relever, mettez en pause et cliquez sur l’image pour la capturer.',
-            'Sélectionnez le type d’observation si l’étude en propose plusieurs, ou laissez l’onglet vidéo imposer son type associé.',
+            'Regardez, puis à chaque événement à relever, mettez en pause, cliquez sur l’image puis confirmez la capture.',
+            'Chaque capture confirmée est enregistrée sur le serveur immédiatement (téléversement + référence). Un indicateur « Enregistrement en cours… » puis « ✓ Capture enregistrée » le confirme — vous pouvez continuer à regarder sans attendre.',
+            'Sélectionnez le type d’observation si l’étude en propose plusieurs, ou laissez la passe vidéo imposer son type associé.',
             'Passez à la passe vidéo (ou au type) suivante si le protocole l’exige.',
-            'Interrompez librement : vos captures restent sur l’appareil et vous pouvez reprendre la même session plus tard.',
-            'Soumettez le lot quand il est prêt. Seule la soumission atteint le serveur.',
+            'Interrompez librement — hors-ligne, navigateur fermé : les captures en attente du réseau restent sur l’appareil et se synchronisent automatiquement à la reconnexion. Vous reprenez la même session plus tard.',
+            'Quand le protocole est terminé, soumettez le lot : le serveur valide la session et certifie ses captures. La soumission est légère — elle ne re-téléverse jamais l’ensemble.',
           ],
         },
         {
           kind: 'p',
-          text: 'Une capture conserve son horodatage vidéo, son type d’observation, l’image annotée et — automatiquement — son statut de validation (validée ou point fantôme). La position de vos clics n’est pas enregistrée, et vous ne voyez jamais les fenêtres de référence ni les benchmarks de l’étude.',
+          text: 'Une capture conserve son horodatage vidéo, son type d’observation et l’image annotée. La certification a lieu à la soumission de la session : le serveur juge alors chaque capture contre les fenêtres confidentielles (validée ou point fantôme) sans jamais vous les transmettre. La position de vos clics n’est pas enregistrée, et vous ne voyez jamais les fenêtres de référence ni les benchmarks de l’étude.',
         },
       ],
     },
@@ -390,7 +398,7 @@ const fr: DocsLocale = {
         },
         {
           kind: 'p',
-          text: 'Exports disponibles : classeur Excel global (synthèse, matrice observateurs × types, relevé brut), ZIP hiérarchique avec classeurs et captures par observateur, ZIP des captures, et rapport scientifique imprimable. Un analyste ne voit jamais les projets d’un autre analyste.',
+          text: 'Exports disponibles : classeur Excel global (synthèse, matrice observateurs × types, relevé brut), ZIP hiérarchique avec classeurs et captures par observateur, ZIP des captures, et rapport scientifique téléchargeable en PDF. Un analyste ne voit jamais les projets d’un autre analyste.',
         },
       ],
     },
@@ -503,7 +511,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Observation indépendante : les observateurs capturent des images ; le serveur compare chaque horodatage aux fenêtres confidentielles de sa propre passe vidéo et qualifie la capture de validée ou fantôme (fausse alerte). Fenêtres de référence et benchmarks n’atteignent jamais le client observateur. Les positions spatiales des clics ne sont pas persistées.',
+          text: 'Observation indépendante : chaque capture confirmée est persistée immédiatement en observation « non certifiée » (isVerified=false), invisible des statistiques. À la finalisation de la session, le serveur certifie l’ensemble (isVerified=true) et compare chaque horodatage aux fenêtres confidentielles de sa propre passe vidéo pour qualifier la capture de validée ou fantôme (fausse alerte). Fenêtres de référence et benchmarks n’atteignent jamais le client observateur. Les positions spatiales des clics ne sont pas persistées ; les médias vivent chez Cloudinary et la base ne conserve que des références.',
         },
         {
           kind: 'ul',
@@ -530,7 +538,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Les analyses par projet calculent la précision (captures validées dans les fenêtres), la concordance entre observateurs, le délai moyen de détection et la répartition des fantômes — par fenêtre cible, par passe vidéo et par observateur. Les graphiques (Recharts) représentent la distribution temporelle des détections et la ventilation validées / fantômes.',
+          text: 'Les analyses par projet comptent des points uniques (pour un observateur, plusieurs captures dans la même fenêtre temporelle du même type comptent pour une détection) pour calculer précision, concordance entre observateurs, délai moyen de détection et répartition des fantômes — par fenêtre cible, par passe vidéo et par observateur. Seules les sessions certifiées (isVerified=true) alimentent les analyses ; le relevé brut conserve chaque capture. Les graphiques (Recharts) représentent la distribution temporelle des détections et la ventilation validées / fantômes.',
         },
       ],
     },
@@ -543,7 +551,9 @@ const fr: DocsLocale = {
           items: [
             'Export global Excel : 3 feuilles — synthèse du projet, matrice observateurs × types, relevé global.',
             'ZIP global hiérarchique : CSV du projet + un classeur Excel et les captures annotées par observateur + manifest.',
-            'ZIP des captures et classeur de données par observateur ; rapport scientifique imprimable (graphiques PNG issus de la vue visible).',
+            'ZIP des captures et classeur de données par observateur.',
+            'Rapport scientifique en vrai fichier PDF (titre, métadonnées, indicateurs et graphiques du rapport) — bouton « Télécharger le rapport PDF », fichier ONA_Field_Rapport_<Projet>_<Date>.pdf.',
+            'Export PNG des graphiques (haute résolution) depuis les vues d’analyses.',
           ],
         },
         {
@@ -568,7 +578,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Les captures non soumises sont sauvegardées automatiquement sur l’appareil (IndexedDB, clé propriétaire + projet). Après un rechargement ou une interruption hors-ligne, l’observateur reprend la même session. Une soumission confirmée vide le brouillon ; la re-soumission est idempotente via la clientKey.',
+          text: 'Chaque capture confirmée est envoyée au serveur dès qu’elle est prise et suivie localement jusqu’à sa confirmation (états pending → syncing → synced ; failed hors-ligne). Les captures en attente du réseau restent sur l’appareil (IndexedDB, clé propriétaire + projet) et sont réessayées à la reconnexion. Un sessionRunId stable permet à l’observateur de reprendre la même session après rechargement ou coupure hors-ligne — rien n’est perdu. Finaliser la session vide le brouillon ; chaque enregistrement est idempotent via la clientKey.',
         },
       ],
     },

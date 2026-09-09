@@ -166,8 +166,9 @@ describe('buildObserverMatrix', () => {
     const source: GlobalExportSource = {
       project,
       rows: [
-        row({ userId: 'u1', observationType: 'Faune' }),
-        row({ userId: 'u1', observationType: 'Sauvage' }), // dynamique, non configurée
+        row({ userId: 'u1', observationType: 'Faune', pointId: 'pt-a' }),
+        // Type dynamique (non configuré), fenêtre distincte → point unique propre.
+        row({ userId: 'u1', observationType: 'Sauvage', pointId: 'pt-b' }),
       ],
     }
     const matrix = buildObserverMatrix(source)
@@ -180,22 +181,33 @@ describe('buildObserverMatrix', () => {
     expect(matrix.observers[0].total).toBe(2)
   })
 
-  it('calcule la précision = point trouvé / total (null sans capture)', () => {
+  it('déduplique : plusieurs captures de la même fenêtre = UN point trouvé', () => {
     const source: GlobalExportSource = {
       project,
       rows: [
-        row({ userId: 'u1', isGhostPoint: false }),
-        row({ userId: 'u1', isGhostPoint: false }),
-        row({ userId: 'u1', isGhostPoint: true }),
+        row({ userId: 'u1', isGhostPoint: false, pointId: 'pt-a' }),
+        row({ userId: 'u1', isGhostPoint: false, pointId: 'pt-a' }), // doublon de fenêtre
+        row({ userId: 'u1', isGhostPoint: false, pointId: 'pt-b' }),
+        row({ userId: 'u1', isGhostPoint: true, pointId: null }),
       ],
     }
     const matrix = buildObserverMatrix(source)
-    expect(matrix.observers[0].pointFound).toBe(2)
+    expect(matrix.observers[0].pointFound).toBe(2) // fenêtres distinctes uniquement
     expect(matrix.observers[0].ghosts).toBe(1)
+    // Déclarations = points uniques validés + fausses alertes.
+    expect(matrix.observers[0].total).toBe(3)
     expect(matrix.observers[0].precision).toBeCloseTo(2 / 3, 5)
   })
 
-  it('compte les fenêtres distinctes touchées par observateur', () => {
+  it('précision null sans aucune déclaration', () => {
+    const source: GlobalExportSource = {
+      project: { ...project, observationTypes: [] },
+      rows: [],
+    }
+    expect(buildObserverMatrix(source).observers).toHaveLength(0)
+  })
+
+  it('compte les fenêtres distinctes touchées par observateur (= pointFound)', () => {
     const source: GlobalExportSource = {
       project,
       rows: [
@@ -204,7 +216,9 @@ describe('buildObserverMatrix', () => {
         row({ userId: 'u1', pointId: 'pt-b' }),
       ],
     }
-    expect(buildObserverMatrix(source).observers[0].windowsHit).toBe(2)
+    const observer = buildObserverMatrix(source).observers[0]
+    expect(observer.windowsHit).toBe(2)
+    expect(observer.pointFound).toBe(2)
   })
 })
 
@@ -248,12 +262,12 @@ describe('clockLabel', () => {
 })
 
 describe('buildTypeStatistics', () => {
-  it('agrège par type : validées, hors trame, observateurs distincts, fenêtres distinctes', () => {
+  it('agrège par type : points uniques validés, fausses alertes, observateurs, fenêtres', () => {
     const source: GlobalExportSource = {
       project,
       rows: [
         row({ observationType: 'Faune', isGhostPoint: false, pointId: 'pt-a', userId: 'u1' }),
-        // Même observateur, même fenêtre (compté une seule fois dans windowsHit).
+        // Même observateur, même fenêtre → compté UNE seule fois (règle produit).
         row({ observationType: 'Faune', isGhostPoint: false, pointId: 'pt-a', userId: 'u1', timestampTotal: 65 }),
         row({ observationType: 'Faune', isGhostPoint: true, pointId: null, userId: 'u2', anonymousId: 'anon-2' }),
         row({ observationType: 'Eau', isGhostPoint: false, pointId: 'pt-b', userId: 'u2', anonymousId: 'anon-2' }),
@@ -262,8 +276,14 @@ describe('buildTypeStatistics', () => {
     const stats = buildTypeStatistics(source)
     const faune = stats.find((entry) => entry.type === 'Faune')
     const eau = stats.find((entry) => entry.type === 'Eau')
-    expect(faune).toMatchObject({ total: 3, validated: 2, ghosts: 1, observers: 2, windowsHit: 1 })
-    expect(faune?.precision).toBeCloseTo(2 / 3)
+    expect(faune).toMatchObject({
+      total: 2, // 1 point unique validé + 1 fausse alerte
+      validated: 1,
+      ghosts: 1,
+      observers: 2,
+      windowsHit: 1,
+    })
+    expect(faune?.precision).toBeCloseTo(1 / 2)
     expect(eau).toMatchObject({ total: 1, validated: 1, ghosts: 0, observers: 1, windowsHit: 1 })
   })
 

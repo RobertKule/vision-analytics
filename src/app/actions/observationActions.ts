@@ -3,7 +3,7 @@
 import { revalidatePath, unstable_cache, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
-import { uploadAnnotationToCloudinary } from '@/lib/cloudinary'
+import { deleteCloudinaryAsset, uploadAnnotationImage } from '@/lib/cloudinary'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
@@ -451,6 +451,7 @@ export async function submitObservations(
     type UploadedCaptureRecord = {
       timestampTotal: number
       imageUrl: string
+      imagePublicId: string | null
       pointId: string | null
       isGhostPoint: boolean
       observationType: string | null
@@ -465,7 +466,8 @@ export async function submitObservations(
     const buildRecord = async (index: number): Promise<UploadedCaptureRecord | null> => {
       const obs = observations[index]
       if (isDuplicate(index)) return null // déjà persisté : ni re-téléversé ni recréé
-      const imageUrl = await uploadAnnotationToCloudinary(obs.imageDataUrl)
+      const uploaded = await uploadAnnotationImage(obs.imageDataUrl)
+      const imageUrl = uploaded.secureUrl
       const timestampTotal = Math.round(obs.timestamp)
       const observationType =
         configuredTypes.length > 0 && typeof obs.observationType === 'string'
@@ -488,6 +490,7 @@ export async function submitObservations(
       return {
         timestampTotal,
         imageUrl,
+        imagePublicId: uploaded.publicId,
         pointId: matchedPoint ? matchedPoint.id : null,
         isGhostPoint: !matchedPoint, // Si aucune fenêtre ne correspond => Point Fantôme (fausse alerte)
         observationType,
@@ -516,6 +519,7 @@ export async function submitObservations(
           pointId: record.pointId,
           timestampTotal: record.timestampTotal,
           imageUrl: record.imageUrl,
+          imagePublicId: record.imagePublicId,
           observationType: record.observationType,
           isGhostPoint: record.isGhostPoint,
           isVerified: true,
@@ -560,6 +564,467 @@ export async function submitObservations(
               'An unexpected error occurred while submitting. Please retry.',
               'Une erreur inattendue est survenue lors de la soumission. Réessayez.',
             ),
+    }
+  }
+}
+
+// ————————————————————————————————————————————————————————————
+// ENREGISTREMENT IMMÉDIAT PAR CAPTURE + FINALISATION LÉGÈRE
+//
+// Nouveau flux « terrain » :
+//   capture confirmée → `saveObservationCapture` : UNE image uploadée puis UNE ligne
+//                       créée (`isVerified=false` → invisible des statistiques tant que
+//                       la session n'est pas finalisée). Petit payload, requête courte,
+//                       pas de timeout. Idempotent via `@@unique([projectId, clientKey])`.
+//   fin de session    → `finalizeObservationSession` : matching des fenêtres confidentielles
+//                       + passage `isVerified=true` des lignes de la session. Opération
+//                       légère en base, AUCUN re-téléversement d'image.
+//   suppression       → `deleteSavedObservation` : suppression de l'asset Cloudinary PUIS
+//                       de la ligne (aucune référence supprimée en silence si Cloudinary échoue).
+// ————————————————————————————————————————————————————————————
+
+function isPrismaUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === 'P2002'
+  )
+}
+
+/** Résout l'identité de l'observateur (session connectée, anonyme ou email indépendant). */
+async function resolveObserverIdentity(
+  identifier: string,
+  getMessage: (en: string, fr: string) => string,
+): Promise<{ user: { id: string } } | { error: string }> {
+  let cleanId = (identifier ?? '').trim()
+  if (!cleanId) {
+    return {
+      error: getMessage(
+        'Observer identifier is required.',
+        'Identifiant de l’observateur obligatoire.',
+      ),
+    }
+  }
+  const session = await getCurrentSession()
+  if (session?.email) {
+    cleanId = session.email
+  } else if (cleanId.includes('@')) {
+    const manager = await prisma.user.findFirst({
+      where: { email: cleanId.toLowerCase(), role: { in: [Role.ADMIN, Role.ANALYST] } },
+      select: { id: true },
+    })
+    if (manager) {
+      return {
+        error: getMessage(
+          'This observer identifier matches a management account and cannot be used to submit.',
+          'Cet identifiant correspond à un compte de gestion ; il ne peut pas être utilisé pour soumettre.',
+        ),
+      }
+    }
+  }
+  const user = await resolveObserverUser(cleanId)
+  return { user: { id: user.id } }
+}
+
+export type SaveObservationCaptureInput = {
+  projectId: string
+  observerIdentifier: string
+  /** Jeton de session logique — stable pour toute la durée de la session observateur. */
+  runId: string
+  /** Clé de déduplication émise par le client (id local de la capture). */
+  clientKey: string
+  timestamp: number
+  imageDataUrl: string
+  observationType?: string | null
+  videoId?: string | null
+  locale?: Locale
+}
+
+export type SaveObservationCaptureResult =
+  | { ok: true; status: 'saved' | 'already-saved'; observationId: string }
+  | { ok: false; error: string }
+
+/**
+ * Enregistre IMMÉDIATEMENT une capture confirmée : une image téléversée, une ligne
+ * persistée. L'idempotence (projet + `clientKey`) garantit qu'un double envoi (retry,
+ * reprise) ne crée jamais deux lignes et ne re-téléverse jamais l'image.
+ */
+export async function saveObservationCapture(
+  input: SaveObservationCaptureInput,
+): Promise<SaveObservationCaptureResult> {
+  const locale: Locale = input?.locale === 'en' ? 'en' : defaultLocale
+  const msg = (en: string, fr: string) => (locale === 'en' ? en : fr)
+
+  try {
+    const projectId = (input?.projectId ?? '').trim()
+    const clientKey = (input?.clientKey ?? '').trim().slice(0, 200)
+    const runId = (input?.runId ?? '').trim().slice(0, 120)
+    const rawType = input?.observationType
+    const observationType = typeof rawType === 'string' ? rawType.trim() : ''
+    const rawVideoId = input?.videoId
+    const videoId =
+      typeof rawVideoId === 'string' &&
+      rawVideoId.trim() !== '' &&
+      rawVideoId.trim() !== LEGACY_GENERIC_VIDEO_ID
+        ? rawVideoId.trim()
+        : null
+    const timestamp = input?.timestamp
+    const imageDataUrl = input?.imageDataUrl
+
+    if (!projectId) {
+      return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
+    }
+    if (!runId) {
+      return { ok: false, error: msg('Missing session token.', 'Jeton de session manquant.') }
+    }
+    if (!clientKey) {
+      return { ok: false, error: msg('Missing capture key.', 'Clé de capture manquante.') }
+    }
+    if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp < 0) {
+      return { ok: false, error: msg('Invalid timestamp.', 'Horodatage invalide.') }
+    }
+    if (!isValidBase64Image(imageDataUrl)) {
+      return { ok: false, error: msg('Invalid image format.', 'Format d’image invalide.') }
+    }
+
+    const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
+    if ('error' in identity) return { ok: false, error: identity.error }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        isArchived: true,
+        observationTypes: true,
+        videos: { select: { id: true, typeLabel: true } },
+      },
+    })
+    if (!project) {
+      return { ok: false, error: msg('Project not found.', 'Projet introuvable.') }
+    }
+    if (project.isArchived) {
+      return {
+        ok: false,
+        error: msg(
+          'This project is archived. Submissions are closed.',
+          'Ce projet est archivé. Les soumissions sont clôturées.',
+        ),
+      }
+    }
+
+    // Idempotence immédiate : jamais de re-téléversement si la capture existe déjà.
+    const existing = await prisma.observation.findFirst({
+      where: { projectId, clientKey },
+      select: { id: true },
+    })
+    if (existing) {
+      return { ok: true, status: 'already-saved', observationId: existing.id }
+    }
+
+    // Validation du type d'observation AVANT tout téléversement (échec rapide).
+    const configuredTypes = project.observationTypes ?? []
+    const configuredTypeSet = new Set(configuredTypes.map((type) => type.trim()))
+    const typedLabel = videoId
+      ? (project.videos.find((video) => video.id === videoId)?.typeLabel ?? null)
+      : null
+    if (typedLabel) {
+      if (!observationType || observationType.toLowerCase() !== typedLabel.toLowerCase()) {
+        return {
+          ok: false,
+          error: msg(
+            `This capture must be typed "${typedLabel}".`,
+            `Cette capture doit être typée « ${typedLabel} ».`,
+          ),
+        }
+      }
+    } else if (configuredTypes.length > 0) {
+      if (!observationType) {
+        return {
+          ok: false,
+          error: msg(
+            'Select an observation type for this capture.',
+            'Sélectionnez un type d’observation pour cette capture.',
+          ),
+        }
+      }
+      if (!configuredTypeSet.has(observationType)) {
+        return {
+          ok: false,
+          error: msg(
+            `Observation type "${observationType}" is not offered for this project.`,
+            `Le type d’observation « ${observationType} » n’est pas proposé pour ce projet.`,
+          ),
+        }
+      }
+    }
+
+    const uploaded = await uploadAnnotationImage(imageDataUrl)
+    try {
+      const created = await prisma.observation.create({
+        data: {
+          projectId,
+          userId: identity.user.id,
+          videoId,
+          pointId: null, // rattachement fenêtre + fantôme calculés à la finalisation
+          timestampTotal: Math.round(timestamp),
+          imageUrl: uploaded.secureUrl,
+          imagePublicId: uploaded.publicId,
+          observationType: observationType || null,
+          isGhostPoint: false,
+          isVerified: false, // capture « enregistrée » mais session non finalisée
+          sessionRunId: runId,
+          clientKey,
+        },
+        select: { id: true },
+      })
+      return { ok: true, status: 'saved', observationId: created.id }
+    } catch (error) {
+      if (isPrismaUniqueViolation(error)) {
+        // Course d'idempotence : une ligne identique vient d'être créée. On nettoie
+        // l'asset tout juste uploadé (pas d'orphelin) puis on renvoie la ligne existante.
+        try {
+          await deleteCloudinaryAsset(uploaded.publicId)
+        } catch (cleanupError) {
+          console.error('[saveObservationCapture] Nettoyage Cloudinary impossible :', cleanupError)
+        }
+        const raced = await prisma.observation.findFirst({
+          where: { projectId, clientKey },
+          select: { id: true },
+        })
+        if (raced) return { ok: true, status: 'already-saved', observationId: raced.id }
+      }
+      throw error
+    }
+  } catch (error) {
+    console.error('Erreur lors de l’enregistrement de la capture :', error)
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Une erreur inattendue est survenue lors de l’enregistrement. Réessayez.',
+    }
+  }
+}
+
+export type DeleteSavedObservationInput = {
+  projectId: string
+  observerIdentifier: string
+  clientKey: string
+  locale?: Locale
+}
+
+export type DeleteSavedObservationResult =
+  | { ok: true; deleted: boolean }
+  | { ok: false; error: string }
+
+/**
+ * Supprime une capture déjà enregistrée (session non finalisée uniquement).
+ * Ordre sécurisé : l'asset Cloudinary est supprimé AVANT la ligne en base — si
+ * Cloudinary échoue transitoirement, la référence est conservée (pas d'orphelin,
+ * pas de suppression silencieuse) et l'appelant peut réessayer.
+ */
+export async function deleteSavedObservation(
+  input: DeleteSavedObservationInput,
+): Promise<DeleteSavedObservationResult> {
+  const locale: Locale = input?.locale === 'en' ? 'en' : defaultLocale
+  const msg = (en: string, fr: string) => (locale === 'en' ? en : fr)
+
+  try {
+    const projectId = (input?.projectId ?? '').trim()
+    const clientKey = (input?.clientKey ?? '').trim().slice(0, 200)
+    if (!projectId) {
+      return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
+    }
+    if (!clientKey) {
+      return { ok: false, error: msg('Missing capture key.', 'Clé de capture manquante.') }
+    }
+
+    const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
+    if ('error' in identity) return { ok: false, error: identity.error }
+
+    const row = await prisma.observation.findFirst({
+      where: { projectId, clientKey, userId: identity.user.id },
+      select: {
+        id: true,
+        isVerified: true,
+        imagePublicId: true,
+        imageUrl: true,
+      },
+    })
+    if (!row) return { ok: true, deleted: false }
+
+    if (row.isVerified) {
+      return {
+        ok: false,
+        error: msg(
+          'This capture is already part of a finalized session and cannot be deleted.',
+          'Cette capture fait déjà partie d’une session finalisée ; elle ne peut pas être supprimée.',
+        ),
+      }
+    }
+
+    const deletion = await deleteCloudinaryAsset(row.imagePublicId || row.imageUrl)
+    if (!deletion.ok) return { ok: false, error: deletion.error }
+
+    await prisma.observation.delete({ where: { id: row.id } })
+    await recordAudit({
+      userId: identity.user.id,
+      action: AUDIT_ACTIONS.captureDeleted,
+      entityType: 'observation',
+      entityId: row.id,
+      metadata: { projectId, clientKey },
+    })
+    return { ok: true, deleted: true }
+  } catch (error) {
+    console.error('Erreur lors de la suppression de la capture :', error)
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Une erreur inattendue est survenue lors de la suppression. Réessayez.',
+    }
+  }
+}
+
+export type FinalizeObservationSessionInput = {
+  projectId: string
+  observerIdentifier: string
+  runId: string
+  locale?: Locale
+}
+
+export type FinalizeObservationSessionResult =
+  | { ok: true; finalizedCount: number; alreadyFinalized: boolean }
+  | { ok: false; error: string }
+
+/**
+ * Finalisation LÉGÈRE d'une session : rattache chaque capture enregistrée à sa fenêtre
+ * de validation (détermination du point réel / point fantôme) puis certifie la session
+ * (`isVerified=true`). Aucune image n'est re-téléversée, aucune capture recréée.
+ */
+export async function finalizeObservationSession(
+  input: FinalizeObservationSessionInput,
+): Promise<FinalizeObservationSessionResult> {
+  const locale: Locale = input?.locale === 'en' ? 'en' : defaultLocale
+  const msg = (en: string, fr: string) => (locale === 'en' ? en : fr)
+
+  try {
+    const projectId = (input?.projectId ?? '').trim()
+    const runId = (input?.runId ?? '').trim().slice(0, 120)
+    if (!projectId) {
+      return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
+    }
+    if (!runId) {
+      return { ok: false, error: msg('Missing session token.', 'Jeton de session manquant.') }
+    }
+
+    const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
+    if ('error' in identity) return { ok: false, error: identity.error }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, isArchived: true },
+    })
+    if (!project) {
+      return { ok: false, error: msg('Project not found.', 'Projet introuvable.') }
+    }
+    if (project.isArchived) {
+      return {
+        ok: false,
+        error: msg(
+          'This project is archived. Submissions are closed.',
+          'Ce projet est archivé. Les soumissions sont clôturées.',
+        ),
+      }
+    }
+
+    const pending = await prisma.observation.findMany({
+      where: {
+        projectId,
+        userId: identity.user.id,
+        sessionRunId: runId,
+        isVerified: false,
+      },
+      select: { id: true, videoId: true, timestampTotal: true },
+    })
+
+    if (pending.length === 0) {
+      // Session déjà finalisée (idempotence) ou inexistante.
+      const finalized = await prisma.observation.findFirst({
+        where: { projectId, userId: identity.user.id, sessionRunId: runId, isVerified: true },
+        select: { id: true },
+      })
+      if (finalized) return { ok: true, finalizedCount: 0, alreadyFinalized: true }
+      return {
+        ok: false,
+        error: msg('Nothing to finalize for this session.', 'Rien à finaliser pour cette session.'),
+      }
+    }
+
+    // Fenêtres de validation confidentielles (jamais transmises à l'observateur).
+    const validationPoints = await prisma.projectPoint.findMany({
+      where: { projectId },
+      select: { id: true, videoId: true, trameDebut: true, trameFin: true },
+    })
+
+    // Regroupe les écritures par cible (pointId + statut fantôme) pour limiter le
+    // nombre de requêtes : opération légère, même pour une session chargée.
+    const groups = new Map<
+      string,
+      { pointId: string | null; isGhostPoint: boolean; ids: string[] }
+    >()
+    for (const row of pending) {
+      const scopedPoints =
+        row.videoId === null
+          ? validationPoints.filter((point) => point.videoId === null)
+          : validationPoints.filter((point) => point.videoId === row.videoId)
+      const matchedPoint = scopedPoints.find(
+        (point) => row.timestampTotal >= point.trameDebut && row.timestampTotal <= point.trameFin,
+      )
+      const pointId = matchedPoint ? matchedPoint.id : null
+      const isGhostPoint = !matchedPoint
+      const key = `${pointId ?? '__none__'}|${isGhostPoint ? 'g' : 'v'}`
+      const group = groups.get(key) ?? { pointId, isGhostPoint, ids: [] }
+      group.ids.push(row.id)
+      groups.set(key, group)
+    }
+
+    for (const group of groups.values()) {
+      await prisma.observation.updateMany({
+        where: { id: { in: group.ids } },
+        data: {
+          pointId: group.pointId,
+          isGhostPoint: group.isGhostPoint,
+          isVerified: true,
+        },
+      })
+    }
+
+    await recordAudit({
+      userId: identity.user.id,
+      action: AUDIT_ACTIONS.sessionFinalized,
+      entityType: 'observation',
+      entityId: runId,
+      metadata: { projectId, finalizedCount: pending.length },
+    })
+
+    updateTag(BLIND_PROJECTS_TAG)
+    revalidatePath(`/observe/${projectId}`)
+    revalidatePath(`/experience/${projectId}`)
+    revalidatePath('/experience')
+    revalidatePath('/admin/projects')
+
+    return { ok: true, finalizedCount: pending.length, alreadyFinalized: false }
+  } catch (error) {
+    console.error('Erreur lors de la finalisation de la session :', error)
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : 'Une erreur inattendue est survenue lors de la finalisation. Réessayez.',
     }
   }
 }

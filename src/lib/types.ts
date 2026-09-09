@@ -176,8 +176,20 @@ export type SubmissionResultDto =
 export type ActionResult = { ok: true; id?: string } | { ok: false; error: string }
 
 // ——— Types pour le Moteur d'Analyse Scientifique (Phase 5) ———
+//
+// ─── SÉMANTIQUE « POINT UNIQUE » (règle produit) ─────────────────────────────
+// Pour UN observateur, plusieurs observations certifiées dans la MÊME fenêtre
+// (`pointId`) du MÊME type comptent pour UN point détecté, pas N. Partout dans
+// ce DTO (résumé, observateurs) comme dans les exports (Excel/CSV/PDF), les
+// compteurs « points / validées / fenêtres » dédupliquent par
+// `(observateur, pointId)` ; les fausses alertes restent des événements
+// (une capture hors trame = un événement) ; la précision =
+// points uniques validés / (points uniques validés + fausses alertes).
+// Le relevé brut (`pointsAnalytics[].captures`, `ghostPointsAnalytics.captures`)
+// conserve, lui, chaque capture certifiée — aucune perte de données brutes.
+// ─────────────────────────────────────────────────────────────────────────────
 
-/** Capture d'observation détaillée pour l'analyse administrateur. */
+/** Capture d'observation détaillée pour l'analyse administrateur (donnée BRUTE). */
 export type ObservationCaptureDto = {
   id: string
   timestampTotal: number
@@ -196,11 +208,16 @@ export type PointConcordanceDto = {
   trameDebut: number
   trameFin: number
   targetDuration: number
-  observerCount: number // Nombre d'observateurs distincts ayant validé cette cible
+  observerCount: number // Nombre d'observateurs distincts ayant validé cette cible (déjà unique par observateur)
   concordanceRate: number // Taux en pourcentage (0-100) par rapport au total des observateurs
-  avgDelaySeconds: number | null // Délai moyen de détection en secondes
+  /**
+   * Délai moyen de détection en secondes. Délai PAR ÉVÉNEMENT (chaque capture
+   * validée de la fenêtre), pas par point unique : c'est une mesure de réaction.
+   */
+  avgDelaySeconds: number | null
   minTimestamp: number | null
   maxTimestamp: number | null
+  /** Relevé BRUT des captures certifiées de la fenêtre (jamais dédupliqué). */
   captures: ObservationCaptureDto[]
 }
 
@@ -214,22 +231,34 @@ export type GhostBucketDto = {
 
 /** Synthèse des fausses alertes (Points Fantômes) d'un projet. */
 export type GhostPointAnalyticsDto = {
+  /** Fausses alertes = événements (chaque capture hors trame compte pour 1). */
   totalGhostPoints: number
-  ghostRate: number // Pourcentage par rapport au total des observations (0-100)
+  /** Part des fausses alertes dans les « déclarations » (0-100), arrondie à l'entier. */
+  ghostRate: number
   timelineDistribution: GhostBucketDto[]
+  /** Relevé BRUT des captures fantômes (jamais dédupliqué). */
   captures: ObservationCaptureDto[]
 }
 
-/** Métrique de précision et de participation par observateur. */
+/**
+ * Métrique de précision et de participation par observateur. Les compteurs
+ * « points » appliquent la règle du point unique : un observateur qui capture
+ * plusieurs fois la même fenêtre (`pointId`) ne compte qu'UN point validé.
+ */
 export type ObserverMetricDto = {
   userId: string
   anonymousId: string
   email: string
+  /** Déclarations de l'observateur = points uniques validés + fausses alertes. */
   totalObservations: number
+  /** Points uniques validés : fenêtres distinctes (non fantômes) détectées. */
   validObservationsCount: number
+  /** Fausses alertes de l'observateur (événements). */
   ghostPointsCount: number
-  pointsDetectedCount: number // Nombre de cibles distinctes détectées
-  precisionRate: number // % d'observations valides (0-100)
+  /** Nombre de cibles (fenêtres) distinctes détectées = `validObservationsCount`. */
+  pointsDetectedCount: number
+  /** % de précision = points uniques validés / déclarations (0-100). */
+  precisionRate: number
   firstSessionAt: string
   lastSessionAt: string
 }
@@ -253,6 +282,7 @@ export type AnalyticsFilter = {
 export type AnalyticsVideoContextDto = BlindVideoDto & {
   projectId: string
   benchmarkSeconds: number | null
+  /** Captures CERTIFIÉES (`isVerified`) de la passe — jamais les sessions en cours. */
   captureCount: number
   pointCount: number
 }
@@ -273,12 +303,27 @@ export type ProjectAnalyticsDto = {
   }
   summary: {
     totalObservers: number
+    /**
+     * Total des « déclarations » = points uniques validés + fausses alertes.
+     * Nombre mixte (points dédupliqués + événements fantômes) : dénominateur de
+     * la précision globale. Ce n'est PAS le nombre de captures brutes.
+     */
     totalObservations: number
+    /** Points uniques validés : couples distincts (observateur × fenêtre) non fantômes. */
     validObservationsCount: number
+    /** Fausses alertes (événements fantômes) — une capture hors trame = 1. */
     ghostPointsCount: number
     overallConcordanceRate: number // Moyenne des taux de concordance des points cibles
-    overallPrecisionRate: number // % d'observations valides vs total
-    averageDetectionDelay: number | null // Moyenne globale des délais de réaction
+    /**
+     * % de précision globale = points uniques validés / déclarations
+     * (points uniques validés + fausses alertes).
+     */
+    overallPrecisionRate: number
+    /**
+     * Moyenne globale des délais de réaction — PAR ÉVÉNEMENT (chaque capture
+     * validée), pas par point unique : mesure de réaction au `trameDebut`.
+     */
+    averageDetectionDelay: number | null
     /** Filtre réellement appliqué aux calculs (cohérence métriques ↔ contexte). */
     appliedFilter?: AnalyticsFilter
   }

@@ -41,10 +41,16 @@ async function adminStats(): Promise<DashboardStats> {
     prisma.project.groupBy({ by: ['isArchived'], _count: { _all: true } }),
     prisma.user.groupBy({ by: ['role'], _count: { _all: true } }),
     prisma.video.count(),
-    prisma.observation.groupBy({ by: ['isGhostPoint'], _count: { _all: true } }),
+    // Seules les captures CERTIFIÉES (isVerified) alimentent les compteurs : une
+    // session « en cours » (transitoire) n'est jamais visible des statistiques.
+    prisma.observation.groupBy({
+      by: ['isGhostPoint'],
+      where: { isVerified: true },
+      _count: { _all: true },
+    }),
     prisma.observation.groupBy({
       by: ['userId', 'sessionRunId'],
-      where: { sessionRunId: { not: null } },
+      where: { sessionRunId: { not: null }, isVerified: true },
     }),
   ])
 
@@ -93,13 +99,16 @@ async function analystStats(uid: string): Promise<DashboardStats> {
   const [obsGroups, observerRows, sessionRows] = await Promise.all([
     prisma.observation.groupBy({
       by: ['isGhostPoint'],
-      where: { projectId: { in: ids } },
+      where: { projectId: { in: ids }, isVerified: true },
       _count: { _all: true },
     }),
-    prisma.observation.groupBy({ by: ['userId'], where: { projectId: { in: ids } } }),
+    prisma.observation.groupBy({
+      by: ['userId'],
+      where: { projectId: { in: ids }, isVerified: true },
+    }),
     prisma.observation.groupBy({
       by: ['userId', 'sessionRunId'],
-      where: { projectId: { in: ids }, sessionRunId: { not: null } },
+      where: { projectId: { in: ids }, sessionRunId: { not: null }, isVerified: true },
     }),
   ])
 
@@ -128,16 +137,22 @@ async function observerStats(uid: string): Promise<DashboardStats> {
     }
   }
 
+  // Seules les captures CERTIFIÉES comptent (les sessions « en cours » sont
+  // transitoires et invisibles des statistiques, même pour l'observateur).
   const [obsGroups, projectRows, sessionRows] = await Promise.all([
-    prisma.observation.groupBy({ by: ['isGhostPoint'], where: { userId: uid }, _count: { _all: true } }),
+    prisma.observation.groupBy({
+      by: ['isGhostPoint'],
+      where: { userId: uid, isVerified: true },
+      _count: { _all: true },
+    }),
     prisma.observation.findMany({
-      where: { userId: uid },
+      where: { userId: uid, isVerified: true },
       distinct: ['projectId'],
       select: { projectId: true },
     }),
     prisma.observation.groupBy({
       by: ['sessionRunId'],
-      where: { userId: uid, sessionRunId: { not: null } },
+      where: { userId: uid, sessionRunId: { not: null }, isVerified: true },
     }),
   ])
 
