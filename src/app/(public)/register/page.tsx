@@ -9,8 +9,8 @@ export async function generateMetadata(): Promise<Metadata> {
     title: locale === 'en' ? 'Create an account' : 'Créer un compte',
     description:
       locale === 'en'
-        ? 'Register as an observer or an analyst on ONA Field.'
-        : 'Inscrivez-vous comme observateur ou analyste sur ONA Field.',
+        ? 'Request an analyst account on ONA Field. An administrator validates each request.'
+        : 'Demandez un compte analyste sur ONA Field. Un administrateur valide chaque demande.',
   }
 }
 
@@ -20,7 +20,7 @@ export default async function RegisterPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-4 py-12 sm:px-6">
-      <RegisterForm locale={locale} t={d.auth} roleName={d.roles} />
+      <RegisterForm locale={locale} t={d.auth} />
     </div>
   )
 }
