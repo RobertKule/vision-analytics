@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   Download,
@@ -9,6 +9,8 @@ import {
   FileText,
   Images,
   LayoutDashboard,
+  ListFilter,
+  Share2,
   Users,
 } from 'lucide-react'
 import type { AdminProjectDetailDto, ProjectAnalyticsDto } from '@/lib/types'
@@ -18,10 +20,19 @@ import {
   sanitizeBaseName,
   triggerFileDownload,
 } from '@/lib/exportHelpers'
+import {
+  ALL_TYPES,
+  consultationTypeOptions,
+  countDistinctObservers,
+  scopeObservationsByType,
+  scopePointsOfType,
+  scopeVideosByType,
+} from '@/lib/typeScope'
 import Tabs from '@/components/ui/Tabs'
 import ProjectOverviewTab from '@/components/admin/projects/ProjectOverviewTab'
 import ObservationsTab from '@/components/admin/projects/ObservationsTab'
 import ObserverActivityTab from '@/components/admin/projects/ObserverActivityTab'
+import ObserverTokensTab from '@/components/admin/projects/ObserverTokensTab'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 
 const toolbarButton =
@@ -45,8 +56,37 @@ export default function ProjectDetailWorkspace({
   authorName = '',
 }: ProjectDetailWorkspaceProps) {
   const { project, rows, points, videos } = detail
-  const [activeTab, setActiveTab] = useState<'overview' | 'observations' | 'activity'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'observations' | 'activity' | 'share'>('overview')
   const [isReportOpen, setIsReportOpen] = useState(false)
+
+  // ——— Consultation par type d'observation (Partie S) ———
+  // Le sélecteur est piloté par les types CONFIGURÉS du projet (jamais codé en dur) ;
+  // la portée choisie filtre de façon cohérente observations, vidéos et fenêtres.
+  const typeOptions = useMemo(
+    () => consultationTypeOptions(project.observationTypes),
+    [project.observationTypes],
+  )
+  const [consultationType, setConsultationType] = useState<string>(ALL_TYPES)
+
+  const scoped = useMemo(() => {
+    const scopedRows = scopeObservationsByType(rows, consultationType)
+    const scopedVideos = scopeVideosByType(videos, consultationType)
+    const scopedPoints = scopePointsOfType(points, scopedVideos, consultationType)
+    return {
+      rows: scopedRows,
+      videos: scopedVideos,
+      points: scopedPoints,
+      observers: countDistinctObservers(scopedRows),
+    }
+  }, [rows, videos, points, consultationType])
+
+  // Compteurs de la fiche restreints à la consultation (source : données filtrées).
+  const scopedProject = {
+    ...project,
+    observationCount: scoped.rows.length,
+    observerCount: scoped.observers,
+    pointsCount: scoped.points.length,
+  }
 
   const isEmpty = rows.length === 0
   const fileBase = sanitizeBaseName(project.title)
@@ -122,26 +162,77 @@ export default function ProjectDetailWorkspace({
         )}
       </div>
 
+      {/* ——— Consultation par type d'observation (Partie S) ——— */}
+      {typeOptions.length > 1 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex flex-wrap items-center gap-2">
+            <ListFilter aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
+            <label
+              htmlFor="consultation-type"
+              className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+            >
+              Consulter par type
+            </label>
+            <select
+              id="consultation-type"
+              value={consultationType}
+              onChange={(event) => setConsultationType(event.target.value)}
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-2.5 text-sm font-medium text-zinc-800 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:focus:border-milk dark:focus:ring-milk/15"
+            >
+              {typeOptions.map((type) => (
+                <option key={type === ALL_TYPES ? '__all__' : type} value={type}>
+                  {type === ALL_TYPES ? 'Tous les types' : type}
+                </option>
+              ))}
+            </select>
+          </div>
+          {consultationType !== ALL_TYPES ? (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Consultation restreinte à{' '}
+              <span className="font-semibold text-zinc-800 dark:text-zinc-100">
+                « {consultationType} »
+              </span>{' '}
+              : {scoped.rows.length} observation{scoped.rows.length > 1 ? 's' : ''},{' '}
+              {scoped.videos.length} vidéo{scoped.videos.length > 1 ? 's' : ''},{' '}
+              {scoped.points.length} fenêtre{scoped.points.length > 1 ? 's' : ''}.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* ——— Onglets ——— */}
       <Tabs
         ariaLabel="Sections du projet"
         items={[
           { id: 'overview', label: 'Vue d’ensemble', icon: LayoutDashboard },
-          { id: 'observations', label: 'Observations', count: rows.length, icon: Images },
-          { id: 'activity', label: 'Activité des observateurs', count: project.observerCount, icon: Users },
+          { id: 'observations', label: 'Observations', count: scoped.rows.length, icon: Images },
+          { id: 'activity', label: 'Activité des observateurs', count: scoped.observers, icon: Users },
+          { id: 'share', label: 'Partager', icon: Share2 },
         ]}
         active={activeTab}
-        onChange={(id) => setActiveTab(id as 'overview' | 'observations' | 'activity')}
+        onChange={(id) =>
+          setActiveTab(id as 'overview' | 'observations' | 'activity' | 'share')
+        }
       />
 
       {/* ——— Panneau actif ——— */}
       <div role="tabpanel" id={`panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="min-w-0">
         {activeTab === 'overview' ? (
-          <ProjectOverviewTab project={project} points={points} videos={videos} />
+          <ProjectOverviewTab
+            project={scopedProject}
+            points={scoped.points}
+            videos={scoped.videos}
+            onShare={() => setActiveTab('share')}
+          />
         ) : null}
-        {activeTab === 'observations' ? <ObservationsTab rows={rows} points={points} /> : null}
+        {activeTab === 'observations' ? (
+          <ObservationsTab rows={scoped.rows} points={scoped.points} />
+        ) : null}
         {activeTab === 'activity' ? (
-          <ObserverActivityTab projectId={project.id} projectTitle={project.title} rows={rows} />
+          <ObserverActivityTab projectId={project.id} projectTitle={project.title} rows={scoped.rows} />
+        ) : null}
+        {activeTab === 'share' ? (
+          <ObserverTokensTab projectId={project.id} projectTitle={project.title} />
         ) : null}
       </div>
 
