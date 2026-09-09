@@ -747,6 +747,9 @@ const en = {
     inactiveBody: 'This access link has expired or has been revoked. Ask the project administrator for a new one.',
     closedTitle: 'This project is closed',
     closedBody: 'The project behind this access link is no longer open for new observation sessions.',
+    usedTitle: 'This access link has already been used',
+    usedBody:
+      'This link has already been used to open an observation session. One link opens a single session for a single observer, in the browser where it was first opened — it can no longer be used from another browser or after the session has been submitted. Ask the project administrator for a new link.',
     contactHint: 'Contact the project administrator to receive a new link.',
     ctaHome: 'Back to home',
     ctaDocs: 'Documentation',
@@ -1493,6 +1496,9 @@ const fr: typeof en = {
     inactiveBody: 'Ce lien d’accès a expiré ou a été révoqué. Demandez un nouveau lien à l’administrateur du projet.',
     closedTitle: 'Ce projet est clôturé',
     closedBody: 'Le projet associé à ce lien d’accès n’accepte plus de nouvelles sessions d’observation.',
+    usedTitle: 'Ce lien d’accès a déjà été utilisé',
+    usedBody:
+      'Ce lien a déjà été utilisé pour ouvrir une session d’observation. Un lien n’ouvre qu’une seule session pour un seul observateur, dans le navigateur où il a été ouvert la première fois — il ne peut plus être utilisé depuis un autre navigateur, ni après la soumission de la session. Contactez l’administrateur du projet pour obtenir un nouveau lien.',
     contactHint: 'Contactez l’administrateur du projet pour obtenir un nouveau lien.',
     ctaHome: 'Retour à l’accueil',
     ctaDocs: 'Documentation',

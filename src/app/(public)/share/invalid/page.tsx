@@ -12,17 +12,20 @@ export async function generateMetadata({ searchParams }: PageProps): Promise<Met
   const { reason } = (await searchParams) ?? {}
   const locale = await getLocale()
   const t = getDictionary(locale).shareAccess
-  const mode = reason === 'revoked' || reason === 'expired' ? 'inactive' : 'invalid'
+  const mode =
+    reason === 'used' ? 'used' : reason === 'revoked' || reason === 'expired' ? 'inactive' : 'invalid'
   return {
-    title: mode === 'inactive' ? t.inactiveTitle : t.invalidTitle,
+    title:
+      mode === 'used' ? t.usedTitle : mode === 'inactive' ? t.inactiveTitle : t.invalidTitle,
     robots: { index: false, follow: false },
   }
 }
 
 /**
  * Page d'erreur d'un lien d'accès observateur. Atteinte par redirection depuis
- * `/share/<JETON>` quand le jeton est inconnu, révoqué, expiré, ou rattaché à un
- * projet clôturé. Aucune session n'est créée et le jeton n'est jamais affiché.
+ * `/share/<JETON>` quand le jeton est inconnu, révoqué, expiré, rattaché à un projet
+ * clôturé, ou déjà utilisé (déjà ouvert par un autre navigateur / session déjà
+ * soumise). Aucune session n'est créée et le jeton n'est jamais affiché.
  */
 export default async function ShareInvalidPage({ searchParams }: PageProps) {
   const { reason } = (await searchParams) ?? {}
@@ -30,16 +33,30 @@ export default async function ShareInvalidPage({ searchParams }: PageProps) {
   const t = getDictionary(locale).shareAccess
 
   const mode =
-    reason === 'revoked' || reason === 'expired'
-      ? 'inactive'
-      : reason === 'archived'
-        ? 'closed'
-        : 'invalid'
+    reason === 'used'
+      ? 'used'
+      : reason === 'revoked' || reason === 'expired'
+        ? 'inactive'
+        : reason === 'archived'
+          ? 'closed'
+          : 'invalid'
 
   const title =
-    mode === 'closed' ? t.closedTitle : mode === 'inactive' ? t.inactiveTitle : t.invalidTitle
+    mode === 'used'
+      ? t.usedTitle
+      : mode === 'closed'
+        ? t.closedTitle
+        : mode === 'inactive'
+          ? t.inactiveTitle
+          : t.invalidTitle
   const body =
-    mode === 'closed' ? t.closedBody : mode === 'inactive' ? t.inactiveBody : t.invalidBody
+    mode === 'used'
+      ? t.usedBody
+      : mode === 'closed'
+        ? t.closedBody
+        : mode === 'inactive'
+          ? t.inactiveBody
+          : t.invalidBody
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center px-4 py-16 text-center sm:px-6">
