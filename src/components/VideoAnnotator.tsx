@@ -14,6 +14,7 @@ import {
   Edit2,
   Film,
   History,
+  Loader2,
   MapPin,
   Maximize2,
   Minimize2,
@@ -28,14 +29,36 @@ import {
 } from 'lucide-react'
 import type { BlindVideoDto, CaptureRecord } from '@/lib/types'
 import type { AnnotatorText, CompletionText, Locale, StepperText } from '@/lib/i18n'
-import SubmissionStepper from '@/components/SubmissionStepper'
+import SubmissionStepper, {
+  type FinalizeOutcome,
+  type FinalizePhase,
+} from '@/components/SubmissionStepper'
 import { computeTypeCompletion } from '@/lib/captureCompletion'
+import {
+  deleteSavedObservation,
+  finalizeObservationSession,
+  saveObservationCapture,
+} from '@/app/actions/observationActions'
+import {
+  addPendingSync,
+  countSyncStates,
+  markFailed,
+  markSynced,
+  markSyncing,
+  normalizeResumedSync,
+  pendingServerDeleteIds,
+  removeSyncEntry,
+  requestServerDelete,
+  selectNextToSync,
+  type CaptureSyncMap,
+} from '@/lib/captureSyncState'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import {
   clearStoredDraft,
   filterObservationsToPasses,
   getAnonymousObserverId,
   loadStoredDraft,
+  newSessionToken,
   saveStoredDraft,
   type StoredObservationDraft,
 } from '@/lib/draftStore'
@@ -298,6 +321,20 @@ export default function VideoAnnotator({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   /**
+   * Identité d'observation de la session — fixée au montage : email du compte
+   * connecté (parcours `/experience`) sinon ID anonyme stable du navigateur
+   * (parcours public `/observe`). Chaque capture confirmée est enregistrée sous
+   * cet identifiant ; la finalisation de session utilise exactement le même.
+   */
+  const [observerIdentifier] = useState<string>(
+    () => (identityLabel ?? '').trim() || getAnonymousObserverId(),
+  )
+  /** Jeton de session logique, stable pour toute la durée du brouillon (reprises incluses). */
+  const [runId, setRunId] = useState<string>(() => newSessionToken())
+  /** État de synchronisation par capture (pending → syncing → synced | failed). */
+  const [syncStates, setSyncStates] = useState<CaptureSyncMap>({})
+
+  /**
    * Types « couvrables » de la session = configuration du projet restreinte à ce
    * que les onglets permettent réellement de produire :
    *  — une passe générique (sans type verrouillé) permet de capturer n'importe quel
@@ -347,6 +384,307 @@ export default function VideoAnnotator({
   const [controlsVisible, setControlsVisible] = useState(true)
   /** Capture active du carrousel (null → dernière ajoutée, la plus récente). */
   const [activeId, setActiveId] = useState<string | null>(null)
+
+  // ——— File de synchronisation immédiate des captures ———
+  // Miroirs pour la file asynchrone : elle lit toujours l'état le plus récent sans
+  // dépendre du cycle de rendu React (les `await` séparent une mise à jour d'état de
+  // son commit). La file est sérialisée par une chaîne de promesses : un seul passage
+  // (envoi d'une capture puis vidage des suppressions serveur) tourne à la fois.
+  const syncStatesRef = useRef<CaptureSyncMap>({})
+  const observationsRef = useRef<CaptureRecord[]>([])
+  const runIdRef = useRef<string>(runId)
+  const observerIdentifierRef = useRef<string>(observerIdentifier)
+  const resumeDraftRef = useRef<StoredObservationDraft | null>(null)
+  const pumpChainRef = useRef<Promise<void>>(Promise.resolve())
+
+  useEffect(() => {
+    observationsRef.current = observations
+  }, [observations])
+
+  useEffect(() => {
+    runIdRef.current = runId
+  }, [runId])
+
+  useEffect(() => {
+    observerIdentifierRef.current = observerIdentifier
+  }, [observerIdentifier])
+
+  /** Remplace l'état de synchronisation (ref + état React) de façon atomique. */
+  const replaceSyncMap = useCallback((next: CaptureSyncMap) => {
+    syncStatesRef.current = next
+    setSyncStates(next)
+  }, [])
+
+  /** Applique une transition pure à l'état de synchronisation (ref + état React). */
+  const updateSyncMap = useCallback((updater: (prev: CaptureSyncMap) => CaptureSyncMap) => {
+    const next = updater(syncStatesRef.current)
+    syncStatesRef.current = next
+    setSyncStates(next)
+  }, [])
+
+  const isBrowserOnline = (): boolean =>
+    typeof navigator === 'undefined' || navigator.onLine !== false
+
+  /** Supprime côté serveur une capture déjà enregistrée (ligne + image). */
+  const attemptServerDelete = useCallback(
+    async (id: string): Promise<void> => {
+      const projectIdNow = projectId
+      if (!projectIdNow) return
+      const current = syncStatesRef.current[id]
+      if (!current) {
+        updateSyncMap((prev) => removeSyncEntry(prev, id))
+        return
+      }
+      updateSyncMap((prev) => markSyncing(prev, id))
+      let result: Awaited<ReturnType<typeof deleteSavedObservation>>
+      try {
+        result = await deleteSavedObservation({
+          projectId: projectIdNow,
+          observerIdentifier: observerIdentifierRef.current,
+          clientKey: id,
+          locale,
+        })
+      } catch (error) {
+        console.error('[VideoAnnotator] Suppression serveur impossible.', error)
+        updateSyncMap((prev) => markFailed(prev, id))
+        return
+      }
+      if (result.ok) {
+        updateSyncMap((prev) => removeSyncEntry(prev, id))
+      } else {
+        updateSyncMap((prev) => markFailed(prev, id))
+      }
+    },
+    [locale, projectId, updateSyncMap],
+  )
+
+  /** Enregistre une capture confirmée (idempotent côté serveur par `clientKey`). */
+  const attemptSaveCapture = useCallback(
+    async (id: string): Promise<void> => {
+      const current = syncStatesRef.current[id]
+      if (current?.pendingServerDelete === true) {
+        await attemptServerDelete(id)
+        return
+      }
+      const observation = observationsRef.current.find((item) => item.id === id)
+      const projectIdNow = projectId
+      if (!observation || !projectIdNow) {
+        updateSyncMap((prev) => removeSyncEntry(prev, id))
+        return
+      }
+      updateSyncMap((prev) => markSyncing(prev, id))
+      let result: Awaited<ReturnType<typeof saveObservationCapture>>
+      try {
+        result = await saveObservationCapture({
+          projectId: projectIdNow,
+          observerIdentifier: observerIdentifierRef.current,
+          runId: runIdRef.current,
+          clientKey: id,
+          timestamp: observation.timestamp,
+          imageDataUrl: observation.imageDataUrl,
+          observationType: observation.observationType,
+          videoId: observation.videoId ?? null,
+          locale,
+        })
+      } catch (error) {
+        console.error('[VideoAnnotator] Enregistrement immédiat impossible.', error)
+        updateSyncMap((prev) => markFailed(prev, id))
+        return
+      }
+      const deleteRequested = syncStatesRef.current[id]?.pendingServerDelete === true
+      if (result.ok && !deleteRequested) {
+        updateSyncMap((prev) => markSynced(prev, id))
+        return
+      }
+      if (result.ok && deleteRequested) {
+        // La capture a été retirée pendant l'envoi : on supprime la ligne créée.
+        await attemptServerDelete(id)
+        return
+      }
+      if (deleteRequested) {
+        // Envoi refusé (validation) : aucune ligne serveur à supprimer.
+        updateSyncMap((prev) => removeSyncEntry(prev, id))
+        return
+      }
+      updateSyncMap((prev) => markFailed(prev, id))
+    },
+    [attemptServerDelete, locale, projectId, updateSyncMap],
+  )
+
+  /** Un passage complet : chaque capture en attente une fois, puis les suppressions orphelines. */
+  const runPumpPass = useCallback(
+    async (retryFailed: boolean): Promise<void> => {
+      const seen = new Set<string>()
+      while (true) {
+        const id = selectNextToSync(syncStatesRef.current, observationsRef.current, retryFailed)
+        if (id === null || seen.has(id)) break
+        seen.add(id)
+        await attemptSaveCapture(id)
+      }
+      for (const id of pendingServerDeleteIds(syncStatesRef.current, observationsRef.current)) {
+        if (!seen.has(id)) await attemptServerDelete(id)
+      }
+    },
+    [attemptSaveCapture, attemptServerDelete],
+  )
+
+  /** Chaîne la file : chaque demande s'exécute après la précédente (jamais en parallèle). */
+  const enqueuePump = useCallback(
+    (retryFailed: boolean): Promise<void> => {
+      const task = pumpChainRef.current.then(() => runPumpPass(retryFailed))
+      pumpChainRef.current = task.then(
+        () => undefined,
+        (error: unknown) => {
+          console.warn('[VideoAnnotator] Passage de synchronisation interrompu.', error)
+        },
+      )
+      return task
+    },
+    [runPumpPass],
+  )
+
+  type DrainResult = 'clean' | 'offline' | 'stuck'
+
+  /** Tente d'amener chaque capture et chaque suppression orpheline à terme. */
+  const drainAllForFinalize = useCallback(async (): Promise<DrainResult> => {
+    const isOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false
+    for (let pass = 0; pass < 4; pass += 1) {
+      if (isOffline()) return 'offline'
+      const before = countSyncStates(syncStatesRef.current, observationsRef.current)
+      const beforeLeft = before.pending + before.failed
+      const beforeDeletes = pendingServerDeleteIds(
+        syncStatesRef.current,
+        observationsRef.current,
+      ).length
+      await enqueuePump(true)
+      const after = countSyncStates(syncStatesRef.current, observationsRef.current)
+      const afterLeft = after.pending + after.failed
+      const afterDeletes = pendingServerDeleteIds(
+        syncStatesRef.current,
+        observationsRef.current,
+      ).length
+      if (afterLeft === 0 && afterDeletes === 0) return 'clean'
+      if (afterLeft >= beforeLeft && afterDeletes >= beforeDeletes) {
+        return isOffline() ? 'offline' : 'stuck'
+      }
+    }
+    return isOffline() ? 'offline' : 'stuck'
+  }, [enqueuePump])
+
+  /** Vidange les captures restantes puis certifie la session côté serveur. */
+  const handleFinalizeSession = useCallback(
+    async (onPhase: (phase: FinalizePhase) => void): Promise<FinalizeOutcome> => {
+      const projectIdNow = projectId
+      if (!projectIdNow) {
+        return { ok: false, error: '', offline: false }
+      }
+      onPhase('draining')
+      const drain = await drainAllForFinalize()
+      if (drain === 'offline') {
+        return { ok: false, error: t.stepper.waitingSync, offline: true }
+      }
+      if (drain === 'stuck') {
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+        return { ok: false, error: t.stepper.errorNetwork, offline }
+      }
+      onPhase('finalizing')
+      let result: Awaited<ReturnType<typeof finalizeObservationSession>>
+      try {
+        result = await finalizeObservationSession({
+          projectId: projectIdNow,
+          observerIdentifier: observerIdentifierRef.current,
+          runId: runIdRef.current,
+          locale,
+        })
+      } catch (error) {
+        console.error('[VideoAnnotator] Finalisation de session impossible.', error)
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+        return { ok: false, error: t.stepper.errorNetwork, offline }
+      }
+      if (result.ok) {
+        return {
+          ok: true,
+          finalizedCount: result.finalizedCount,
+          alreadyFinalized: result.alreadyFinalized,
+        }
+      }
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+      return { ok: false, error: result.error, offline }
+    },
+    [drainAllForFinalize, locale, projectId, t.stepper.errorNetwork, t.stepper.waitingSync],
+  )
+
+  /**
+   * Réconcilie une capture retirée localement avec son état serveur :
+   *  — pending/failed : jamais persistée (ou traitée comme telle) → simple retrait ;
+   *  — synced : suppression serveur requise (ligne déjà enregistrée) ;
+   *  — syncing : l'envoi en cours décidera — suppression serveur à sa résolution.
+   */
+  const reconcileRemovedCapture = useCallback(
+    (captureId: string): void => {
+      const current = syncStatesRef.current[captureId]
+      if (!current || current.pendingServerDelete === true) return
+      if (current.status === 'pending' || current.status === 'failed') {
+        updateSyncMap((prev) => removeSyncEntry(prev, captureId))
+        return
+      }
+      updateSyncMap((prev) => requestServerDelete(prev, captureId))
+      if (current.status === 'synced') {
+        void enqueuePump(false)
+      }
+    },
+    [enqueuePump, updateSyncMap],
+  )
+
+  /** Supprime une capture (corbeille du carrousel ou de la revue du stepper). */
+  const handleDeleteCapture = useCallback(
+    (captureId: string) => {
+      setObservations((prev) => prev.filter((item) => item.id !== captureId))
+      setActiveId((current) => (current === captureId ? null : current))
+      reconcileRemovedCapture(captureId)
+    },
+    [reconcileRemovedCapture],
+  )
+
+  /**
+   * Requalifie une capture. Une capture jamais envoyée (pending/failed) est corrigée
+   * en place ; une capture déjà enregistrée (synced/syncing) est remplacée par une
+   * nouvelle capture (même frame, nouveau type) après suppression de l'ancienne :
+   * l'écriture serveur est idempotente par `clientKey` et ne modifie pas une ligne
+   * existante.
+   */
+  const changeCaptureType = useCallback(
+    (captureId: string, value: string): void => {
+      const nextType = value.trim() || null
+      const current = syncStatesRef.current[captureId]
+      const replaceNeeded = current?.status === 'synced' || current?.status === 'syncing'
+      if (!replaceNeeded) {
+        setObservations((prev) =>
+          prev.map((capture) =>
+            capture.id === captureId ? { ...capture, observationType: nextType } : capture,
+          ),
+        )
+        if (current?.status === 'failed') {
+          updateSyncMap((prev) => addPendingSync(prev, captureId))
+          if (isBrowserOnline()) void enqueuePump(false)
+        }
+        return
+      }
+      const existing = observationsRef.current.find((capture) => capture.id === captureId)
+      if (!existing) return
+      setObservations((prev) => prev.filter((capture) => capture.id !== captureId))
+      reconcileRemovedCapture(captureId)
+      const replacement: CaptureRecord = {
+        ...existing,
+        id: generateId(),
+        observationType: nextType,
+      }
+      setObservations((prev) => [replacement, ...prev])
+      updateSyncMap((prev) => addPendingSync(prev, replacement.id))
+      if (isBrowserOnline()) void enqueuePump(false)
+    },
+    [enqueuePump, reconcileRemovedCapture, updateSyncMap],
+  )
 
   /** Suit l'état du plein écran natif (bouton ou touche Échap) du lecteur. */
   useEffect(() => {
@@ -513,32 +851,17 @@ export default function VideoAnnotator({
     [activeKey, applyPass],
   )
 
-  const handleDeleteCapture = useCallback((captureId: string) => {
-    setObservations((prev) => prev.filter((item) => item.id !== captureId))
-    // La capture active disparaît : on revient à la dernière restante.
-    setActiveId((current) => (current === captureId ? null : current))
-  }, [])
-
-  /** Requalifie une capture existante (correctif avant soumission). */
-  const setCaptureType = useCallback((captureId: string, value: string) => {
-    setObservations((prev) =>
-      prev.map((capture) =>
-        capture.id === captureId
-          ? { ...capture, observationType: value.trim() || null }
-          : capture,
-      ),
-    )
-  }, [])
-
   /**
    * « Modifier » une observation : repositionne le lecteur sur l'horodatage de la
    * capture pour la re-annoter sur place. La capture précédente est retirée — on
-   * en enregistre une corrigée sur la même frame.
+   * en enregistre une corrigée sur la même frame (même règle de suppression que la
+   * corbeille : une capture déjà enregistrée est supprimée côté serveur).
    */
   const handleEditCapture = (captureId: string) => {
-    const capture = observations.find((item) => item.id === captureId)
+    const capture = observationsRef.current.find((item) => item.id === captureId)
     if (!capture) return
     setObservations((prev) => prev.filter((item) => item.id !== captureId))
+    reconcileRemovedCapture(captureId)
     setActiveId(null)
     clearDrawing()
     const video = videoRef.current
@@ -555,10 +878,8 @@ export default function VideoAnnotator({
       setErrorMessage(t.annotator.obsTypeMissing)
       return
     }
-    if (!isOnline) {
-      setErrorMessage(t.annotator.offlineSubmitBlocked)
-      return
-    }
+    // Hors ligne, le stepper le dira explicitement : la finalisation attend le retour
+    // de la connexion (les captures, elles, sont déjà enregistrées ou en file locale).
     setEndPromptDismissed(true)
     setIsConfirmOpen(true)
   }
@@ -573,12 +894,19 @@ export default function VideoAnnotator({
       return
     }
     // On ne réinitialise que la session de l'onglet actif : les observations déjà
-    // enregistrées pour les AUTRES passes ne sont jamais supprimées.
+    // enregistrées pour les AUTRES passes ne sont jamais supprimées. Chaque capture
+    // retirée suit la règle de suppression (serveur si déjà enregistrée).
+    const removedIds = observations
+      .filter((capture) =>
+        activeKey === GENERIC_TAB_KEY ? !capture.videoId : capture.videoId === activeKey,
+      )
+      .map((capture) => capture.id)
     setObservations((prev) =>
       activeKey === GENERIC_TAB_KEY
         ? prev.filter((capture) => Boolean(capture.videoId))
         : prev.filter((capture) => capture.videoId !== activeKey),
     )
+    for (const id of removedIds) reconcileRemovedCapture(id)
     setErrorMessage(null)
     clearDrawing()
     setSubmittedCount(null)
@@ -620,12 +948,19 @@ export default function VideoAnnotator({
     }
     setErrorMessage(null)
     clearDrawing()
-    // Repli « charger une URL » : ne réinitialise que la passe active.
+    // Repli « charger une URL » : ne réinitialise que la passe active. Les captures
+    // retirées suivent la règle de suppression (serveur si déjà enregistrée).
+    const removedIds = observations
+      .filter((capture) =>
+        activeKey === GENERIC_TAB_KEY ? !capture.videoId : capture.videoId === activeKey,
+      )
+      .map((capture) => capture.id)
     setObservations((prev) =>
       activeKey === GENERIC_TAB_KEY
         ? prev.filter((capture) => Boolean(capture.videoId))
         : prev.filter((capture) => capture.videoId !== activeKey),
     )
+    for (const id of removedIds) reconcileRemovedCapture(id)
     setSubmittedCount(null)
     setFileName(null)
     setDuration(0)
@@ -877,16 +1212,25 @@ export default function VideoAnnotator({
       centroid,
     }
     setObservations((previous) => [capture, ...previous])
+    // Enregistrement IMMÉDIAT : la capture confirmée rejoint la file locale puis est
+    // persistée côté serveur sans bloquer l'annotation (idempotent par `clientKey`).
+    if (projectId) {
+      updateSyncMap((prev) => addPendingSync(prev, capture.id))
+      if (isBrowserOnline()) void enqueuePump(false)
+    }
     // Les marqueurs restent affichés : l'observateur peut en ajuster sur la frame
     // avant une nouvelle capture, ou les effacer pour changer de frame.
   }, [
     activeKey,
+    enqueuePump,
     lockedType,
     nextObservationType,
+    projectId,
     redraw,
     syncCanvasSize,
     t.annotator.remoteTaintError,
     typeRequired,
+    updateSyncMap,
   ])
 
   const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -963,6 +1307,10 @@ export default function VideoAnnotator({
    */
   const triggerCapture = useCallback(() => {
     if (!canAnnotate || annotations.length === 0) return
+    if (resumeDraftRef.current) {
+      setErrorMessage(t.annotator.captureBlockedByDraft)
+      return
+    }
     if (!captureTypeReady) {
       setErrorMessage(t.annotator.obsTypeMissing)
       return
@@ -973,6 +1321,7 @@ export default function VideoAnnotator({
     canAnnotate,
     captureTypeReady,
     handleCapture,
+    t.annotator.captureBlockedByDraft,
     t.annotator.obsTypeMissing,
   ])
 
@@ -1076,7 +1425,10 @@ export default function VideoAnnotator({
     void loadStoredDraft(owner, projectId)
       .then((draft) => {
         if (cancelled) return
-        if (draft && draft.observations.length > 0) setResumeDraft(draft)
+        if (draft && draft.observations.length > 0) {
+          resumeDraftRef.current = draft
+          setResumeDraft(draft)
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -1132,6 +1484,10 @@ export default function VideoAnnotator({
       savedAt: new Date().toISOString(),
       activeTab: activeKey,
       observations,
+      // Le jeton de session et l'état de synchronisation accompagnent le brouillon :
+      // une reprise repart du bon `runId` et sait quelles captures restent à envoyer.
+      runId,
+      syncByKey: syncStatesRef.current,
     }
     if (saveTimerRef.current !== null) return
     saveTimerRef.current = window.setTimeout(() => {
@@ -1143,7 +1499,16 @@ export default function VideoAnnotator({
         console.warn('Impossible de sauvegarder le brouillon local de session.', error)
       })
     }, 600)
-  }, [activeKey, draftReady, observations, projectId, resumeDraft, submittedCount])
+  }, [
+    activeKey,
+    draftReady,
+    observations,
+    projectId,
+    resumeDraft,
+    runId,
+    submittedCount,
+    syncStates,
+  ])
 
   /** Au démontage, écrit la dernière copie en attente (navigation, fermeture…). */
   useEffect(() => {
@@ -1169,6 +1534,40 @@ export default function VideoAnnotator({
     }
   }, [flushPendingSnapshot])
 
+  /** Miroir du brouillon en attente de décision (bloque la capture tant qu'il est affiché). */
+  useEffect(() => {
+    resumeDraftRef.current = resumeDraft
+  }, [resumeDraft])
+
+  /**
+   * File de synchronisation automatique : dès qu'une capture confirmée est en attente
+   * (`pending`), qu'un échec est à re-tenter (`failed`) ou qu'une suppression serveur
+   * orpheline reste à confirmer, un passage est demandé — mais seulement en ligne et
+   * hors période de reprise / session déjà soumise. Le retour en ligne (`isOnline`)
+   * déclenche naturellement la reprise des captures en échec.
+   */
+  useEffect(() => {
+    if (!projectId) return
+    if (!draftReady || resumeDraft || submittedCount !== null) return
+    if (!isOnline) return
+    const counts = countSyncStates(syncStatesRef.current, observationsRef.current)
+    const pendingDeletes = pendingServerDeleteIds(
+      syncStatesRef.current,
+      observationsRef.current,
+    ).length
+    if (counts.pending === 0 && counts.failed === 0 && pendingDeletes === 0) return
+    void enqueuePump(counts.failed > 0 || pendingDeletes > 0)
+  }, [
+    draftReady,
+    enqueuePump,
+    isOnline,
+    observations,
+    projectId,
+    resumeDraft,
+    submittedCount,
+    syncStates,
+  ])
+
   /**
    * Reprend une session sauvegardée : seules les captures des passes encore présentes
    * sont restaurées (un projet peut avoir évolué entre deux visites), puis l'onglet
@@ -1180,6 +1579,14 @@ export default function VideoAnnotator({
     const availableKeys = passes.map((pass) => pass.key)
     const restored = filterObservationsToPasses(draft.observations, availableKeys)
     setObservations(restored)
+    // Reprise de l'état de synchronisation : une capture « syncing » au chargement
+    // est un envoi interrompu (repasse en `pending`, l'envoi est idempotent) ; les
+    // suppressions serveur orphelines sont conservées pour être vidées avant finalisation.
+    replaceSyncMap(normalizeResumedSync(draft.syncByKey, restored))
+    // Le jeton de session du brouillon est ré-adopté pour retrouver les captures
+    // déjà enregistrées côté serveur sous ce même `runId`.
+    if (draft.runId) setRunId(draft.runId)
+    resumeDraftRef.current = null
     setActiveId(null)
     setResumeDraft(null)
     if (draft.activeTab && draft.activeTab !== activeKey) {
@@ -1190,19 +1597,27 @@ export default function VideoAnnotator({
 
   /** Abandon explicite du brouillon : suppression définitive, session vierge. */
   const handleDiscardDraft = () => {
+    resumeDraftRef.current = null
     setResumeDraft(null)
+    // Session vierge : nouveau jeton, plus aucun état de synchronisation.
+    setRunId(newSessionToken())
+    replaceSyncMap({})
     clearPersistedDraft()
   }
 
   const handleSubmissionSuccess = useCallback(
     (count: number) => {
-      // Toute la session a été confirmée : plus aucun brouillon à reprendre.
+      // Toute la session a été confirmée (finalisée côté serveur) : plus aucun
+      // brouillon à reprendre, plus aucun état de synchronisation à conserver.
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
       pendingSnapshotRef.current = null
       setObservations([])
+      replaceSyncMap({})
+      // La session suivante repart avec un jeton neuf.
+      setRunId(newSessionToken())
       clearDrawing()
       setSubmittedCount(count)
       clearPersistedDraft()
@@ -1213,6 +1628,7 @@ export default function VideoAnnotator({
     [
       clearDrawing,
       clearPersistedDraft,
+      replaceSyncMap,
       t.annotator.toastSuccessDesc,
       t.annotator.toastSuccessTitle,
     ],
@@ -2123,7 +2539,7 @@ export default function VideoAnnotator({
                   </span>
                   <select
                     value={activeCapture.observationType ?? ''}
-                    onChange={(event) => setCaptureType(activeCapture.id, event.target.value)}
+                    onChange={(event) => changeCaptureType(activeCapture.id, event.target.value)}
                     aria-label={t.annotator.obsTypeLabel}
                     className="min-w-0 cursor-pointer rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-xs font-semibold text-zinc-900 outline-none focus:border-gold-500 [&>option]:bg-white [&>option]:text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-50"
                   >
@@ -2135,6 +2551,41 @@ export default function VideoAnnotator({
                     ))}
                   </select>
                 </label>
+              ) : null}
+              {/* État de synchronisation de la capture (enregistrement immédiat). */}
+              {syncStates[activeCapture.id] ? (
+                <span
+                  className={`inline-flex items-center gap-1.5 text-xs ${
+                    syncStates[activeCapture.id]?.status === 'failed'
+                      ? 'text-clay-600 dark:text-clay-300'
+                      : 'text-zinc-500 dark:text-zinc-400'
+                  }`}
+                >
+                  {syncStates[activeCapture.id]?.status === 'syncing' ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 animate-spin text-gold-600 dark:text-gold-400"
+                    />
+                  ) : syncStates[activeCapture.id]?.status === 'synced' ? (
+                    <CheckCircle
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400"
+                    />
+                  ) : syncStates[activeCapture.id]?.status === 'failed' ? (
+                    <CloudOff aria-hidden="true" className="h-3.5 w-3.5" />
+                  ) : (
+                    <span className="h-3.5 w-3.5 rounded-full border border-zinc-300 dark:border-zinc-600" />
+                  )}
+                  <span className="min-w-0">
+                    {syncStates[activeCapture.id]?.status === 'pending'
+                      ? t.annotator.savePending
+                      : syncStates[activeCapture.id]?.status === 'syncing'
+                        ? t.annotator.saveInProgress
+                        : syncStates[activeCapture.id]?.status === 'synced'
+                          ? t.annotator.saveDone
+                          : t.annotator.saveFailed}
+                  </span>
+                </span>
               ) : null}
             </div>
 
@@ -2266,6 +2717,10 @@ export default function VideoAnnotator({
           t={t.stepper}
           onDeleteCapture={handleDeleteCapture}
           onSubmissionSuccess={handleSubmissionSuccess}
+          observerIdentifier={observerIdentifier}
+          runId={runId}
+          syncByKey={syncStates}
+          onFinalize={handleFinalizeSession}
         />
       ) : null}
       </div>
