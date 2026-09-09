@@ -3,7 +3,16 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { AtSign, CirclePlus, ShieldCheck, Trash2, UserRound, X } from 'lucide-react'
+import {
+  AtSign,
+  CalendarClock,
+  CirclePlus,
+  Layers,
+  ShieldCheck,
+  Trash2,
+  UserRound,
+  X,
+} from 'lucide-react'
 import {
   createUserByAdmin,
   deleteUserByAdmin,
@@ -17,6 +26,7 @@ import { fill } from '@/lib/i18n'
 import type { SessionRole } from '@/lib/session'
 import Sheet from '@/components/ui/Sheet'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
+import Tabs from '@/components/ui/Tabs'
 import { friendlyActionError } from '@/lib/actionError'
 
 type UsersManagerProps = {
@@ -27,8 +37,33 @@ type UsersManagerProps = {
   users: UserAdminDto[]
 }
 
+type RoleTab = UserAdminRole
+
+/** Date courte + heure, localisée (dernière activité d'un observateur). */
+function formatActivityDate(iso: string, locale: Locale): string {
+  return new Date(iso).toLocaleDateString(locale === 'fr' ? 'fr-FR' : 'en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
 export default function UsersManager({ locale, t, roleName, currentUserId, users }: UsersManagerProps) {
   const [adding, setAdding] = useState(false)
+  const [tab, setTab] = useState<RoleTab>('OBSERVER')
+
+  const counts: Record<RoleTab, number> = { OBSERVER: 0, ANALYST: 0, ADMIN: 0 }
+  for (const user of users) {
+    if (user.role in counts) counts[user.role as RoleTab]++
+  }
+
+  const visibleUsers = users.filter((user) => user.role === tab)
+
+  const tabItems = [
+    { id: 'OBSERVER', label: t.roleTabObservers, count: counts.OBSERVER },
+    { id: 'ANALYST', label: t.roleTabAnalysts, count: counts.ANALYST },
+    { id: 'ADMIN', label: t.roleTabAdmins, count: counts.ADMIN },
+  ]
 
   return (
     <div className="flex flex-col gap-5">
@@ -45,13 +80,32 @@ export default function UsersManager({ locale, t, roleName, currentUserId, users
         <span className="text-xs text-zinc-400 dark:text-zinc-500">{t.subtitle}</span>
       </div>
 
-      <MembersTable users={users} currentUserId={currentUserId} t={t} roleName={roleName} locale={locale} />
+      {/* ——— Onglets par rôle : Observateurs · Analystes · Administrateurs ——— */}
+      <Tabs
+        items={tabItems}
+        active={tab}
+        onChange={(id) => setTab(id as RoleTab)}
+        ariaLabel={t.title}
+      />
+
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="flex flex-col gap-4">
+        <MembersTable
+          users={visibleUsers}
+          currentUserId={currentUserId}
+          t={t}
+          roleName={roleName}
+          locale={locale}
+          showObserverMeta={tab === 'OBSERVER'}
+        />
+      </div>
 
       {adding ? (
         <AddUserSheet
+          key={tab}
           locale={locale}
           t={t}
           roleName={roleName}
+          initialRole={tab}
           onClose={() => setAdding(false)}
         />
       ) : null}
@@ -60,7 +114,7 @@ export default function UsersManager({ locale, t, roleName, currentUserId, users
 }
 
 /* ————————————————————————————————————————————————————————————————
- * Liste des membres
+ * Liste des membres du rôle actif
  * ———————————————————————————————————————————————————————————————— */
 
 function MembersTable({
@@ -69,12 +123,14 @@ function MembersTable({
   t,
   roleName,
   locale,
+  showObserverMeta = false,
 }: {
   users: UserAdminDto[]
   currentUserId: string
   t: UsersText
   roleName: RolesText
   locale: Locale
+  showObserverMeta?: boolean
 }) {
   const router = useRouter()
 
@@ -164,12 +220,12 @@ function MembersTable({
                     {user.username || user.email}
                   </p>
                   {isSelf ? (
-                    <span className="rounded-full bg-gold-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
+                    <span className="rounded-full border border-gold-600/40 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-gold-700 dark:border-gold-400/50 dark:text-gold-300">
                       {t.you}
                     </span>
                   ) : null}
                   <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
                       user.isActive
                         ? 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200'
                         : 'bg-zinc-200 text-zinc-500 dark:bg-white/10 dark:text-zinc-400'
@@ -180,12 +236,28 @@ function MembersTable({
                 </div>
                 <p className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
                   {user.email}
-                  {user.observationCount > 0 || user.ownedProjectsCount > 0 ? (
+                  {!showObserverMeta && (user.observationCount > 0 || user.ownedProjectsCount > 0) ? (
                     <span className="ml-2 text-zinc-400 dark:text-zinc-500">
                       · {user.observationCount} {t.obsCaption} · {user.ownedProjectsCount} {t.projectsCaption}
                     </span>
                   ) : null}
                 </p>
+                {showObserverMeta ? (
+                  <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    <span className="inline-flex items-center gap-1">
+                      <Layers aria-hidden="true" className="h-3 w-3 text-gold-600 dark:text-gold-400" />
+                      {user.observationCount} {t.obsCaption} · {user.sessionsCount} {t.sessionsLabel}
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <CalendarClock
+                        aria-hidden="true"
+                        className="h-3 w-3 text-gold-600 dark:text-gold-400"
+                      />
+                      {t.lastActivityLabel} :{' '}
+                      {user.lastActivityAt ? formatActivityDate(user.lastActivityAt, locale) : t.activityNone}
+                    </span>
+                  </p>
+                ) : null}
               </div>
 
               <span className={roleBadge}>
@@ -254,11 +326,13 @@ function AddUserSheet({
   locale,
   t,
   roleName,
+  initialRole = 'ANALYST',
   onClose,
 }: {
   locale: Locale
   t: UsersText
   roleName: RolesText
+  initialRole?: UserAdminRole
   onClose: () => void
 }) {
   const router = useRouter()
@@ -266,7 +340,7 @@ function AddUserSheet({
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [role, setRole] = useState<UserAdminRole>('ANALYST')
+  const [role, setRole] = useState<UserAdminRole>(initialRole)
   const [isPending, startTransition] = useTransition()
 
   const step1Valid = username.trim().length > 0 && email.trim().length > 0 && password.length >= 8
