@@ -8,13 +8,13 @@ import {
   Archive,
   Calendar,
   ChartColumn,
-  Copy,
   Eye,
   FileDown,
   Film,
   Microscope,
   Pencil,
   RotateCcw,
+  Share2,
   Tags,
   Trash2,
   Users,
@@ -31,7 +31,7 @@ import { ValidationWindowsPanel } from '@/components/admin/projects/PointWindows
 import ProjectObservationTypesPanel from '@/components/admin/projects/ProjectObservationTypesPanel'
 import VideoManager from '@/components/admin/projects/VideoManager'
 import Sheet from '@/components/ui/Sheet'
-import { copyToClipboard, formatDate, formatDateTime, labelClass } from '@/components/admin/projects/projectFormat'
+import { formatDate, formatDateTime, labelClass } from '@/components/admin/projects/projectFormat'
 import { friendlyActionError } from '@/lib/actionError'
 
 type ProjectOverviewTabProps = {
@@ -39,6 +39,8 @@ type ProjectOverviewTabProps = {
   points: ProjectPointDto[]
   /** Passes vidéo du projet (association vidéo → type, benchmarks). */
   videos: VideoAdminDto[]
+  /** Ouvre l'onglet « Partager » (gestion des liens d'accès observateur). */
+  onShare?: () => void
 }
 
 function StatCard({ label, value }: { label: string; value: number | string }) {
@@ -54,21 +56,14 @@ function StatCard({ label, value }: { label: string; value: number | string }) {
   )
 }
 
-export default function ProjectOverviewTab({ project, points, videos }: ProjectOverviewTabProps) {
+export default function ProjectOverviewTab({
+  project,
+  points,
+  videos,
+  onShare,
+}: ProjectOverviewTabProps) {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
-
-  const handleCopyLink = async () => {
-    const url = `${window.location.origin}/observe/${project.id}`
-    const ok = await copyToClipboard(url)
-    if (ok) {
-      toast.success('Lien de session copié', {
-        description: 'Transmettez-le aux observateurs de votre protocole.',
-      })
-    } else {
-      toast.error('Copie impossible', { description: url })
-    }
-  }
 
   const runArchive = async () => {
     const result = await archiveProject(project.id).catch((error: unknown) => ({
@@ -187,10 +182,11 @@ export default function ProjectOverviewTab({ project, points, videos }: ProjectO
             </Link>
             <button
               type="button"
-              onClick={handleCopyLink}
-              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              onClick={onShare}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:border-gold-500/60 hover:bg-gold-500/5 hover:text-gold-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-gold-400/50 dark:hover:bg-gold-400/5 dark:hover:text-gold-200"
+              title="Créer et gérer les liens d’accès observateur (sessions par invitation)"
             >
-              <Copy aria-hidden="true" className="h-3.5 w-3.5" /> Copier le lien
+              <Share2 aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" /> Partager
             </button>
             {project.observationCount > 0 ? (
               <a
