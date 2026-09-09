@@ -74,6 +74,8 @@ export type UserAdminDto = {
   username: string | null
   role: string
   isActive: boolean
+  /** État de la demande d'accès (inscription publique → validation ADMIN). */
+  accountStatus: 'APPROVED' | 'PENDING' | 'REJECTED'
   createdAt: string
   observationCount: number
   ownedProjectsCount: number
@@ -127,6 +129,12 @@ export type CaptureRecord = {
   /** Passe vidéo d'origine de la capture (null = passe « générique » héritée). */
   videoId?: string | null
   /**
+   * Identité de la vidéo réellement observée à la capture (nom de fichier local ou
+   * URL distante). Partie Q : conservée pour la validation serveur de la vidéo
+   * attendue, jamais utilisée comme clé d'idempotence.
+   */
+  videoSource?: string | null
+  /**
    * Position du foyer des cercles, normalisée 0–1 (axe x, axe y) par rapport à
    * la zone vidéo. Optionnel : utilisé uniquement pour une étiquette de zone dans
    * le carrousel, jamais transmis à la soumission.
@@ -145,6 +153,11 @@ export type SubmitObservationsInput = {
     observationType?: string | null
     /** Passe vidéo d'origine (null / absent = passe générique héritée). */
     videoId?: string | null
+    /**
+     * Identité de la vidéo réellement observée (nom de fichier local ou URL distante).
+     * Partie Q : comparée côté serveur à la vidéo attendue du type.
+     */
+    videoSource?: string | null
     /**
      * Clé de déduplication émise par le client, stable pour cette capture (son `id`
      * local). Réutilisée à la reprise d'un brouillon : le serveur ignore les doublons.

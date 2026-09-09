@@ -296,6 +296,20 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
   })
 }
 
+/**
+ * Lien d'ouverture directe d'une capture (Parties R & V) — SOURCE UNIQUE.
+ *
+ * PostgreSQL reste la source de vérité ; l'image annotée est stockée dans Google
+ * Drive, dont `driveFileId` est l'ancre fiable. Une seule règle, appliquée par
+ * TOUS les exports qui réutilisent ce module : `driveFileId` présent → lien
+ * « view » Google Drive ; absent → chaîne vide (on n'invente JAMAIS de lien).
+ */
+export function driveImageLink(driveFileId: unknown): string {
+  const id = typeof driveFileId === 'string' ? driveFileId.trim() : ''
+  if (!id) return ''
+  return `https://drive.google.com/file/d/${id}/view`
+}
+
 /** Ligne de relevé global (feuille « Données_Brutes_Globales »). */
 export type LedgerObservation = {
   timecode: string
@@ -311,6 +325,11 @@ export type LedgerObservation = {
   imageUrl: string
   /** Identifiant Google Drive de la capture (server-internal, non secret). */
   driveFileId: string
+  /**
+   * Lien « Lien image » de la capture, dérivé du `driveFileId` (`driveImageLink`) ;
+   * vide si aucune image / aucun `driveFileId` (jamais de lien inventé).
+   */
+  imageLink: string
   capturedAt: string
 }
 
@@ -327,6 +346,7 @@ export const LEDGER_HEADERS = [
   'Statut',
   'Image (URL)',
   'Drive File ID',
+  'Lien image',
   'Date de Capture',
 ] as const
 
@@ -671,6 +691,7 @@ export function buildGlobalObservations(source: GlobalExportSource): LedgerObser
       status: row.isGhostPoint ? 'Hors trame (fausse alerte)' : 'Validée',
       imageUrl: row.imageUrl,
       driveFileId: row.driveFileId ?? '',
+      imageLink: driveImageLink(row.driveFileId),
       capturedAt: row.createdAt,
     }))
 }
