@@ -25,8 +25,30 @@ model User {
   observations  Observation[]
   ownedProjects Project[]       @relation("ProjectOwner")
   grantedAccess ProjectAccess[]
+  auditLogs     AuditLog[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @default(now()) @updatedAt
+}
+
+/// Journal d'audit (append-only) : trace « qui a fait quoi, sur quelle ressource, quand ».
+/// Les lignes ne sont jamais modifiées ni supprimées par les utilisateurs normaux ;
+/// seul un ADMIN peut les consulter (ou chaque utilisateur pour ses propres lignes).
+model AuditLog {
+  id         String    @id @default(uuid())
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String // ex. LOGIN_SUCCESS, PROJECT_CREATED, EXPORT_GLOBAL…
+  entityType String?
+  entityId   String?
+  /// Contexte non sensible (projectId, role, result…) — JAMAIS de secrets/passwords.
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([createdAt])
 }
 
 model Project {
