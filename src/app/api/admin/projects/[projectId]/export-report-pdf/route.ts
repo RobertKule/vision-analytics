@@ -9,9 +9,17 @@ import {
 import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
-import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
-import type { GlobalExportRow, GlobalExportSource } from '@/lib/globalExportModel'
-import { buildProjectSummary } from '@/lib/globalExportModel'
+import { brandFileName, sanitizeBaseName, videoDisplayName } from '@/lib/exportHelpers'
+import type {
+  GlobalExportPoint,
+  GlobalExportRow,
+  GlobalExportSource,
+} from '@/lib/globalExportModel'
+import {
+  buildDetectionProbabilityTable,
+  buildProjectSummary,
+  computeDefinedPointsByType,
+} from '@/lib/globalExportModel'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
@@ -131,12 +139,12 @@ function buildReportModel(rows: GlobalExportRow[], points: ReportPointInput[]): 
   }
   const totalObservers = observerMap.size
 
-  // ——— Règle produit « point unique » ———
+  // ——— Règle produit « détection analytique » (observateur × type × trame) ———
   const validPointKeys = new Set<string>()
   for (const row of rows) {
     if (row.isGhostPoint) continue
     if (!row.pointId) continue
-    validPointKeys.add(`${row.userId}|${row.pointId}`)
+    validPointKeys.add(`${row.userId}|${row.observationType?.trim() || ''}|${row.pointId}`)
   }
   const validObservationsCount = validPointKeys.size
   const ghostPointsCount = rows.filter((row) => row.isGhostPoint).length
@@ -212,7 +220,9 @@ function buildReportModel(rows: GlobalExportRow[], points: ReportPointInput[]): 
       const uniquePointKeys = new Set<string>()
       for (const row of userRows) {
         if (row.isGhostPoint) continue
-        if (row.pointId) uniquePointKeys.add(`${row.userId}|${row.pointId}`)
+        if (row.pointId) {
+          uniquePointKeys.add(`${row.userId}|${row.observationType?.trim() || ''}|${row.pointId}`)
+        }
       }
       const uniquePointsDetected = uniquePointKeys.size
       const ghostEvents = userRows.filter((row) => row.isGhostPoint).length
@@ -271,6 +281,12 @@ function formatDateTimeFr(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })}`
+}
+
+/** Probabilité empirique lisible (« 42 % ») ou « — » quand non calculable. */
+function formatProbabilityValue(probability: number | null): string {
+  if (probability === null) return '—'
+  return `${Math.round(probability * 100)} %`
 }
 
 // ——— Palette & utilitaires de couleurs PDF ———
@@ -339,7 +355,13 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       createdAt: true,
       points: {
         orderBy: { trameDebut: 'asc' },
-        select: { id: true, pointName: true, trameDebut: true, trameFin: true },
+        select: {
+          id: true,
+          pointName: true,
+          trameDebut: true,
+          trameFin: true,
+          video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
+        },
       },
     },
   })
@@ -361,9 +383,19 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     include: {
       user: { select: { username: true, email: true, anonymousId: true } },
       point: { select: { id: true, pointName: true } },
+      video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
     },
     orderBy: { createdAt: 'asc' },
   })
+
+  const points: GlobalExportPoint[] = project.points.map((point) => ({
+    id: point.id,
+    label: point.pointName,
+    trameDebut: point.trameDebut,
+    trameFin: point.trameFin,
+    videoName: point.video ? videoDisplayName(point.video) : null,
+    type: point.video?.typeLabel?.trim() ?? '',
+  }))
 
   const rows: GlobalExportRow[] = observations.map((observation) => ({
     userId: observation.userId,
@@ -376,6 +408,8 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     pointId: observation.pointId,
     pointLabel: observation.point?.pointName ?? null,
     imageUrl: observation.imageUrl,
+    driveFileId: observation.driveFileId,
+    videoName: observation.video ? videoDisplayName(observation.video) : null,
     createdAt: observation.createdAt.toISOString(),
   }))
 
@@ -387,12 +421,24 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       videoUrl: project.videoUrl,
       observationTypes: project.observationTypes,
       createdAt: project.createdAt.toISOString(),
-      definedPoints: project.points.length,
+      definedPoints: points.length,
+      points,
+      definedPointsByType: computeDefinedPointsByType(points),
     },
     rows,
   }
 
-  const report = buildReportModel(rows, project.points)
+  const report = buildReportModel(
+    rows,
+    points.map((point) => ({
+      id: point.id,
+      pointName: point.label,
+      trameDebut: point.trameDebut,
+      trameFin: point.trameFin,
+    })),
+  )
+  // Probabilités empiriques de détection par type/décalage (règle analytique).
+  const probabilityTable = buildDetectionProbabilityTable(source)
   // Accord inter-observateurs (Jaccard) — note méthodologique du rapport.
   const agreement = buildProjectSummary(source).agreement
   const agreementLabel =
@@ -837,6 +883,46 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     ])
     drawTable(windowColumns, windowRows, { fontSize: 8 })
   }
+
+  // ——— Probabilités de détection par type/décalage (mêmes nombres analytiques) ———
+  drawTextLine('Probabilités de Détection par Type/Décalage', {
+    size: 9.5,
+    bold: true,
+    color: COLOR_INK,
+  })
+  gap(3)
+  if (probabilityTable.length === 0) {
+    drawTextLine('Aucun type/décalage configuré ni observé.', {
+      size: 9,
+      color: COLOR_MUTED,
+    })
+    gap(6)
+  } else {
+    const probabilityColumns: TableColumn[] = [
+      { header: 'Type / Décalage', width: 120 },
+      { header: 'Points', width: 48 },
+      { header: 'Observations possibles', width: 100 },
+      { header: 'Détections', width: 62 },
+      { header: 'Probabilité', width: 84 },
+      { header: 'Interprétation', width: 101 },
+    ]
+    const probabilityRows = probabilityTable.map((entry) => [
+      entry.label,
+      String(entry.pointCount),
+      String(entry.possibleObservations),
+      String(entry.detections),
+      formatProbabilityValue(entry.probability),
+      entry.interpretation,
+    ])
+    drawTable(probabilityColumns, probabilityRows, { fontSize: 7.6 })
+  }
+  drawTextLine(
+    'Note — Les trames constituent l’unité d’observation : plusieurs captures d’un même observateur ' +
+      'dans une même trame et sous le même type comptent pour une seule détection analytique. ' +
+      'Probabilité empirique = détections / (points configurés × observateurs).',
+    { size: 7, color: COLOR_MUTED, lineHeight: 9 },
+  )
+  gap(6)
 
   // ——— 4. Relevé détaillé groupé par fenêtre cible ———
   sectionTitle('Relevé des Observations par Fenêtre Cible', '4')
