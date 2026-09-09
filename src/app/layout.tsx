@@ -17,11 +17,12 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Vision Analytics",
-    template: "%s · Vision Analytics",
+    default: "ONA Field",
+    template: "%s · ONA Field",
   },
+  applicationName: "ONA Field",
   description:
-    "Scientific video observation platform: blind annotation sessions, inter-observer concordance and PDF / CSV exports.",
+    "ONA Field — scientific platform for blind video observation: independent annotation sessions, cross-validated review, analytics and data exports.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
