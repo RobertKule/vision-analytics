@@ -29,7 +29,7 @@ export type Session = Pick<SessionPayload, 'uid' | 'email' | 'username' | 'role'
 /** Alias rétro-compatible pour les helpers « admin » existants. */
 export type AdminSession = Session
 
-function getSecret(): string {
+export function getSecret(): string {
   const secret = process.env.AUTH_SECRET
   if (secret && secret.trim()) return secret.trim()
   // Clé de développement uniquement — en production AUTH_SECRET est obligatoire.
