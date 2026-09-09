@@ -11,6 +11,7 @@ import {
   countUniquePoints,
   countWindowsHit,
   detectionProbability,
+  driveImageLink,
   interObserverAgreementRate,
   type GlobalExportPoint,
   type GlobalExportRow,
@@ -47,8 +48,8 @@ function row(partial: Partial<GlobalExportRow>): GlobalExportRow {
 }
 
 describe('LEDGER_HEADERS', () => {
-  it('définit exactement les 13 colonnes persistées du relevé global', () => {
-    expect(LEDGER_HEADERS).toHaveLength(13)
+  it('définit exactement les 14 colonnes persistées du relevé global', () => {
+    expect(LEDGER_HEADERS).toHaveLength(14)
     expect(LEDGER_HEADERS[0]).toBe('Minuterie (MM:SS)')
     expect(LEDGER_HEADERS[1]).toBe("Type d'observation")
     expect(LEDGER_HEADERS[2]).toBe('Point trouvé ?')
@@ -56,7 +57,31 @@ describe('LEDGER_HEADERS', () => {
     expect(LEDGER_HEADERS[4]).toBe('Trame vidéo')
     expect(LEDGER_HEADERS[8]).toBe('Coordonnées (X, Y)')
     expect(LEDGER_HEADERS[11]).toBe('Drive File ID')
-    expect(LEDGER_HEADERS[12]).toBe('Date de Capture')
+    expect(LEDGER_HEADERS[12]).toBe('Lien image')
+    expect(LEDGER_HEADERS[13]).toBe('Date de Capture')
+  })
+})
+
+describe('driveImageLink (Partie R — source unique du lien image)', () => {
+  it('W10/W13/W15 : transforme un driveFileId en lien Drive « view » exact', () => {
+    expect(driveImageLink('1AbC_dEfGhiJkLmN')).toBe(
+      'https://drive.google.com/file/d/1AbC_dEfGhiJkLmN/view',
+    )
+  })
+
+  it('W14 : driveFileId absent → cellule vide, aucun lien inventé', () => {
+    expect(driveImageLink(null)).toBe('')
+    expect(driveImageLink(undefined)).toBe('')
+    expect(driveImageLink('')).toBe('')
+    expect(driveImageLink('   ')).toBe('')
+    expect(driveImageLink(42)).toBe('')
+  })
+
+  it('W15 : le lien pointe vers le bon fichier (id isolé, non préfixé)', () => {
+    const link = driveImageLink('FILE_ID_123')
+    expect(link).toMatch(/^https:\/\/drive\.google\.com\/file\/d\/FILE_ID_123\/view$/)
+    expect(link).not.toContain('undefined')
+    expect(link).not.toContain('null')
   })
 })
 
@@ -244,12 +269,14 @@ describe('buildGlobalObservations', () => {
           isGhostPoint: false,
           pointLabel: 'Point A',
           createdAt: '2026-08-10T12:00:00.000Z',
+          // Aucun driveFileId → le lien image doit rester VIDE (W14).
         }),
         row({
           userId: 'u2',
           timestampTotal: 60,
           isGhostPoint: true,
           createdAt: '2026-08-10T11:00:00.000Z',
+          driveFileId: 'DRIVE_GHOST_01',
         }),
       ],
     }
@@ -262,6 +289,12 @@ describe('buildGlobalObservations', () => {
     expect(ledger[0].pointFound).toBe('Non')
     expect(ledger[0].status).toContain('Hors trame')
     expect(ledger[1].observationType).toBe('Faune')
+
+    // Lien image au niveau « données de capture » (Partie V) : dérivé du driveFileId.
+    expect(ledger[0].driveFileId).toBe('DRIVE_GHOST_01')
+    expect(ledger[0].imageLink).toBe('https://drive.google.com/file/d/DRIVE_GHOST_01/view')
+    expect(ledger[1].driveFileId).toBe('')
+    expect(ledger[1].imageLink).toBe('')
   })
 })
 
