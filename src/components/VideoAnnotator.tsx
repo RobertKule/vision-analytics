@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
+  ArrowDown,
   ArrowRight,
   Camera,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   CloudOff,
   Crosshair,
   Edit2,
@@ -56,6 +58,11 @@ import {
 } from '@/lib/captureSyncState'
 import { isNetworkLikeError } from '@/lib/netError'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import {
+  EXPECTED_VIDEO_REFUSAL,
+  declaredVideoIdentity,
+  expectedVideoClientState,
+} from '@/lib/expectedVideo'
 import {
   clearStoredDraft,
   filterObservationsToPasses,
@@ -106,6 +113,19 @@ type VideoAnnotatorProps = {
   identityLabel?: string | null
   /** Destination du bouton « Retour » de l'écran de fin (défaut : page publique `/observe`). */
   backHref?: string
+  /**
+   * Jeton de session logique imposé par le serveur (observateur lié à un lien
+   * d'accès). Permet de retrouver les captures déjà enregistrées sous ce `runId`
+   * lors d'une reprise ; absent → l'annotateur tire un jeton neuf.
+   */
+  initialRunId?: string | null
+  /**
+   * Session « à usage unique » (observateur lié à un lien d'accès) : la
+   * finalisation clôt définitivement le jeton. L'écran de fin propose alors
+   * uniquement la consultation (pas de « Recommencer » — le serveur refuserait
+   * toute nouvelle écriture en lecture seule).
+   */
+  singleShot?: boolean
 }
 
 /**
@@ -281,6 +301,8 @@ export default function VideoAnnotator({
   t,
   backHref,
   identityLabel,
+  initialRunId,
+  singleShot,
 }: VideoAnnotatorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -383,7 +405,7 @@ export default function VideoAnnotator({
     () => (identityLabel ?? '').trim() || getAnonymousObserverId(),
   )
   /** Jeton de session logique, stable pour toute la durée du brouillon (reprises incluses). */
-  const [runId, setRunId] = useState<string>(() => newSessionToken())
+  const [runId, setRunId] = useState<string>(() => initialRunId?.trim() || newSessionToken())
   /** État de synchronisation par capture (pending → syncing → synced | failed). */
   const [syncStates, setSyncStates] = useState<CaptureSyncMap>({})
   /** Identifiants des captures dont le condensé WebP est encore en cours de compression. */
@@ -553,6 +575,7 @@ export default function VideoAnnotator({
           imageDataUrl: observation.imageDataUrl,
           observationType: observation.observationType,
           videoId: observation.videoId ?? null,
+          videoSource: observation.videoSource ?? null,
           locale,
         })
       } catch (error) {
@@ -909,7 +932,24 @@ export default function VideoAnnotator({
     }
   }, [])
 
-  const canAnnotate = isReady && !isPlaying && videoUrl !== null
+  /**
+   * Type → vidéo attendue (Partie U) : relation affichée à l'observateur ET contrôle
+   * client cohérent avec la validation serveur stricte (Partie Q). `expectedSourceName`
+   * est l'identité du fichier configuré pour la passe active (dernier segment d'une URL,
+   * nom exact sinon) ; `loadedSourceName` est ce qui a réellement été chargé (nom du
+   * fichier local, ou dernier segment de l'URL distante auto-diffusée). La comparaison
+   * est EXACTE — jamais une acceptation par préfixe — et désactive l'annotation tant
+   * que la vidéo chargée ne correspond pas à la vidéo attendue du type.
+   */
+  const expectedVideoState = expectedVideoClientState({
+    expectedSource: activePass?.source ?? null,
+    fileName,
+    videoUrl,
+  })
+  const expectedSourceName = expectedVideoState.expectedIdentity
+  const loadedSourceName = expectedVideoState.loadedIdentity
+  const expectedVideoMismatch = expectedVideoState.mismatch
+  const canAnnotate = isReady && !isPlaying && videoUrl !== null && !expectedVideoMismatch
 
   const selectCircle = useCallback((id: string | null) => {
     selectedIdRef.current = id
@@ -1381,6 +1421,8 @@ export default function VideoAnnotator({
       observationType: lockedType ?? (typeRequired ? nextObservationType.trim() : null),
       // Passe vidéo d'origine de la capture ; null = passe générique héritée.
       videoId: activeKey === GENERIC_TAB_KEY ? null : activeKey,
+      // Identité de la vidéo réellement observée (validation serveur, Partie Q).
+      videoSource: declaredVideoIdentity(fileName, videoUrl),
       centroid,
     }
     setObservations((previous) => [capture, ...previous])
@@ -1402,6 +1444,7 @@ export default function VideoAnnotator({
   }, [
     activeKey,
     enqueuePump,
+    fileName,
     launchCompression,
     lockedType,
     nextObservationType,
@@ -1412,6 +1455,7 @@ export default function VideoAnnotator({
     typeRequired,
     updateCompressingMap,
     updateSyncMap,
+    videoUrl,
   ])
 
   const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1882,18 +1926,20 @@ export default function VideoAnnotator({
             <ArrowRight aria-hidden="true" className="h-4 w-4" />
             {t.completion.back}
           </Link>
-          <button
-            type="button"
-            onClick={() => {
-              setSubmittedCount(null)
-              setEnded(false)
-              setEndPromptDismissed(false)
-            }}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-zinc-300 px-5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/5"
-          >
-            <RotateCcw aria-hidden="true" className="h-4 w-4" />
-            {t.completion.again}
-          </button>
+          {!singleShot ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSubmittedCount(null)
+                setEnded(false)
+                setEndPromptDismissed(false)
+              }}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-zinc-300 px-5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/5"
+            >
+              <RotateCcw aria-hidden="true" className="h-4 w-4" />
+              {t.completion.again}
+            </button>
+          ) : null}
         </div>
       </div>
     )
@@ -2115,6 +2161,54 @@ export default function VideoAnnotator({
             </span>
           )}
         </label>
+
+        {/* ——— Relation Type → vidéo attendue de la passe active (Partie U) ——— */}
+        {expectedSourceName ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-gold-500/30 bg-gold-500/5 px-3 py-2 text-xs dark:border-gold-400/25">
+            {lockedType ? (
+              <span className="inline-flex min-w-0 items-center gap-1.5 font-semibold text-gold-900 dark:text-gold-100">
+                <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-gold-700 dark:text-gold-400">
+                  {t.annotator.obsTypeLabel}
+                </span>
+                <span className="min-w-0 max-w-[12rem] truncate">{lockedType}</span>
+                <ArrowDown
+                  aria-hidden="true"
+                  className="h-3 w-3 shrink-0 text-gold-700 dark:text-gold-400"
+                />
+              </span>
+            ) : null}
+            <span className="inline-flex min-w-0 items-center gap-1.5 text-zinc-700 dark:text-zinc-300">
+              <Film aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gold-700 dark:text-gold-400" />
+              <span className="shrink-0 font-semibold text-gold-800 dark:text-gold-200">
+                {t.annotator.expectedVideoLabel}
+              </span>
+              <span className="min-w-0 truncate font-mono">{expectedSourceName}</span>
+            </span>
+            {loadedSourceName !== null ? (
+              expectedVideoMismatch ? (
+                <span className="inline-flex items-center gap-1.5 font-semibold text-clay-600 dark:text-clay-400">
+                  <CircleAlert aria-hidden="true" className="h-3.5 w-3.5" />
+                  {t.annotator.expectedVideoMismatchTag}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 dark:text-emerald-400">
+                  <CheckCircle aria-hidden="true" className="h-3.5 w-3.5" />
+                  {t.annotator.expectedVideoMatchTag}
+                </span>
+              )
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Vidéo chargée ≠ vidéo attendue du type : annotation bloquée (vocabulaire fixe Partie Q). */}
+        {expectedVideoMismatch ? (
+          <p
+            role="alert"
+            className="rounded-lg border border-clay-200 bg-clay-50 px-3 py-2 text-sm text-clay-700 dark:border-clay-800 dark:bg-clay-900/40 dark:text-clay-300"
+          >
+            {EXPECTED_VIDEO_REFUSAL[locale]}
+          </p>
+        ) : null}
 
         {errorMessage ? (
           <p

@@ -8,10 +8,11 @@ import { driveFileIdFromReference } from '@/lib/driveRef'
 import { buildCaptureFileBaseName, observerDisplayLabel } from '@/lib/driveLayout'
 import { classifySaveError, saveErrorMessage, type SaveErrorCode } from '@/lib/saveErrors'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import { checkExpectedVideo, EXPECTED_VIDEO_REFUSAL } from '@/lib/expectedVideo'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
-import { Role } from '@prisma/client'
+import { completeObserverToken, resolveObserverGate } from '@/lib/observerAccess'
 
 /**
  * Tag de cache partagé pour les lectures « observer » (liste + détail des
@@ -195,44 +196,103 @@ export async function listBlindProjects(): Promise<BlindProjectDto[]> {
 }
 
 /**
- * Résout ou crée l'utilisateur observateur associé à l'identifiant fourni.
- * Préserve l'anonymat scientifique en gérant soit un UUID anonyme, soit un email.
+ * Résout AUTORISÉMENT l'identité de l'observateur qui enregistre pour `projectId`.
+ *
+ * La priorité est donnée à la session observateur (cookie `va_observer` délivré par
+ * un lien `/share/<JETON>` et recoupé contre la base : jeton présent, rattaché à CE
+ * projet, non révoqué, non expiré). Si elle existe, l'observateur est celui que le
+ * serveur a rattaché au jeton — un identifiant envoyé par le client ne peut rien y
+ * changer (impossibilité d'usurper un autre compte ou de déplacer un projet par URL).
+ *
+ * À défaut (aucune session observateur), un profil CONNECTÉ (espace /experience) peut
+ * observer sous SON compte. Sans session observateur ni session connectée, l'action
+ * est refusée : plus aucun parcours anonyme ne peut enregistrer d'observations.
  */
-async function resolveObserverUser(identifier: string) {
-  const cleanId = identifier.trim()
-  const isEmail = cleanId.includes('@')
+type ObserverWriteAccess =
+  | {
+      ok: true
+      kind: 'token'
+      /** Vrai si le jeton est COMPLETED → écritures refusées (projet en lecture seule). */
+      completed: boolean
+      tokenId: string
+      runId: string
+      user: { id: string }
+      observerLabel: string
+    }
+  | {
+      ok: true
+      kind: 'session'
+      user: { id: string }
+      observerLabel: string
+    }
+  | { ok: false; error: string }
 
-  if (isEmail) {
-    const existing = await prisma.user.findUnique({
-      where: { email: cleanId.toLowerCase() },
+async function resolveObserverWriteAccess(
+  projectId: string,
+  getMessage: (en: string, fr: string) => string,
+): Promise<ObserverWriteAccess> {
+  // Session observateur par lien (/share) : la portée signée `va_observer` est recoupée
+  // contre la base par `resolveObserverGate`. ACTIVE → écriture (`completed=false`) ;
+  // COMPLETED → lecture seule (le jeton a déjà finalisé une session). Cookie absent /
+  // jeton supprimé / autre projet / révoqué / expiré → refus `{ ok: false }`.
+  const gate = await resolveObserverGate(projectId)
+  if (gate.ok) {
+    const completed = gate.completed
+    const user = await prisma.user.findUnique({
+      where: { id: gate.userId },
+      select: { id: true, username: true, email: true, anonymousId: true },
     })
-    if (existing) return existing
-
-    return prisma.user.create({
-      data: {
-        email: cleanId.toLowerCase(),
-        password: 'INDEPENDENT_OBSERVER_AUTO_GENERATED',
-        role: Role.OBSERVER,
-      },
-    })
+    if (user) {
+      return {
+        ok: true,
+        kind: 'token',
+        completed,
+        tokenId: gate.tokenId,
+        runId: gate.runId,
+        user: { id: user.id },
+        observerLabel: observerDisplayLabel(user),
+      }
+    }
+    return {
+      ok: false,
+      error: getMessage(
+        'This access link is no longer linked to an active observer.',
+        'Ce lien d’accès n’est plus rattaché à un observateur actif.',
+      ),
+    }
   }
 
-  // Identifiant anonyme (ex. UUID ou code observateur)
-  const existingByAnon = await prisma.user.findUnique({
-    where: { anonymousId: cleanId },
-  })
-  if (existingByAnon) return existingByAnon
+  const session = await getCurrentSession()
+  if (session?.uid) {
+    const user = await prisma.user.findUnique({
+      where: { id: session.uid },
+      select: { id: true, username: true, email: true, anonymousId: true },
+    })
+    if (user) {
+      return {
+        ok: true,
+        kind: 'session',
+        user: { id: user.id },
+        observerLabel: observerDisplayLabel(user),
+      }
+    }
+  }
 
-  // Création avec email factice unique pour satisfaire la contrainte unique de User.email
-  const syntheticEmail = `${cleanId.toLowerCase()}@observateur.vision-analytics`
-  return prisma.user.create({
-    data: {
-      email: syntheticEmail,
-      anonymousId: cleanId,
-      password: 'INDEPENDENT_OBSERVER_AUTO_GENERATED',
-      role: Role.OBSERVER,
-    },
-  })
+  return {
+    ok: false,
+    error: getMessage(
+      'A valid observer access link is required to record observations on this project. Contact the project administrator.',
+      'Un lien d’accès observateur valide est requis pour enregistrer des observations sur ce projet. Contactez l’administrateur du projet.',
+    ),
+  }
+}
+
+/** Message « session d'observation terminée » (écritures refusées, lecture seule). */
+function readonlySessionMessage(getMessage: (en: string, fr: string) => string): string {
+  return getMessage(
+    'This observation session is finished. The project is now read-only.',
+    'Cette session d’observation est terminée. Le projet est désormais en lecture seule.',
+  )
 }
 
 /**
@@ -251,18 +311,10 @@ export async function submitObservations(
 
   try {
     const projectId = (input?.projectId ?? '').trim()
-    let identifier = (input?.observerIdentifier ?? '').trim()
     const observations = input?.observations
 
     if (!projectId) {
       return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
-    }
-
-    if (!identifier) {
-      return {
-        ok: false,
-        error: msg('Observer identifier is required.', 'Identifiant de l’observateur obligatoire.'),
-      }
     }
 
     if (!Array.isArray(observations) || observations.length === 0) {
@@ -299,8 +351,9 @@ export async function submitObservations(
         id: true,
         title: true,
         isArchived: true,
+        videoUrl: true,
         observationTypes: true,
-        videos: { select: { id: true, typeLabel: true } },
+        videos: { select: { id: true, typeLabel: true, source: true } },
       },
     })
 
@@ -321,37 +374,18 @@ export async function submitObservations(
       }
     }
 
-    // ——— Attribution d'identité (anti-impersonation) ———
-    // Session ouverte (zone connectée /experience) : l'observateur est rattaché à
-    // SON compte ; un identifiant arbitraire ne peut pas être revendiqué pour
-    // attribuer des observations à un autre utilisateur de la plateforme.
-    // Parcours public anonyme (/observe) : l'identifiant reste libre (code anonyme
-    // ou email d'un observateur indépendant), mais il ne peut jamais cibler un
-    // compte de gestion ADMIN/ANALYST existant — cela reviendrait à usurper un
-    // responsable de l'étude.
-    const session = await getCurrentSession()
-    const isEmailIdentifier = identifier.includes('@')
-    if (session?.email) {
-      identifier = session.email
-    } else if (isEmailIdentifier) {
-      const manager = await prisma.user.findFirst({
-        where: { email: identifier.toLowerCase(), role: { in: [Role.ADMIN, Role.ANALYST] } },
-        select: { id: true },
-      })
-      if (manager) {
-        return {
-          ok: false,
-          error: msg(
-            'This observer identifier matches a management account and cannot be used to submit.',
-            'Cet identifiant correspond à un compte de gestion ; il ne peut pas être utilisé pour soumettre.',
-          ),
-        }
-      }
+    // ——— Attribution d'identité (anti-impersonation, côté serveur) ———
+    // L'observateur n'est JAMAIS choisi par le client : soit une session observateur
+    // valide existe (cookie `va_observer` issu d'un lien `/share`, projet vérifié,
+    // jeton non révoqué ni expiré), soit un profil est connecté (espace /experience).
+    // Sans l'un des deux, aucune soumission n'est acceptée — un identifiant client
+    // arbitraire ne peut ni attribuer d'observations à autrui, ni contourner le lien.
+    const access = await resolveObserverWriteAccess(projectId, msg)
+    if (!access.ok) {
+      return { ok: false, error: access.error }
     }
-
-    // Récupération de l'observateur (User)
-    const user = await resolveObserverUser(identifier)
-    const observerLabel = observerDisplayLabel(user)
+    const user = access.user
+    const observerLabel = access.observerLabel
 
     // Récupération sécurisée des fenêtres de validation définies par l'administrateur.
     // Chaque fenêtre est rattachée à une passe vidéo (`videoId`, null = passe générique).
@@ -421,15 +455,38 @@ export async function submitObservations(
           }
         }
       }
+
+      // Vidéo attendue (Partie Q) : la capture doit citer une passe réelle du projet
+      // et correspondre EXACTEMENT à la vidéo attendue de son type. Le serveur est la
+      // seule autorité — un `videoId`/`videoSource` altéré est refusé ici.
+      const rawDeclaredSource = observations[i]?.videoSource
+      const videoCheck = checkExpectedVideo({
+        videoId,
+        observationType: type,
+        declaredSource: typeof rawDeclaredSource === 'string' ? rawDeclaredSource : null,
+        videoUrl: project.videoUrl,
+        videos: project.videos,
+      })
+      if (!videoCheck.ok) {
+        return {
+          ok: false,
+          error: msg(
+            `Capture #${i + 1}: ${EXPECTED_VIDEO_REFUSAL.en}`,
+            `La capture n°${i + 1} : ${EXPECTED_VIDEO_REFUSAL.fr}`,
+          ),
+        }
+      }
     }
 
     // Déduplication par clé client (idempotence des brouillons relancés / reprise après
     // échec partiel) : une capture déjà persistée (même projet + même `clientKey`) n'est
     // NI retéléversée NI recréée. Les captures jamais envoyées partent telles quelles.
     const runId =
-      typeof input?.runId === 'string' && input.runId.trim()
-        ? input.runId.trim().slice(0, 120)
-        : null
+      access.kind === 'token'
+        ? access.runId
+        : typeof input?.runId === 'string' && input.runId.trim()
+          ? input.runId.trim().slice(0, 120)
+          : null
     const clientKeyOf = (obs: SubmitObservationsInput['observations'][number]): string | null => {
       const raw = obs?.clientKey
       if (typeof raw !== 'string') return null
@@ -606,44 +663,6 @@ function isPrismaUniqueViolation(error: unknown): boolean {
   )
 }
 
-/** Résout l'identité de l'observateur (session connectée, anonyme ou email indépendant). */
-async function resolveObserverIdentity(
-  identifier: string,
-  getMessage: (en: string, fr: string) => string,
-): Promise<
-  | { user: { id: string }; observerLabel: string }
-  | { error: string }
-> {
-  let cleanId = (identifier ?? '').trim()
-  if (!cleanId) {
-    return {
-      error: getMessage(
-        'Observer identifier is required.',
-        'Identifiant de l’observateur obligatoire.',
-      ),
-    }
-  }
-  const session = await getCurrentSession()
-  if (session?.email) {
-    cleanId = session.email
-  } else if (cleanId.includes('@')) {
-    const manager = await prisma.user.findFirst({
-      where: { email: cleanId.toLowerCase(), role: { in: [Role.ADMIN, Role.ANALYST] } },
-      select: { id: true },
-    })
-    if (manager) {
-      return {
-        error: getMessage(
-          'This observer identifier matches a management account and cannot be used to submit.',
-          'Cet identifiant correspond à un compte de gestion ; il ne peut pas être utilisé pour soumettre.',
-        ),
-      }
-    }
-  }
-  const user = await resolveObserverUser(cleanId)
-  return { user: { id: user.id }, observerLabel: observerDisplayLabel(user) }
-}
-
 export type SaveObservationCaptureInput = {
   projectId: string
   observerIdentifier: string
@@ -655,6 +674,11 @@ export type SaveObservationCaptureInput = {
   imageDataUrl: string
   observationType?: string | null
   videoId?: string | null
+  /**
+   * Identité de la vidéo réellement observée à la capture (nom de fichier local ou
+   * URL distante). Partie Q : le serveur la compare à la vidéo attendue du type.
+   */
+  videoSource?: string | null
   locale?: Locale
 }
 
@@ -697,7 +721,7 @@ export async function saveObservationCapture(
   try {
     const projectId = (input?.projectId ?? '').trim()
     const clientKey = (input?.clientKey ?? '').trim().slice(0, 200)
-    const runId = (input?.runId ?? '').trim().slice(0, 120)
+    let runId = (input?.runId ?? '').trim().slice(0, 120)
     const rawType = input?.observationType
     const observationType = typeof rawType === 'string' ? rawType.trim() : ''
     const rawVideoId = input?.videoId
@@ -726,8 +750,13 @@ export async function saveObservationCapture(
       return failValidation(msg('Invalid image format.', 'Format d’image invalide.'))
     }
 
-    const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
-    if ('error' in identity) return failValidation(identity.error)
+    const access = await resolveObserverWriteAccess(projectId, msg)
+    if (!access.ok) return failValidation(access.error)
+    if (access.kind === 'token' && access.completed) {
+      return failValidation(readonlySessionMessage(msg))
+    }
+    const identity = { user: access.user, observerLabel: access.observerLabel }
+    if (access.kind === 'token') runId = access.runId
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
@@ -735,8 +764,9 @@ export async function saveObservationCapture(
         id: true,
         title: true,
         isArchived: true,
+        videoUrl: true,
         observationTypes: true,
-        videos: { select: { id: true, typeLabel: true } },
+        videos: { select: { id: true, typeLabel: true, source: true } },
       },
     })
     if (!project) {
@@ -792,6 +822,24 @@ export async function saveObservationCapture(
           ),
         )
       }
+    }
+
+    // ——— Validation vidéo attendue (Partie Q) ———
+    // Le serveur contrôle que la vidéo réellement observée correspond EXACTEMENT à la
+    // vidéo attendue pour ce type (source configurée, aucune tolérance de préfixe).
+    // Tout refus part avant le téléversement : aucun fichier Google Drive n'est créé.
+    const declaredSource = input?.videoSource
+    const videoCheck = checkExpectedVideo({
+      videoId,
+      observationType,
+      declaredSource: typeof declaredSource === 'string' ? declaredSource : null,
+      videoUrl: project.videoUrl,
+      videos: project.videos,
+    })
+    if (!videoCheck.ok) {
+      return failValidation(
+        msg(EXPECTED_VIDEO_REFUSAL.en, EXPECTED_VIDEO_REFUSAL.fr),
+      )
     }
 
     // ——— Stockage Google Drive ———
@@ -929,8 +977,12 @@ export async function deleteSavedObservation(
       return { ok: false, error: msg('Missing capture key.', 'Clé de capture manquante.') }
     }
 
-    const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
-    if ('error' in identity) return { ok: false, error: identity.error }
+    const access = await resolveObserverWriteAccess(projectId, msg)
+    if (!access.ok) return { ok: false, error: access.error }
+    if (access.kind === 'token' && access.completed) {
+      return { ok: false, error: readonlySessionMessage(msg) }
+    }
+    const identity = { user: access.user }
 
     const row = await prisma.observation.findFirst({
       where: { projectId, clientKey, userId: identity.user.id },
@@ -1013,16 +1065,39 @@ export async function finalizeObservationSession(
 
   try {
     const projectId = (input?.projectId ?? '').trim()
-    const runId = (input?.runId ?? '').trim().slice(0, 120)
     if (!projectId) {
       return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
     }
+
+    // Identité autorisée : session observateur (lien /share) ou profil connecté.
+    const access = await resolveObserverWriteAccess(projectId, msg)
+    if (!access.ok) return { ok: false, error: access.error }
+    const identity = { user: access.user }
+    // La session logique d'un observateur à jeton est IMPOSÉE par le serveur
+    // (anti-tampering : impossible de finaliser un autre runId que le sien).
+    const runId =
+      access.kind === 'token' ? access.runId : (input?.runId ?? '').trim().slice(0, 120)
     if (!runId) {
       return { ok: false, error: msg('Missing session token.', 'Jeton de session manquant.') }
     }
 
-    const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
-    if ('error' in identity) return { ok: false, error: identity.error }
+    // Marque le jeton COMPLETED une seule fois, quand la session vient d'aboutir
+    // (le lien repasse alors en lecture seule pour cet observateur). La clôture
+    // bascule aussi le cookie de portée en lecture seule ; l'audit n'est émis que
+    // si c'est bien CET appel qui a clôturé le jeton.
+    const markTokenCompleted = async (): Promise<void> => {
+      if (access.kind !== 'token' || access.completed) return
+      const newlyCompleted = await completeObserverToken(access.tokenId)
+      if (newlyCompleted) {
+        await recordAudit({
+          userId: identity.user.id,
+          action: AUDIT_ACTIONS.observerSessionCompleted,
+          entityType: 'share',
+          entityId: access.tokenId,
+          metadata: { projectId, runId },
+        })
+      }
+    }
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
@@ -1057,7 +1132,10 @@ export async function finalizeObservationSession(
         where: { projectId, userId: identity.user.id, sessionRunId: runId, isVerified: true },
         select: { id: true },
       })
-      if (finalized) return { ok: true, finalizedCount: 0, alreadyFinalized: true }
+      if (finalized) {
+        await markTokenCompleted()
+        return { ok: true, finalizedCount: 0, alreadyFinalized: true }
+      }
       return {
         ok: false,
         error: msg('Nothing to finalize for this session.', 'Rien à finaliser pour cette session.'),
@@ -1110,6 +1188,7 @@ export async function finalizeObservationSession(
       entityId: runId,
       metadata: { projectId, finalizedCount: pending.length },
     })
+    await markTokenCompleted()
 
     updateTag(BLIND_PROJECTS_TAG)
     revalidatePath(`/observe/${projectId}`)
@@ -1127,5 +1206,73 @@ export async function finalizeObservationSession(
         'La session n’a pas pu être finalisée pour le moment. Réessayez.',
       ),
     }
+  }
+}
+
+// ————————————————————————————————————————————————————————————
+// CONSULTATION « LECTURE SEULE » D'UNE SESSION CLÔTURÉE
+//
+// Quand le jeton d'un observateur est COMPLETED, le lien rouvre son projet en
+// lecture seule : l'observateur revoit SES captures certifiées (jamais celles des
+// autres, jamais les fenêtres de validation). La garde `resolveObserverGate`
+// garantit qu'on ne lit que ce que le porteur du cookie est autorisé à lire.
+// ————————————————————————————————————————————————————————————
+
+export type ObserverSessionRecapRow = {
+  id: string
+  imageUrl: string
+  timestampTotal: number
+  observationType: string | null
+  isGhostPoint: boolean
+  pointName: string | null
+  createdAt: string
+}
+
+export type ObserverSessionRecapResult =
+  | {
+      ok: true
+      completed: boolean
+      rows: ObserverSessionRecapRow[]
+      validCount: number
+      ghostCount: number
+    }
+  | { ok: false }
+
+export async function getObserverSessionRecap(
+  projectId: string,
+): Promise<ObserverSessionRecapResult> {
+  const gate = await resolveObserverGate(projectId)
+  if (!gate.ok) return { ok: false }
+
+  const captures = await prisma.observation.findMany({
+    where: { projectId, userId: gate.userId, isVerified: true },
+    select: {
+      id: true,
+      imageUrl: true,
+      timestampTotal: true,
+      observationType: true,
+      isGhostPoint: true,
+      createdAt: true,
+      point: { select: { pointName: true } },
+    },
+    orderBy: { timestampTotal: 'asc' },
+  })
+
+  const rows: ObserverSessionRecapRow[] = captures.map((capture) => ({
+    id: capture.id,
+    imageUrl: capture.imageUrl,
+    timestampTotal: capture.timestampTotal,
+    observationType: capture.observationType,
+    isGhostPoint: capture.isGhostPoint,
+    pointName: capture.point?.pointName ?? null,
+    createdAt: capture.createdAt.toISOString(),
+  }))
+
+  return {
+    ok: true,
+    completed: gate.completed,
+    rows,
+    validCount: rows.filter((row) => !row.isGhostPoint).length,
+    ghostCount: rows.length - rows.filter((row) => !row.isGhostPoint).length,
   }
 }
