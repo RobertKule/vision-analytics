@@ -3,7 +3,9 @@ import {
   addPendingSync,
   countSyncStates,
   hasPendingServerDelete,
+  hasRetryableFailure,
   markFailed,
+  markPending,
   markSynced,
   markSyncing,
   normalizeResumedSync,
@@ -122,5 +124,85 @@ describe('pendingServerDeleteIds & reprise', () => {
   it('traite un brouillon sans état de synchronisation (défaut pending)', () => {
     const resumed = normalizeResumedSync(undefined, [{ id: 'a' }])
     expect(resumed.a).toEqual({ status: 'pending', pendingServerDelete: false, imageUrl: undefined })
+  })
+})
+
+describe('échecs typés (motif + re-tentabilité)', () => {
+  it('markFailed conserve le motif quand il est fourni et reste sans motif sinon', () => {
+    let map: CaptureSyncMap = addPendingSync({}, 'a')
+    map = markFailed(map, 'a', { retryable: false, message: 'Stockage à corriger.' })
+    expect(map.a).toEqual({
+      status: 'failed',
+      failure: { retryable: false, message: 'Stockage à corriger.' },
+    })
+
+    let plain: CaptureSyncMap = addPendingSync({}, 'b')
+    plain = markFailed(plain, 'b')
+    expect(plain.b).toEqual({ status: 'failed' })
+    expect(plain.b?.failure).toBeUndefined()
+  })
+
+  it('markPending repasse une capture en attente (nouvel essai manuel)', () => {
+    let map: CaptureSyncMap = addPendingSync({}, 'a')
+    map = markFailed(map, 'a', { retryable: false, message: 'Stockage à corriger.' })
+    map = markPending(map, 'a')
+    expect(map.a?.status).toBe('pending')
+  })
+})
+
+describe('selectNextToSync — échecs re-tentables vs définitifs', () => {
+  const observations = [{ id: 'c' }, { id: 'b' }, { id: 'a' }]
+
+  it('ne re-tente jamais un échec définitif, sauf includePermanent explicite', () => {
+    const permanent: CaptureSyncMap = {
+      a: { status: 'failed', failure: { retryable: false, message: 'Stockage à corriger.' } },
+      b: { status: 'synced' },
+      c: { status: 'pending' },
+    }
+    // Une capture pendante existe : on la traite d'abord (l'échec définitif reste ignoré).
+    expect(selectNextToSync(permanent, observations, false)).toBe('c')
+    expect(selectNextToSync(permanent, observations, true)).toBe('c')
+    expect(selectNextToSync(permanent, observations, true, true)).toBe('a')
+  })
+
+  it('re-tente un échec re-tentable uniquement avec retryFailed', () => {
+    const transient: CaptureSyncMap = {
+      a: { status: 'failed', failure: { retryable: true, message: 'Connexion interrompue.' } },
+      b: { status: 'synced' },
+      c: { status: 'synced' },
+    }
+    expect(selectNextToSync(transient, observations, false)).toBeNull()
+    expect(selectNextToSync(transient, observations, true)).toBe('a')
+  })
+
+  it('hasRetryableFailure : vrai pour réseau/transitoire, faux pour un échec définitif seul', () => {
+    const transient: CaptureSyncMap = {
+      a: { status: 'failed', failure: { retryable: true, message: 'Connexion interrompue.' } },
+    }
+    const permanent: CaptureSyncMap = {
+      a: { status: 'failed', failure: { retryable: false, message: 'Stockage à corriger.' } },
+    }
+    const mixed: CaptureSyncMap = {
+      a: { status: 'failed', failure: { retryable: false, message: 'Stockage à corriger.' } },
+      b: { status: 'failed', failure: { retryable: true, message: 'Connexion interrompue.' } },
+    }
+    const legacy: CaptureSyncMap = { a: { status: 'failed' } }
+    expect(hasRetryableFailure(transient, observations)).toBe(true)
+    expect(hasRetryableFailure(permanent, observations)).toBe(false)
+    expect(hasRetryableFailure(mixed, observations)).toBe(true)
+    expect(hasRetryableFailure(legacy, observations)).toBe(true)
+  })
+})
+
+describe('reprise d’un brouillon — motif d’échec conservé', () => {
+  it('conserve un échec définitif au rechargement (aucune re-tentative auto)', () => {
+    const raw: CaptureSyncMap = {
+      a: { status: 'failed', failure: { retryable: false, message: 'Stockage à corriger.' } },
+      b: { status: 'failed', failure: { retryable: true, message: 'Connexion interrompue.' } },
+    }
+    const resumed = normalizeResumedSync(raw, [{ id: 'a' }, { id: 'b' }])
+    expect(resumed.a?.status).toBe('failed')
+    expect(resumed.a?.failure).toEqual({ retryable: false, message: 'Stockage à corriger.' })
+    expect(resumed.b?.failure?.retryable).toBe(true)
   })
 })

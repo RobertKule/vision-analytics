@@ -21,12 +21,26 @@
 
 export type CaptureSyncStatus = 'pending' | 'syncing' | 'synced' | 'failed'
 
+/** Métadonnées d'un échec d'enregistrement (affichées à l'observateur). */
+export type CaptureSyncFailure = {
+  /**
+   * Vrai = échec re-tentable (réseau / transitoire) : nouvel essai au retour en
+   * ligne. Faux = échec définitif (stockage non configuré, permission, dossier
+   * inaccessible) : PAS de re-tentative automatique, la capture reste locale.
+   */
+  retryable: boolean
+  /** Message final localisé à afficher — jamais un détail interne ou un secret. */
+  message: string
+}
+
 export type CaptureSyncState = {
   status: CaptureSyncStatus
   /** Vrai quand la capture locale a été retirée mais qu'une suppression serveur reste à confirmer. */
   pendingServerDelete?: boolean
   /** URL distante de l'image quand le serveur l'a renvoyée (absente aujourd'hui). */
   imageUrl?: string | null
+  /** Détail de l'échec, présent uniquement quand `status === 'failed'`. */
+  failure?: CaptureSyncFailure
 }
 
 export type CaptureSyncMap = Record<string, CaptureSyncState>
@@ -62,11 +76,23 @@ export function markSynced(map: CaptureSyncMap, id: string): CaptureSyncMap {
   return { ...map, [id]: { ...current, status: 'synced' } }
 }
 
-/** Marque une capture comme en échec (transport ou validation serveur). */
-export function markFailed(map: CaptureSyncMap, id: string): CaptureSyncMap {
+/** Marque une capture comme en échec (transport, validation ou stockage). */
+export function markFailed(
+  map: CaptureSyncMap,
+  id: string,
+  failure?: CaptureSyncFailure,
+): CaptureSyncMap {
   const current = map[id]
   if (!current) return map
-  return { ...map, [id]: { ...current, status: 'failed' } }
+  if (!failure) return { ...map, [id]: { ...current, status: 'failed' } }
+  return { ...map, [id]: { ...current, status: 'failed', failure } }
+}
+
+/** Repasse une capture en attente (nouvel essai manuel après correction de l'erreur). */
+export function markPending(map: CaptureSyncMap, id: string): CaptureSyncMap {
+  const current = map[id]
+  if (!current) return map
+  return { ...map, [id]: { ...current, status: 'pending' } }
 }
 
 /**
@@ -123,22 +149,43 @@ export function countSyncStates(
  * pour conserver l'ordre de capture.
  *
  * — sans `retryFailed`, seules les `pending` partent (file automatique) ;
- * — avec `retryFailed`, les `failed` sont aussi re-tentées (retour en ligne,
- *   soumission finale).
+ * — avec `retryFailed`, les `failed` RE-TENTABLES partent aussi (retour en ligne,
+ *   soumission finale) — jamais les échecs définitifs (stockage config/permission)
+ *   sauf si `includePermanent` est explicite (nouvel essai manuel).
  */
 export function selectNextToSync(
   map: CaptureSyncMap,
   observations: readonly { id: string }[],
   retryFailed: boolean,
+  includePermanent = false,
 ): string | null {
   for (let index = observations.length - 1; index >= 0; index -= 1) {
     const id = observations[index].id
     const state = map[id]
     if (!state) continue
     if (state.status === 'pending') return id
-    if (retryFailed && state.status === 'failed' && !state.pendingServerDelete) return id
+    if (retryFailed && state.status === 'failed' && !state.pendingServerDelete) {
+      const isPermanent = state.failure ? state.failure.retryable === false : false
+      if (includePermanent || !isPermanent) return id
+    }
   }
   return null
+}
+
+/**
+ * Vrai si au moins une capture est en échec RE-TENTABLE (réseau / transitoire).
+ * Les échecs définitifs (stockage) n'y figurent pas : ils ne déclenchent pas de
+ * re-tentative automatique au retour en ligne.
+ */
+export function hasRetryableFailure(
+  map: CaptureSyncMap,
+  observations: readonly { id: string }[],
+): boolean {
+  return observations.some((observation) => {
+    const state = map[observation.id]
+    if (!state || state.status !== 'failed') return false
+    return state.failure ? state.failure.retryable : true
+  })
 }
 
 /**
@@ -178,11 +225,18 @@ export function normalizeResumedSync(
       status: status ?? 'pending',
       pendingServerDelete: previous?.pendingServerDelete === true,
       imageUrl: previous?.imageUrl,
+      // Un échec définitif reste définitif après rechargement (aucune re-tentative auto).
+      failure: previous?.failure,
     }
   }
   for (const [id, state] of Object.entries(raw ?? {})) {
     if (state?.pendingServerDelete === true && !present.has(id)) {
-      result[id] = { status: 'pending', pendingServerDelete: true, imageUrl: state.imageUrl }
+      result[id] = {
+        status: 'pending',
+        pendingServerDelete: true,
+        imageUrl: state.imageUrl,
+        failure: state.failure,
+      }
     }
   }
   return result
