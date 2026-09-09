@@ -613,6 +613,30 @@ export default function ProjectAnalyticsDashboard({
                 Écart moyen par rapport à `trameDebut`
               </p>
             </div>
+
+            {/* KPI 5 : Probabilité empirique de détection (règle analytique) */}
+            <div className="flex flex-col justify-between rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+              <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                Probabilité de Détection
+              </span>
+              <div className="mt-3 flex items-baseline gap-2">
+                <span className="text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+                  {summary.detectionProbability !== null &&
+                  summary.detectionProbability !== undefined
+                    ? `${Math.round(summary.detectionProbability * 100)}%`
+                    : '—'}
+                </span>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  détections / (points × observateurs)
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                {summary.detectionProbability !== null &&
+                summary.detectionProbability !== undefined
+                  ? 'Une détection par observateur + type + trame'
+                  : 'Non calculable (points configurés ou observateurs manquants)'}
+              </p>
+            </div>
           </section>
 
           {/* ——— Visualisations analytiques (Recharts) ——— */}
@@ -1307,7 +1331,7 @@ export default function ProjectAnalyticsDashboard({
                 rel="noreferrer"
                 className="font-medium text-gold-400 hover:underline"
               >
-                Ouvrir l’image originale Cloudinary
+                Ouvrir l’image originale
                 <ExternalLink aria-hidden="true" className="ml-1 inline h-3.5 w-3.5" />
               </a>
             </footer>

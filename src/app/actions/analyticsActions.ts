@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { detectionProbability } from '@/lib/globalExportModel'
 import type {
   AnalyticsFilter,
   AnalyticsVideoContextDto,
@@ -140,19 +141,45 @@ export async function getProjectAnalytics(
   const validObservations = observations.filter((o) => !o.isGhostPoint)
   const ghostObservations = observations.filter((o) => o.isGhostPoint)
 
-  // ——— Règle produit « point unique » ———
-  // Points uniques validés = couples distincts (observateur, pointId) parmi les
-  // captures certifiées non fantômes : un observateur qui capture N fois la même
-  // fenêtre ne « détecte » cette fenêtre qu'une fois. Les fausses alertes restent
-  // des événements (chaque capture hors trame = 1). Le total « déclarations » =
-  // points uniques validés + fausses alertes → dénominateur commun de la précision.
+  // ——— Règle produit « détection analytique » ———
+  // Une détection = UNE par (observateur, type d'observation, fenêtre). La clé de
+  // déduplication inclut l'observationType : un observateur qui capture N fois la
+  // même fenêtre SOUS LE MÊME TYPE ne « détecte » cette fenêtre qu'une fois ; deux
+  // types distincts sur la même fenêtre produisent deux détections (règle affinée).
+  // Les fausses alertes restent des événements (chaque capture hors trame = 1).
+  // Le total « déclarations » = détections analytiques + fausses alertes →
+  // dénominateur commun de la précision.
   const validPointKeys = new Set<string>()
   for (const obs of validObservations) {
-    if (obs.pointId) validPointKeys.add(`${obs.userId}|${obs.pointId}`)
+    if (obs.pointId) {
+      validPointKeys.add(`${obs.userId}|${obs.observationType?.trim() || ''}|${obs.pointId}`)
+    }
   }
   const validObservationsCount = validPointKeys.size
   const ghostPointsCount = ghostObservations.length
   const totalObservations = validObservationsCount + ghostPointsCount
+
+  // ——— Points configurés du périmètre réellement filtré (type + vidéo) ———
+  // Pour surface une probabilité empirique cohérente avec le filtre, le
+  // dénominateur ne compte que les fenêtres rattachées à la passe du type filtré
+  // (typeLabel de la vidéo) ; sans filtre de type, toutes les fenêtres pertinentes.
+  const videoTypeByVideoId = new Map<string, string>()
+  for (const video of project.videos) {
+    videoTypeByVideoId.set(video.id, video.typeLabel?.trim() || '')
+  }
+  const configuredPointsInScope =
+    appliedFilter.observationType !== undefined
+      ? relevantPoints.filter((point) =>
+          point.videoId
+            ? (videoTypeByVideoId.get(point.videoId) ?? '') === appliedFilter.observationType
+            : appliedFilter.observationType === '',
+        ).length
+      : relevantPoints.length
+  const summaryDetectionProbability = detectionProbability(
+    validObservationsCount,
+    configuredPointsInScope,
+    totalObservers,
+  )
 
   // ——— 1. Analyse par Point Cible (Concordance & Délais) ———
   const pointsAnalytics: PointConcordanceDto[] = relevantPoints.map((point) => {
@@ -275,10 +302,11 @@ export async function getProjectAnalytics(
   }
 
   // ——— 3. Matrice de Performance des Observateurs ———
-  // Compteurs « points » selon la règle produit : `validObservationsCount` et
-  // `pointsDetectedCount` = fenêtres distinctes (non fantômes) détectées par
-  // l'observateur ; `totalObservations` = « déclarations » (points uniques validés
-  // + fausses alertes) ; `precisionRate` = points uniques / déclarations.
+  // Compteurs « détections » selon la règle analytique : `validObservationsCount`
+  // et `pointsDetectedCount` = triplets distincts (observateur, type, fenêtre)
+  // non fantômes détectés par l'observateur ; `totalObservations` =
+  // « déclarations » (détections analytiques + fausses alertes) ;
+  // `precisionRate` = détections / déclarations.
   const observersMetrics: ObserverMetricDto[] = Array.from(observerMap.values()).map(
     (observer) => {
       const userObs = observations.filter((o) => o.userId === observer.id)
@@ -286,7 +314,9 @@ export async function getProjectAnalytics(
       const ghostObs = userObs.filter((o) => o.isGhostPoint)
       const uniquePointKeys = new Set<string>()
       for (const obs of validObs) {
-        if (obs.pointId) uniquePointKeys.add(`${obs.userId}|${obs.pointId}`)
+        if (obs.pointId) {
+          uniquePointKeys.add(`${obs.userId}|${obs.observationType?.trim() || ''}|${obs.pointId}`)
+        }
       }
       const uniquePointsDetected = uniquePointKeys.size
       const ghostEvents = ghostObs.length
@@ -349,6 +379,7 @@ export async function getProjectAnalytics(
       overallConcordanceRate,
       overallPrecisionRate,
       averageDetectionDelay,
+      detectionProbability: summaryDetectionProbability,
       appliedFilter,
     },
     pointsAnalytics,
