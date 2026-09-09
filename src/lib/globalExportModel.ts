@@ -1,46 +1,56 @@
 /**
- * Modèle de l'« Export Global (Excel) » — fonctions PURES de préparation des
- * données (aucun exceljs, aucune I/O) : exécutées côté serveur (route API) et
- * testables unitairement.
+ * Modèle analytique des exports (Excel global, Excel observateur, PDF) —
+ * fonctions PURES de préparation des données (aucun exceljs, aucune I/O) :
+ * exécutées côté serveur (routes API, Server Actions) et testables unitairement.
  *
- * 3 feuilles du classeur :
- *   - Synthèse_Projet        : métadonnées + indicateurs + accord inter-observateurs
- *   - Matrice_Observateurs   : par observateur × types dynamiques
- *   - Données_Brutes_Globales: relevé complet (colonnes réellement persistées)
+ * ─── RÈGLE PRODUIT « DÉTECTION ANALYTIQUE » (appliquée partout) ─────────────
+ * Une détection analytique = UNE par `(observateur, type d'observation, trame)`.
+ * Plusieurs captures certifiées du même observateur dans la même fenêtre
+ * temporelle (`pointId`) ET sous le même `observationType` comptent pour UNE
+ * détection, pas N. La clé canonique de déduplication est donc
+ *   `userId | observationType || '' | pointId`
+ * (observateur + type + fenêtre). Le relevé BRUT conserve, lui, TOUTES les
+ * captures certifiées — aucune perte de données brutes.
  *
- * Convention de champ « point trouvé » : cohérente avec le classeur individuel
- * (`isGhostPoint ? 'Non' : 'Oui'`). Géométrie de capture jamais persistée.
- *
- * ─── SÉMANTIQUE « POINT UNIQUE » (règle produit, appliquée partout) ─────────
- * Pour UN observateur, plusieurs observations certifiées dans la MÊME fenêtre
- * temporelle (`pointId`) du MÊME type comptent pour UN point détecté, pas N.
- * Unités retenues (identiques dans le tableau de bord, l'Excel, le CSV, le PDF) :
- *   - Point unique validé   = couple distinct `(observateur, pointId)` parmi les
- *     captures certifiées NON fantômes. Un observateur ne « détecte » une fenêtre
- *     qu'une fois, quel que soit son nombre de captures dans cette fenêtre.
- *     Deux observateurs détectant la même fenêtre produisent DEUX points uniques.
+ *   - Détection analytique (`countAnalyticDetections`) = triplets distincts
+ *     `(observateur, type, trame)` parmi les captures certifiées NON fantômes.
  *   - Fausse alerte (fantôme) = une capture `isGhostPoint = true`. Chaque fausse
  *     alerte est un événement propre (aucune fenêtre à dédupliquer).
- *   - Total « déclarations » = points uniques validés + fausses alertes.
- *   - Précision = points uniques validés / (points uniques validés + fausses alertes).
- *   - Fenêtres touchées     = `pointId` distincts détectés par au moins un
- *     observateur (union ; ne déduplique PAS par observateur).
- * Le relevé brut (`buildGlobalObservations`) conserve TOUTES les captures
- * certifiées, sans déduplication : c'est la donnée brute.
+ *   - Fenêtres touchées (`countWindowsHit`) = `pointId` distincts détectés par
+ *     au moins un observateur (union ; ne déduplique PAS par observateur ni type).
+ *   - Accord inter-observateurs = sémantique d'union par fenêtre (sans type).
+ *   - Précision = détections analytiques / (détections analytiques + fausses alertes).
+ *
+ * PROBABILITÉ DE DÉTECTION (synthèse du classeur global & du PDF) :
+ *   P(type) = DétectionsAnalytiques(type) / (points/trames configurés(type) × observateurs)
+ * (formule `detectionProbability`) ; interprétation en bandes textuelles FR.
+ *
+ * Le détail des points configurés est porté par `GlobalExportProject.points`
+ * (`type` = typeLabel de la passe vidéo, clé générique réservée si passe non
+ * typée) et `GlobalExportProject.definedPointsByType` agrège ces effectifs.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-const OBSERVER_POINT_SEP = '|' // séparateur de clé (jamais présent dans les ids)
+const OBSERVER_TYPE_POINT_SEP = '|' // séparateur de clé (jamais présent dans les ids)
 
-/** Clés `(observateur, pointId)` des captures certifiées non fantômes. */
-function uniqueValidPointKeys(rows: readonly GlobalExportRow[]): Set<string> {
-  const keys = new Set<string>()
-  for (const row of rows) {
-    if (row.isGhostPoint) continue
-    if (!row.pointId) continue
-    keys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
-  }
-  return keys
+/**
+ * Clé réservée des passes vidéo non typées dans `definedPointsByType` et pour
+ * les lignes sans `observationType` (type normalisé = chaîne vide).
+ */
+export const GENERIC_TYPE_KEY = ''
+
+/** Libellé d'affichage du groupe « passe générique / sans type ». */
+export const GENERIC_TYPE_LABEL = 'Sans type (passe générique)'
+
+/** Type normalisé d'une ligne : `observationType` nettoyé, sinon clé générique. */
+function normalizedType(observationType: string | null): string {
+  const trimmed = observationType?.trim()
+  return trimmed || GENERIC_TYPE_KEY
+}
+
+/** Libellé lisible d'un groupe de type (décalage) depuis sa clé normalisée. */
+export function typeGroupLabel(typeKey: string): string {
+  return typeKey === GENERIC_TYPE_KEY ? GENERIC_TYPE_LABEL : typeKey
 }
 
 /** Champs de projet nécessaires à l'export (tous réellement persistés). */
@@ -51,8 +61,29 @@ export type GlobalExportProject = {
   videoUrl: string | null
   observationTypes: string[]
   createdAt: string
-  /** Nombre de fenêtres de validation (points) définies sur le projet. */
+  /** Nombre de fenêtres de validation (points) définies sur le périmètre exporté. */
   definedPoints: number
+  /**
+   * Points configurés du périmètre exporté (voir `GlobalExportPoint`). Chaque
+   * point est rattaché au type/décalage de SA passe vidéo (`type` = typeLabel,
+   * clé générique réservée si la passe n'est pas typée).
+   */
+  points: GlobalExportPoint[]
+  /** Effectifs de points configurés par type/décalage (`type` normalisé). */
+  definedPointsByType: Record<string, number>
+}
+
+/** Point configuré tel que transporté par le modèle d'export. */
+export type GlobalExportPoint = {
+  id: string
+  /** Libellé humain de la fenêtre (ex. « Point 2 »). */
+  label: string
+  trameDebut: number
+  trameFin: number
+  /** Nom lisible de la passe vidéo qui porte la fenêtre (null si introuvable). */
+  videoName: string | null
+  /** Type/décalage de la passe : typeLabel nettoyé, ou `GENERIC_TYPE_KEY`. */
+  type: string
 }
 
 /** Ligne d'observation brute (champs réellement persistés uniquement). */
@@ -67,6 +98,10 @@ export type GlobalExportRow = {
   pointId: string | null
   pointLabel: string | null
   imageUrl: string
+  /** Identifiant Google Drive de la capture (server-internal, non secret). */
+  driveFileId?: string | null
+  /** Nom lisible de la passe vidéo d'origine (null si générique/introuvable). */
+  videoName?: string | null
   createdAt: string
 }
 
@@ -86,17 +121,17 @@ export type InterObserverAgreement = {
   method: string
 }
 
-/** Synthèse du projet (feuille 1). */
+/** Synthèse du projet (bloc supérieur de la feuille « Synthèse »). */
 export type ProjectSummary = {
   project: GlobalExportProject
   /**
-   * Total des « déclarations » = points uniques validés (`validatedCount`) +
-   * fausses alertes (`ghostCount`). Nombre mixte (points uniques + événements
+   * Total des « déclarations » = détections analytiques (`validatedCount`) +
+   * fausses alertes (`ghostCount`). Nombre mixte (détections + événements
    * fantômes), volontaire : c'est le dénominateur commun de la précision.
    * Ne correspond PAS au nombre de captures brutes (voir `buildGlobalObservations`).
    */
   totalObservations: number
-  /** Points uniques validés : couples distincts (observateur, pointId) non fantômes. */
+  /** Détections analytiques : triplets distincts (observateur, type, trame) non fantômes. */
   validatedCount: number
   /** Fausses alertes : chaque capture hors trame (`isGhostPoint`) compte pour 1 événement. */
   ghostCount: number
@@ -113,7 +148,7 @@ export type ProjectSummary = {
   agreement: InterObserverAgreement
 }
 
-/** Entrée de la matrice observateurs × types (feuille 2). */
+/** Entrée de la matrice observateurs × types (conservée pour compatibilité). */
 export type ObserverMatrixEntry = {
   observerId: string
   displayName: string
@@ -122,16 +157,16 @@ export type ObserverMatrixEntry = {
   anonymousId: string
   /** Nombre de captures brutes par type d'observation (clé = libellé exact). */
   perType: Record<string, number>
-  /** « Déclarations » de l'observateur = points uniques validés + fausses alertes. */
+  /** « Déclarations » de l'observateur = détections analytiques + fausses alertes. */
   total: number
-  /** « Point trouvé ? » = points uniques validés (fenêtres distinctes non fantômes). */
+  /** « Point trouvé ? » = détections analytiques (triplets distincts non fantômes). */
   pointFound: number
   /** Fausses alertes : captures hors trame (événements, non dédupliquées). */
   ghosts: number
-  /** Fenêtres (points) distinctes touchées par cet observateur (= `pointFound`). */
+  /** Fenêtres (points) distinctes touchées par cet observateur. */
   windowsHit: number
   /**
-   * Précision individuelle 0..1 = points uniques validés / déclarations ;
+   * Précision individuelle 0..1 = détections analytiques / déclarations ;
    * null si aucune déclaration.
    */
   precision: number | null
@@ -144,16 +179,16 @@ export type ObserverMatrix = {
 }
 
 /**
- * Statistiques agrégées par type d'observation (feuille dédiée du classeur
- * global). Chaque type porte ses compteurs TOTAUX (tous observateurs), calculés
- * sur le sous-ensemble filtré transmis au classeur. Les compteurs « points »
- * suivent la règle du point unique (dédupliqués par (observateur, pointId)).
+ * Statistiques agrégées par type d'observation. Chaque type porte ses compteurs
+ * TOTAUX (tous observateurs), calculés sur le sous-ensemble filtré transmis.
+ * Les compteurs « détections » suivent la règle de la détection analytique
+ * (dédupliqués par (observateur, type, fenêtre)).
  */
 export type TypeStatistic = {
   type: string
-  /** Déclarations de ce type = points uniques validés + fausses alertes. */
+  /** Déclarations de ce type = détections analytiques + fausses alertes. */
   total: number
-  /** Points uniques validés de ce type : couples distincts (observateur, pointId). */
+  /** Détections analytiques de ce type : triplets distincts (observateur, type, fenêtre). */
   validated: number
   /** Fausses alertes de ce type (événements, non dédupliquées). */
   ghosts: number
@@ -161,14 +196,42 @@ export type TypeStatistic = {
   observers: number
   /** Fenêtres (points) distinctes touchées par ce type (union). */
   windowsHit: number
-  /** Précision 0..1 = points uniques validés / déclarations ; null si aucune. */
+  /** Précision 0..1 = détections analytiques / déclarations ; null si aucune. */
   precision: number | null
+}
+
+/** Clé analytique `(observateur, type, trame)` — null si hors périmètre. */
+function analyticKeyOf(row: GlobalExportRow): string | null {
+  if (row.isGhostPoint) return null
+  if (!row.pointId) return null
+  const type = normalizedType(row.observationType)
+  return `${row.userId}${OBSERVER_TYPE_POINT_SEP}${type}${OBSERVER_TYPE_POINT_SEP}${row.pointId}`
+}
+
+/** Clés analytiques des captures certifiées non fantômes d'un sous-ensemble. */
+function analyticKeys(rows: readonly GlobalExportRow[]): Set<string> {
+  const keys = new Set<string>()
+  for (const row of rows) {
+    const key = analyticKeyOf(row)
+    if (key !== null) keys.add(key)
+  }
+  return keys
+}
+
+/** Clés (union de fenêtres) — sémantique fenêtre, sans type ni observateur. */
+function windowsHitKeys(rows: readonly GlobalExportRow[]): Set<string> {
+  const windows = new Set<string>()
+  for (const row of rows) {
+    if (row.isGhostPoint) continue
+    if (row.pointId) windows.add(row.pointId)
+  }
+  return windows
 }
 
 /**
  * Agrège les statistiques PAR TYPE sur le sous-ensemble de lignes transmis.
  * Colonnes et ordre stables : types configurés d'abord (même sans capture),
- * puis types observés non configurés (tri alphabétique) — comme la matrice.
+ * puis types observés non configurés (tri alphabétique).
  */
 export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[] {
   const { project, rows } = source
@@ -193,7 +256,7 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
 
   const observedUnknown = new Set<string>()
   for (const row of rows) {
-    const type = row.observationType?.trim()
+    const type = normalizedType(row.observationType)
     if (!type) continue
     if (!configured.includes(type)) observedUnknown.add(type)
     const acc = ensure(type)
@@ -203,7 +266,7 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
       continue
     }
     if (row.pointId) {
-      acc.validKeys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+      acc.validKeys.add(analyticKeyOf(row) as string)
       acc.windows.add(row.pointId)
     }
   }
@@ -233,17 +296,21 @@ export function buildTypeStatistics(source: GlobalExportSource): TypeStatistic[]
   })
 }
 
-/** Ligne de relevé global (feuille 3). */
+/** Ligne de relevé global (feuille « Données_Brutes_Globales »). */
 export type LedgerObservation = {
   timecode: string
   observationType: string | null
   pointFound: 'Oui' | 'Non'
   pointLabel: string | null
+  /** Passe vidéo d'origine (libellé lisible), vide si non renseignée. */
+  videoName: string
   observerName: string
   email: string | null
   anonymousId: string
   status: string
   imageUrl: string
+  /** Identifiant Google Drive de la capture (server-internal, non secret). */
+  driveFileId: string
   capturedAt: string
 }
 
@@ -252,12 +319,14 @@ export const LEDGER_HEADERS = [
   "Type d'observation",
   'Point trouvé ?',
   'Fenêtre cible',
+  'Trame vidéo',
   'Observateur',
   'Email',
   'Identifiant anonyme',
   'Coordonnées (X, Y)',
   'Statut',
   'Image (URL)',
+  'Drive File ID',
   'Date de Capture',
 ] as const
 
@@ -290,11 +359,11 @@ export function cleanConfiguredTypes(observationTypes: readonly string[]): strin
   return cleaned
 }
 
-// ——— Règle produit « point unique » : primitives pures de déduplication ———
-// Un point = une fenêtre temporelle (`pointId`). Pour UN observateur, plusieurs
-// captures dans la même fenêtre comptent pour UN point. Ces fonctions sont le
-// SEUL endroit qui déduplique : le tableau de bord, l'Excel, le CSV et le PDF
-// utilisent exactement les mêmes compteurs.
+// ——— Règle produit « détection analytique » : primitives pures ———
+// Une détection = (observateur, type, fenêtre). Pour UN observateur, plusieurs
+// captures dans la même fenêtre et sous le même type comptent pour UNE détection.
+// Ces fonctions sont le SEUL endroit qui déduplique : le tableau de bord, l'Excel
+// global, l'Excel observateur et le PDF utilisent exactement les mêmes compteurs.
 
 /** Nombre d'événements fantômes (fausses alertes) : chaque capture hors trame compte. */
 export function countGhostEvents(rows: readonly GlobalExportRow[]): number {
@@ -304,32 +373,35 @@ export function countGhostEvents(rows: readonly GlobalExportRow[]): number {
 }
 
 /**
- * Nombre de points uniques validés dans le sous-ensemble transmis : couples
- * distincts `(observateur, pointId)` parmi les captures non fantômes. Si les
- * lignes concernent un observateur unique, c'est le nombre de fenêtres distinctes
- * qu'il a détectées (règle produit) ; si elles en couvrent plusieurs, c'est la
- * somme, pour chaque observateur, de ses fenêtres distinctes.
+ * Nombre de DÉTECTIONS ANALYTIQUES dans le sous-ensemble transmis : triplets
+ * distincts `(observateur, observationType, pointId)` parmi les captures non
+ * fantômes. Si les lignes concernent un observateur unique, c'est le nombre de
+ * fenêtres distinctes (par type) qu'il a détectées (règle produit).
+ */
+export function countAnalyticDetections(rows: readonly GlobalExportRow[]): number {
+  return analyticKeys(rows).size
+}
+
+/**
+ * Nombre de points uniques validés = alias « détections analytiques » : couples
+ * distincts `(observateur, pointId)` du MÊME type. Un observateur qui détecte la
+ * même fenêtre sous deux types produit DEUX détections (règle affinée).
  */
 export function countUniquePoints(rows: readonly GlobalExportRow[]): number {
-  return uniqueValidPointKeys(rows).size
+  return countAnalyticDetections(rows)
 }
 
 /**
  * Fenêtres (pointId) distinctes touchées par au moins un observateur (union).
- * Contrairement à `countUniquePoints`, deux observateurs sur la même fenêtre ne
- * comptent qu'une fois.
+ * Contrairement à `countUniquePoints`, deux observateurs sur la même fenêtre —
+ * ou deux types sur la même fenêtre — ne comptent qu'une fois.
  */
 export function countWindowsHit(rows: readonly GlobalExportRow[]): number {
-  const windows = new Set<string>()
-  for (const row of rows) {
-    if (row.isGhostPoint) continue
-    if (row.pointId) windows.add(row.pointId)
-  }
-  return windows.size
+  return windowsHitKeys(rows).size
 }
 
 /**
- * Total « déclarations » = points uniques validés + fausses alertes. Nombre mixte
+ * Total « déclarations » = détections analytiques + fausses alertes. Nombre mixte
  * utilisé comme dénominateur commun de la précision.
  */
 export function countTotalClaims(rows: readonly GlobalExportRow[]): number {
@@ -337,7 +409,7 @@ export function countTotalClaims(rows: readonly GlobalExportRow[]): number {
 }
 
 /**
- * Précision 0..1 = points uniques validés / (points uniques validés + fausses
+ * Précision 0..1 = détections analytiques / (détections analytiques + fausses
  * alertes) ; null s'il n'y a aucune déclaration.
  */
 export function precisionFromUniquePoints(rows: readonly GlobalExportRow[]): number | null {
@@ -348,24 +420,23 @@ export function precisionFromUniquePoints(rows: readonly GlobalExportRow[]): num
 }
 
 /**
- * Nombre de points uniques validés PAR TYPE d'observation. Pour chaque type
- * (normalisé : trim), couples distincts `(observateur, pointId)` parmi les
- * captures non fantômes portant ce type. Une même fenêtre annotée sous deux types
- * compte donc une fois dans chaque type.
+ * Nombre de détections analytiques PAR TYPE d'observation. Pour chaque type
+ * (normalisé), triplets distincts `(observateur, type, fenêtre)` parmi les
+ * captures non fantômes portant ce type.
  */
 export function countUniquePointsByType(rows: readonly GlobalExportRow[]): Map<string, number> {
   const byType = new Map<string, Set<string>>()
   for (const row of rows) {
-    if (row.isGhostPoint) continue
-    if (!row.pointId) continue
-    const type = row.observationType?.trim()
+    const key = analyticKeyOf(row)
+    if (key === null) continue
+    const type = normalizedType(row.observationType)
     if (!type) continue
     let keys = byType.get(type)
     if (!keys) {
       keys = new Set<string>()
       byType.set(type, keys)
     }
-    keys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+    keys.add(key)
   }
   const out = new Map<string, number>()
   for (const [type, keys] of byType) out.set(type, keys.size)
@@ -373,12 +444,36 @@ export function countUniquePointsByType(rows: readonly GlobalExportRow[]): Map<s
 }
 
 /**
+ * Probabilité empirique de détection d'un type/décalage :
+ *   P = DétectionsAnalytiques / (points/trames configurés × observateurs)
+ * Renvoie null si `pointsConfigured ≤ 0` ou `observerCount ≤ 0` (non calculable).
+ */
+export function detectionProbability(
+  detections: number,
+  pointsConfigured: number,
+  observerCount: number,
+): number | null {
+  if (!(pointsConfigured > 0) || !(observerCount > 0)) return null
+  return detections / (pointsConfigured * observerCount)
+}
+
+/**
+ * Bande d'interprétation textuelle d'une probabilité empirique (FR), '—' si null.
+ */
+export function interpretationBand(probability: number | null): string {
+  if (probability === null) return '—'
+  if (probability >= 0.8) return 'Très élevée'
+  if (probability >= 0.6) return 'Élevée'
+  if (probability >= 0.4) return 'Modérée'
+  if (probability >= 0.2) return 'Faible'
+  return 'Très faible'
+}
+
+/**
  * ACCORD INTER-OBSERVATEURS (métrique réelle, distincte de la couverture) :
  * similarité de Jaccard moyenne par paire d'observateurs sur leurs DÉTECTIONS
  * mappées à une fenêtre cible (pointId != null), regroupées par fenêtre + tranche
- * de 3 s. Un événement observé par plusieurs observateurs indépendants produit le
- * même couple (fenêtre, tranche) → accord ; deux observateurs sur des événements
- * différents → désaccord.
+ * de 3 s. Sémantique d'UNION par fenêtre — le type n'y intervient pas.
  */
 export function interObserverAgreementRate(
   rows: readonly GlobalExportRow[],
@@ -426,7 +521,7 @@ export function interObserverAgreementRate(
   return { rate: sum / pairs, pairs, comparable: true, method }
 }
 
-/** Prépare la synthèse du projet (feuille « Synthèse_Projet »). */
+/** Prépare la synthèse du projet (bloc supérieur de la feuille « Synthèse »). */
 export function buildProjectSummary(source: GlobalExportSource): ProjectSummary {
   const { project, rows } = source
   const configured = cleanConfiguredTypes(project.observationTypes)
@@ -452,7 +547,8 @@ export function buildProjectSummary(source: GlobalExportSource): ProjectSummary 
     if (row.isGhostPoint) {
       ghostCount += 1
     } else if (row.pointId) {
-      validKeys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+      const key = analyticKeyOf(row)
+      if (key !== null) validKeys.add(key)
       validWindows.add(row.pointId)
     }
 
@@ -469,10 +565,10 @@ export function buildProjectSummary(source: GlobalExportSource): ProjectSummary 
     }
   }
 
-  // Points uniques validés : couples distincts (observateur, pointId).
+  // Détections analytiques : triplets distincts (observateur, type, fenêtre).
   const validatedCount = validKeys.size
   // Fausses alertes : chaque capture hors trame est un événement.
-  // Total « déclarations » = points uniques validés + fausses alertes.
+  // Total « déclarations » = détections analytiques + fausses alertes.
   const totalObservations = validatedCount + ghostCount
 
   return {
@@ -492,7 +588,7 @@ export function buildProjectSummary(source: GlobalExportSource): ProjectSummary 
   }
 }
 
-/** Prépare la matrice observateurs × types (feuille « Matrice_Observateurs »). */
+/** Prépare la matrice observateurs × types (conservée pour compatibilité). */
 export function buildObserverMatrix(source: GlobalExportSource): ObserverMatrix {
   const { project, rows } = source
   const configured = cleanConfiguredTypes(project.observationTypes)
@@ -507,7 +603,7 @@ export function buildObserverMatrix(source: GlobalExportSource): ObserverMatrix 
   // Colonnes types : types configurés d'abord, puis types observés inconnus (dynamiques).
   const observedTypes = new Set<string>()
   for (const row of rows) {
-    const type = row.observationType?.trim()
+    const type = normalizedType(row.observationType)
     if (type && !configured.includes(type)) observedTypes.add(type)
   }
   const types = [...configured, ...Array.from(observedTypes).sort((a, b) => a.localeCompare(b))]
@@ -526,13 +622,14 @@ export function buildObserverMatrix(source: GlobalExportSource): ObserverMatrix 
           continue
         }
         if (row.pointId) {
-          validKeys.add(`${row.userId}${OBSERVER_POINT_SEP}${row.pointId}`)
+          const key = analyticKeyOf(row)
+          if (key !== null) validKeys.add(key)
           validWindows.add(row.pointId)
         }
       }
-      // « Point trouvé ? » = points uniques validés (fenêtres distinctes).
+      // « Point trouvé ? » = détections analytiques (triplets distincts).
       const pointFound = validKeys.size
-      // Déclarations = points uniques validés + fausses alertes (dénominateur précision).
+      // Déclarations = détections analytiques + fausses alertes (dénominateur précision).
       const total = pointFound + ghosts
       const sample = observerRows[0]
       return {
@@ -567,11 +664,258 @@ export function buildGlobalObservations(source: GlobalExportSource): LedgerObser
       observationType: row.observationType?.trim() || null,
       pointFound: row.isGhostPoint ? 'Non' : 'Oui',
       pointLabel: row.pointLabel,
+      videoName: row.videoName?.trim() || '',
       observerName: observerDisplayLabel(row),
       email: row.email,
       anonymousId: row.anonymousId,
       status: row.isGhostPoint ? 'Hors trame (fausse alerte)' : 'Validée',
       imageUrl: row.imageUrl,
+      driveFileId: row.driveFileId ?? '',
       capturedAt: row.createdAt,
     }))
+}
+
+// ——— Agrégations dédiées au classeur « Synthèse » / « par type » ———
+
+/** Agrége les effectifs de points configurés par type/décalage. */
+export function computeDefinedPointsByType(points: readonly GlobalExportPoint[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const point of points) {
+    const type = normalizedType(point.type)
+    counts[type] = (counts[type] ?? 0) + 1
+  }
+  return counts
+}
+
+/** Observateur du jeu de données exporté (identité d'affichage stable). */
+export type DatasetObserver = {
+  observerId: string
+  displayName: string
+  email: string | null
+  anonymousId: string
+}
+
+/** Observateurs distincts (tri par nom d'affichage), ordre stable. */
+export function listDatasetObservers(source: GlobalExportSource): DatasetObserver[] {
+  const byId = new Map<string, GlobalExportRow>()
+  for (const row of source.rows) {
+    if (!byId.has(row.userId)) byId.set(row.userId, row)
+  }
+  return Array.from(byId.values())
+    .map((row) => ({
+      observerId: row.userId,
+      displayName: observerDisplayLabel(row),
+      email: row.email,
+      anonymousId: row.anonymousId,
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName))
+}
+
+/**
+ * Ligne du tableau principal « probabilités de détection » (feuille Synthèse) :
+ * une ligne par type/décalage, y compris les types configurés sans aucune capture.
+ */
+export type DetectionProbabilityRow = {
+  /** Libellé affiché (type d'observation, ou libellé générique réservé). */
+  label: string
+  /** Clé normalisée utilisée pour filtrer les lignes. */
+  type: string
+  /** Points/trames configurés rattachés à ce type/décalage. */
+  pointCount: number
+  /** Observations possibles = pointCount × observateurs distincts du jeu exporté. */
+  possibleObservations: number
+  /** Détections analytiques des lignes portant ce type. */
+  detections: number
+  /** Probabilité empirique (null si non calculable). */
+  probability: number | null
+  /** Bande d'interprétation textuelle. */
+  interpretation: string
+}
+
+/**
+ * Construit le tableau « ANALYSE DES PROBABILITÉS DE DÉTECTION ».
+ * Ordre : types configurés (même sans capture), puis types observés non
+ * configurés (alphabétique), puis éventuellement le groupe générique réservé.
+ */
+export function buildDetectionProbabilityTable(source: GlobalExportSource): DetectionProbabilityRow[] {
+  const { project, rows } = source
+  const configured = cleanConfiguredTypes(project.observationTypes)
+  const observers = listDatasetObservers(source)
+  const observerCount = observers.length
+
+  const observedUnknown = new Set<string>()
+  let hasGeneric = false
+  for (const row of rows) {
+    const type = normalizedType(row.observationType)
+    if (type) {
+      if (!configured.includes(type)) observedUnknown.add(type)
+    } else if (!row.isGhostPoint && row.pointId) {
+      // Seules les captures VALIDÉES non fantômes forment des détections
+      // analytiques : une fausse alerte sans type ne doit pas faire apparaître
+      // un groupe « passe générique » vide dans le tableau des probabilités.
+      hasGeneric = true
+    }
+  }
+
+  const genericPointCount = project.definedPointsByType[GENERIC_TYPE_KEY] ?? 0
+  if (hasGeneric || genericPointCount > 0) observedUnknown.add(GENERIC_TYPE_KEY)
+  // Le groupe générique est présenté en dernier, après les types observés.
+  const hasGenericGroup = observedUnknown.delete(GENERIC_TYPE_KEY)
+
+  const groupKeys = [
+    ...configured,
+    ...Array.from(observedUnknown).sort((a, b) => a.localeCompare(b)),
+    ...(hasGenericGroup ? [GENERIC_TYPE_KEY] : []),
+  ]
+
+  return groupKeys.map((groupKey) => {
+    const label = typeGroupLabel(groupKey)
+    const pointCount = project.definedPointsByType[groupKey] ?? 0
+    const groupRows = rows.filter(
+      (row) => normalizedType(row.observationType) === groupKey,
+    )
+    const detections = countAnalyticDetections(groupRows)
+    const possibleObservations = pointCount * observerCount
+    const probability = detectionProbability(detections, pointCount, observerCount)
+    return {
+      label,
+      type: groupKey,
+      pointCount,
+      possibleObservations,
+      detections,
+      probability,
+      interpretation: interpretationBand(probability),
+    }
+  })
+}
+
+/** Ligne du bloc « DÉTAIL PAR POINT » (feuille Synthèse). */
+export type PointDetailRow = {
+  pointId: string
+  label: string
+  trameDebut: number
+  trameFin: number
+  videoName: string | null
+  /** Type/décalage de la passe vidéo du point (clé normalisée). */
+  type: string
+  /** Observateurs distincts ayant ≥ 1 détection analytique sur ce point. */
+  observersDetected: number
+  /** Détections analytiques sur ce point (distinctes par (observateur, type, point)). */
+  detections: number
+}
+
+/** Construit le bloc « DÉTAIL PAR POINT » : chaque point configuré, même sans détection. */
+export function buildPointDetailRows(source: GlobalExportSource): PointDetailRow[] {
+  const { project, rows } = source
+  return project.points.map((point) => {
+    const matched = rows.filter((row) => row.pointId === point.id && !row.isGhostPoint)
+    const observersDetected = new Set(matched.map((row) => row.userId)).size
+    return {
+      pointId: point.id,
+      label: point.label,
+      trameDebut: point.trameDebut,
+      trameFin: point.trameFin,
+      videoName: point.videoName,
+      type: point.type,
+      observersDetected,
+      detections: countAnalyticDetections(matched),
+    }
+  })
+}
+
+/** Ligne du bloc « SYNTHÈSE PAR OBSERVATEUR » (feuille Synthèse). */
+export type ObserverSynthesisRow = {
+  observerId: string
+  displayName: string
+  email: string | null
+  anonymousId: string
+  /** Points/trames uniques détectés au sens analytique (observateur, type, trame). */
+  uniqueDetections: number
+  /** Points/trames possibles = points configurés du périmètre exporté. */
+  pointsPossible: number
+  /** Taux de couverture 0..1 (uniqueDetections / pointsPossible) ; null si aucun point. */
+  rate: number | null
+}
+
+/** Construit le bloc « SYNTHÈSE PAR OBSERVATEUR ». */
+export function buildObserverSynthesisRows(source: GlobalExportSource): ObserverSynthesisRow[] {
+  const { project, rows } = source
+  const byId = new Map<string, GlobalExportRow[]>()
+  for (const row of rows) {
+    const list = byId.get(row.userId)
+    if (list) list.push(row)
+    else byId.set(row.userId, [row])
+  }
+  const pointsPossible = project.definedPoints
+  return Array.from(byId.entries())
+    .map(([observerId, observerRows]) => {
+      const sample = observerRows[0]
+      const uniqueDetections = countAnalyticDetections(observerRows)
+      return {
+        observerId,
+        displayName: observerDisplayLabel(sample),
+        email: sample.email,
+        anonymousId: sample.anonymousId,
+        uniqueDetections,
+        pointsPossible,
+        rate:
+          pointsPossible > 0
+            ? Math.min(1, uniqueDetections / pointsPossible)
+            : null,
+      }
+    })
+    .sort((a, b) => (b.uniqueDetections - a.uniqueDetections) || a.displayName.localeCompare(b.displayName))
+}
+
+/** Ligne d'une feuille « par type/décalage » (matrice points × observateurs). */
+export type TypeSheetRow = {
+  pointId: string
+  label: string
+  trameDebut: number
+  trameFin: number
+  videoName: string | null
+  /** 1 si l'observateur a ≥ 1 détection analytique sur ce point, sinon 0. */
+  detectionsByObserver: Record<string, 0 | 1>
+  /** Nombre d'observateurs ayant détecté ce point (≥ 1). */
+  detectorCount: number
+  /** Probabilité empirique = détecteurs / observateurs du jeu exporté (null si 0). */
+  probability: number | null
+}
+
+/**
+ * Construit la matrice d'une feuille « par type/décalage » : les points
+ * configurés de ce type en lignes, un colonne par observateur (0/1), puis un
+ * total « Détections » et une « Probabilité » par point.
+ */
+export function buildTypeSheetRows(
+  source: GlobalExportSource,
+  typeKey: string,
+  observers: readonly DatasetObserver[],
+): TypeSheetRow[] {
+  const { project, rows } = source
+  const observerCount = observers.length
+  const points = project.points.filter((point) => normalizedType(point.type) === typeKey)
+
+  return points.map((point) => {
+    const matched = rows.filter((row) => row.pointId === point.id && !row.isGhostPoint)
+    const observerIds = new Set(matched.map((row) => row.userId))
+    const detectionsByObserver: Record<string, 0 | 1> = {}
+    let detectorCount = 0
+    for (const observer of observers) {
+      const detected = observerIds.has(observer.observerId) ? 1 : 0
+      detectionsByObserver[observer.observerId] = detected
+      detectorCount += detected
+    }
+    return {
+      pointId: point.id,
+      label: point.label,
+      trameDebut: point.trameDebut,
+      trameFin: point.trameFin,
+      videoName: point.videoName,
+      detectionsByObserver,
+      detectorCount,
+      probability:
+        observerCount > 0 ? detectorCount / observerCount : null,
+    }
+  })
 }

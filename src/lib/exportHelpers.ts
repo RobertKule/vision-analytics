@@ -87,7 +87,7 @@ export function generateScientificCsv(analytics: ProjectAnalyticsDto): string {
       'Delai_Reaction_Sec',
       'ID_Anonyme_Observateur',
       'Email_Observateur',
-      'URL_Cloudinary',
+      'URL_Image',
       'Date_Heure_Soumission',
     ].join(';'),
   )

@@ -3,8 +3,13 @@ import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
-import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
-import type { GlobalExportRow, GlobalExportSource } from '@/lib/globalExportModel'
+import { brandFileName, sanitizeBaseName, videoDisplayName } from '@/lib/exportHelpers'
+import type {
+  GlobalExportPoint,
+  GlobalExportRow,
+  GlobalExportSource,
+} from '@/lib/globalExportModel'
+import { computeDefinedPointsByType } from '@/lib/globalExportModel'
 import { generateExcelWorkbook } from '@/lib/serverGlobalWorkbook'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
@@ -79,7 +84,16 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       videoUrl: true,
       observationTypes: true,
       createdAt: true,
-      points: { select: { id: true, videoId: true } },
+      points: {
+        select: {
+          id: true,
+          videoId: true,
+          pointName: true,
+          trameDebut: true,
+          trameFin: true,
+          video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
+        },
+      },
     },
   })
   if (!project) {
@@ -121,6 +135,7 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     include: {
       user: { select: { username: true, email: true, anonymousId: true } },
       point: { select: { id: true, pointName: true } },
+      video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
     },
     orderBy: { createdAt: 'asc' },
   })
@@ -132,14 +147,23 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     )
   }
 
-  // Fenêtres pertinentes (métadonnée « points définis » cohérente avec la vidéo filtrée).
-  const definedPoints = videoFilterDefined
+  // Fenêtres pertinentes : uniquement celles de la vidéo filtrée, sinon toutes.
+  const scopedProjectPoints = videoFilterDefined
     ? project.points.filter((point) =>
         videoIdRaw === LEGACY_GENERIC_VIDEO_ID
           ? point.videoId === null
           : point.videoId === videoIdRaw,
-      ).length
-    : project.points.length
+      )
+    : project.points
+
+  const points: GlobalExportPoint[] = scopedProjectPoints.map((point) => ({
+    id: point.id,
+    label: point.pointName,
+    trameDebut: point.trameDebut,
+    trameFin: point.trameFin,
+    videoName: point.video ? videoDisplayName(point.video) : null,
+    type: point.video?.typeLabel?.trim() ?? '',
+  }))
 
   const rows: GlobalExportRow[] = observations.map((row) => ({
     userId: row.userId,
@@ -152,6 +176,8 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     pointId: row.pointId,
     pointLabel: row.point?.pointName ?? null,
     imageUrl: row.imageUrl,
+    driveFileId: row.driveFileId,
+    videoName: row.video ? videoDisplayName(row.video) : null,
     createdAt: row.createdAt.toISOString(),
   }))
 
@@ -163,7 +189,9 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       videoUrl: project.videoUrl,
       observationTypes: project.observationTypes,
       createdAt: project.createdAt.toISOString(),
-      definedPoints,
+      definedPoints: points.length,
+      points,
+      definedPointsByType: computeDefinedPointsByType(points),
     },
     rows,
   }

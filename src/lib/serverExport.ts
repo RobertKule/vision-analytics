@@ -1,5 +1,7 @@
 import ExcelJS from 'exceljs'
 import { sanitizeBaseName } from '@/lib/exportHelpers'
+import { fetchDriveFileBytes } from '@/lib/drive'
+import { driveFileIdFromReference } from '@/lib/driveRef'
 
 /**
  * Utilitaires d'export exécutés CÔTÉ SERVEUR uniquement (route handlers d'API).
@@ -7,13 +9,13 @@ import { sanitizeBaseName } from '@/lib/exportHelpers'
  * un bundle client — n'importez ce module que depuis des routes `app/api/**`.
  */
 
-export type CloudinaryImage = { buffer: Buffer; extension: string }
+export type FetchedImage = { buffer: Buffer; extension: string }
 
 export const MAX_CONCURRENCY = 6
 export const FETCH_TIMEOUT_MS = 30_000
 
-/** Télécharge une image distante avec délai d'abandon ; null si indisponible. */
-export async function fetchImage(url: string): Promise<CloudinaryImage | null> {
+/** Télécharge une image distante (URL publique) avec délai d'abandon ; null si indisponible. */
+export async function fetchImage(url: string): Promise<FetchedImage | null> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
   try {
@@ -28,6 +30,27 @@ export async function fetchImage(url: string): Promise<CloudinaryImage | null> {
   } finally {
     clearTimeout(timeout)
   }
+}
+
+/**
+ * Télécharge les octets d'une capture de façon indifférente au fournisseur de stockage :
+ *  — `driveFileId` présent ⇒ Google Drive (`alt=media` authentifié serveur, fiable).
+ *  — sinon ⇒ URL publique historique (ex. CDN Cloudinary des lignes antérieures à la migration).
+ * Renvoie null si le média est indisponible (ligne supprimée côté stockage).
+ */
+export async function fetchStoredImage(ref: {
+  driveFileId?: string | null
+  imageUrl?: string | null
+}): Promise<FetchedImage | null> {
+  const fileId = driveFileIdFromReference(ref?.driveFileId ?? null)
+  if (fileId) {
+    const bytes = await fetchDriveFileBytes(fileId)
+    if (!bytes) return null
+    return { buffer: bytes.buffer, extension: extensionFromMime(bytes.mimeType) ?? 'png' }
+  }
+  const url = ref?.imageUrl
+  if (!url || !url.trim()) return null
+  return fetchImage(url)
 }
 
 function extensionFromMime(mime: string): string | null {

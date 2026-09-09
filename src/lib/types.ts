@@ -177,16 +177,18 @@ export type ActionResult = { ok: true; id?: string } | { ok: false; error: strin
 
 // ——— Types pour le Moteur d'Analyse Scientifique (Phase 5) ———
 //
-// ─── SÉMANTIQUE « POINT UNIQUE » (règle produit) ─────────────────────────────
+// ─── SÉMANTIQUE « DÉTECTION ANALYTIQUE » (règle produit) ─────────────────────
+// Une détection analytique = UNE par `(observateur, type d'observation, fenêtre)`.
 // Pour UN observateur, plusieurs observations certifiées dans la MÊME fenêtre
-// (`pointId`) du MÊME type comptent pour UN point détecté, pas N. Partout dans
-// ce DTO (résumé, observateurs) comme dans les exports (Excel/CSV/PDF), les
-// compteurs « points / validées / fenêtres » dédupliquent par
-// `(observateur, pointId)` ; les fausses alertes restent des événements
-// (une capture hors trame = un événement) ; la précision =
-// points uniques validés / (points uniques validés + fausses alertes).
+// (`pointId`) SOUS LE MÊME `observationType` comptent pour UN point détecté, pas N.
+// Partout dans ce DTO (résumé, observateurs) comme dans les exports (Excel/CSV/PDF),
+// les compteurs « points / validées / fenêtres » dédupliquent par
+// `(observateur, observationType, pointId)` ; les fausses alertes restent des
+// événements (une capture hors trame = un événement) ; la précision =
+// détections analytiques / (détections analytiques + fausses alertes).
 // Le relevé brut (`pointsAnalytics[].captures`, `ghostPointsAnalytics.captures`)
 // conserve, lui, chaque capture certifiée — aucune perte de données brutes.
+// Probabilité empirique de détection = détections / (points configurés × observateurs).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Capture d'observation détaillée pour l'analyse administrateur (donnée BRUTE). */
@@ -324,6 +326,12 @@ export type ProjectAnalyticsDto = {
      * validée), pas par point unique : mesure de réaction au `trameDebut`.
      */
     averageDetectionDelay: number | null
+    /**
+     * Probabilité empirique de détection (0..1) sur le périmètre filtré :
+     * `détections analytiques / (points configurés × observateurs distincts)`.
+     * null si le dénominateur est nul (aucun point configuré ou aucun observateur).
+     */
+    detectionProbability?: number | null
     /** Filtre réellement appliqué aux calculs (cohérence métriques ↔ contexte). */
     appliedFilter?: AnalyticsFilter
   }
@@ -340,7 +348,7 @@ export type ProjectObservationRowDto = {
   /** Horodatage vidéo en secondes. */
   timestampTotal: number
   isGhostPoint: boolean
-  /** URL Cloudinary de la capture annotée. */
+  /** URL publique de la capture annotée (Google Drive / CDN historique). */
   imageUrl: string
   /** Date de soumission (ISO). */
   createdAt: string

@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
   LEDGER_HEADERS,
+  buildDetectionProbabilityTable,
   buildGlobalObservations,
   buildObserverMatrix,
   buildProjectSummary,
   buildTypeStatistics,
   clockLabel,
+  countAnalyticDetections,
+  countUniquePoints,
+  countWindowsHit,
+  detectionProbability,
   interObserverAgreementRate,
+  type GlobalExportPoint,
   type GlobalExportRow,
   type GlobalExportSource,
 } from '@/lib/globalExportModel'
@@ -19,6 +25,8 @@ const project = {
   observationTypes: ['Faune', 'Eau'],
   createdAt: '2026-08-01T00:00:00.000Z',
   definedPoints: 2,
+  points: [],
+  definedPointsByType: {},
 }
 
 function row(partial: Partial<GlobalExportRow>): GlobalExportRow {
@@ -39,13 +47,16 @@ function row(partial: Partial<GlobalExportRow>): GlobalExportRow {
 }
 
 describe('LEDGER_HEADERS', () => {
-  it('définit exactement les 11 colonnes persistées du classeur global', () => {
-    expect(LEDGER_HEADERS).toHaveLength(11)
+  it('définit exactement les 13 colonnes persistées du relevé global', () => {
+    expect(LEDGER_HEADERS).toHaveLength(13)
     expect(LEDGER_HEADERS[0]).toBe('Minuterie (MM:SS)')
     expect(LEDGER_HEADERS[1]).toBe("Type d'observation")
     expect(LEDGER_HEADERS[2]).toBe('Point trouvé ?')
-    expect(LEDGER_HEADERS[7]).toBe('Coordonnées (X, Y)')
-    expect(LEDGER_HEADERS[10]).toBe('Date de Capture')
+    expect(LEDGER_HEADERS[3]).toBe('Fenêtre cible')
+    expect(LEDGER_HEADERS[4]).toBe('Trame vidéo')
+    expect(LEDGER_HEADERS[8]).toBe('Coordonnées (X, Y)')
+    expect(LEDGER_HEADERS[11]).toBe('Drive File ID')
+    expect(LEDGER_HEADERS[12]).toBe('Date de Capture')
   })
 })
 
@@ -314,5 +325,130 @@ describe('buildTypeStatistics', () => {
     }
     const stats = buildTypeStatistics(source)
     expect(stats.map((entry) => entry.type)).toEqual(['Faune', 'Zèbre'])
+  })
+})
+
+describe('règle analytique affinée (observateur × type × trame)', () => {
+  it('même fenêtre sous deux types = DEUX détections analytiques', () => {
+    const rows: GlobalExportRow[] = [
+      row({ userId: 'u1', observationType: 'Faune', pointId: 'pt-a' }),
+      row({ userId: 'u1', observationType: 'Eau', pointId: 'pt-a' }),
+    ]
+    expect(countAnalyticDetections(rows)).toBe(2)
+    expect(countUniquePoints(rows)).toBe(2)
+    // L'union de fenêtres (accord inter-observateurs) ignore le type : 1 fenêtre.
+    expect(countWindowsHit(rows)).toBe(1)
+  })
+
+  it('les doublons (observateur, type, fenêtre) restent dédupliqués', () => {
+    const rows: GlobalExportRow[] = [
+      row({ observationType: 'Faune', pointId: 'pt-a' }),
+      row({ observationType: 'Faune', pointId: 'pt-a' }),
+      row({ observationType: 'Faune', pointId: 'pt-a' }),
+    ]
+    expect(countAnalyticDetections(rows)).toBe(1)
+    expect(countWindowsHit(rows)).toBe(1)
+  })
+})
+
+// ——— Scénario obligatoire : 12 observateurs × 8 points « A » + 8 points « B » ———
+function typePoint(type: string, index: number): GlobalExportPoint {
+  return {
+    id: `${type}-pt-${index}`,
+    label: `${type} Point ${index}`,
+    trameDebut: index * 10,
+    trameFin: index * 10 + 5,
+    videoName: `Passe ${type}`,
+    type,
+  }
+}
+
+const scenarioPoints: GlobalExportPoint[] = [
+  ...Array.from({ length: 8 }, (_, i) => typePoint('A', i + 1)),
+  ...Array.from({ length: 8 }, (_, i) => typePoint('B', i + 1)),
+]
+
+const scenarioProject = {
+  id: 'scenario-12x8',
+  title: 'Scénario 12 × 8 (A + B)',
+  description: null,
+  videoUrl: null,
+  observationTypes: ['A', 'B'],
+  createdAt: '2026-08-01T00:00:00.000Z',
+  definedPoints: scenarioPoints.length,
+  points: scenarioPoints,
+  definedPointsByType: { A: 8, B: 8 },
+}
+
+/** 12 observateurs × (8 détections A + 8 détections B) — chaque trame détectée une fois. */
+function mandatoryScenarioRows(): GlobalExportRow[] {
+  const rows: GlobalExportRow[] = []
+  for (let observer = 1; observer <= 12; observer += 1) {
+    const userId = `u${String(observer).padStart(2, '0')}`
+    const anonymousId = `anon-${observer}`
+    for (let i = 1; i <= 8; i += 1) {
+      rows.push(
+        row({
+          userId,
+          anonymousId,
+          observationType: 'A',
+          pointId: `A-pt-${i}`,
+          pointLabel: `A Point ${i}`,
+          timestampTotal: i * 10,
+        }),
+      )
+      rows.push(
+        row({
+          userId,
+          anonymousId,
+          observationType: 'B',
+          pointId: `B-pt-${i}`,
+          pointLabel: `B Point ${i}`,
+          timestampTotal: 100 + i * 10,
+        }),
+      )
+    }
+  }
+  return rows
+}
+
+describe('scénario obligatoire : 12 observateurs × 8 points A + 8 points B', () => {
+  it('observations possibles = 96 par type ; détections et probabilités cohérentes', () => {
+    const rows = mandatoryScenarioRows()
+    // Le relevé BRUT conserve chaque capture certifiée : un doublon (même trame,
+    // même type) et une fausse alerte non typée n'ajoutent AUCUNE détection.
+    rows.push(
+      row({ userId: 'u01', anonymousId: 'anon-1', observationType: 'A', pointId: 'A-pt-1' }),
+    )
+    rows.push(
+      row({ userId: 'u01', anonymousId: 'anon-1', isGhostPoint: true, pointId: null, observationType: null }),
+    )
+
+    const source: GlobalExportSource = { project: scenarioProject, rows }
+
+    const table = buildDetectionProbabilityTable(source)
+    const a = table.find((entry) => entry.type === 'A')
+    const b = table.find((entry) => entry.type === 'B')
+
+    // Observations possibles = points configurés × observateurs = 8 × 12 = 96.
+    expect(a).toMatchObject({ pointCount: 8, possibleObservations: 96, detections: 96 })
+    expect(b).toMatchObject({ pointCount: 8, possibleObservations: 96, detections: 96 })
+    expect(a?.probability).toBeCloseTo(1, 5)
+    expect(b?.probability).toBeCloseTo(1, 5)
+
+    // Détections analytiques totales = 12 × (8 + 8) = 192 (le doublon est ignoré).
+    expect(countAnalyticDetections(rows)).toBe(192)
+    expect(countWindowsHit(rows)).toBe(16)
+
+    // RAW : le relevé brut garde bien CHAQUE capture certifiée (192 + 1 + 1).
+    const ledger = buildGlobalObservations(source)
+    expect(ledger).toHaveLength(194)
+    expect(ledger.filter((entry) => entry.pointFound === 'Oui')).toHaveLength(193)
+
+    // La fonction pure `detectionProbability` est cohérente avec le tableau.
+    expect(detectionProbability(96, 8, 12)).toBeCloseTo(1, 5)
+    expect(detectionProbability(0, 8, 12)).toBe(0)
+    expect(detectionProbability(96, 0, 12)).toBeNull()
+    expect(detectionProbability(96, 8, 0)).toBeNull()
   })
 })

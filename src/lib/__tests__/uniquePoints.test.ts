@@ -10,9 +10,11 @@ import {
 } from '@/lib/globalExportModel'
 
 /**
- * Règle produit « point unique » :
- * pour UN observateur, plusieurs observations certifiées dans la MÊME fenêtre
- * temporelle (`pointId`) du MÊME type comptent pour UN point détecté, pas N.
+ * Règle produit « détection analytique » :
+ * une détection = UNE par (observateur, type d'observation, fenêtre). Pour UN
+ * observateur, plusieurs observations certifiées dans la MÊME fenêtre temporelle
+ * (`pointId`) SOUS LE MÊME `observationType` comptent pour UNE détection, pas N ;
+ * deux types sur la même fenêtre produisent DEUX détections (règle affinée).
  * Ces tests portent UNIQUEMENT sur les fonctions pures — aucune base.
  */
 
@@ -62,6 +64,26 @@ describe('règle produit « point unique » (1 observateur)', () => {
     ]
     expect(countUniquePoints(rows)).toBe(1)
     expect(countGhostEvents(rows)).toBe(2)
+  })
+})
+
+describe('règle affinée : le type d’observation participe à la clé', () => {
+  it('même fenêtre, deux types distincts = deux détections analytiques', () => {
+    const rows: GlobalExportRow[] = [
+      row({ userId: 'u1', observationType: 'Faune', pointId: 'pt-a' }),
+      row({ userId: 'u1', observationType: 'Eau', pointId: 'pt-a' }),
+    ]
+    expect(countUniquePoints(rows)).toBe(2)
+    expect(countWindowsHit(rows)).toBe(1)
+  })
+
+  it('fenêtre sans type puis fenêtre typée = deux détections (clé générique distincte)', () => {
+    const rows: GlobalExportRow[] = [
+      row({ userId: 'u1', observationType: null, pointId: 'pt-a' }),
+      row({ userId: 'u1', observationType: 'Faune', pointId: 'pt-a' }),
+    ]
+    expect(countUniquePoints(rows)).toBe(2)
+    expect(countWindowsHit(rows)).toBe(1)
   })
 })
 

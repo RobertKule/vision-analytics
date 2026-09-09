@@ -9,7 +9,8 @@ import type {
   GlobalExportSource,
 } from '@/lib/globalExportModel'
 import { computeDefinedPointsByType } from '@/lib/globalExportModel'
-import { generateExcelWorkbook } from '@/lib/serverGlobalWorkbook'
+import { generateObserverWorkbook } from '@/lib/serverGlobalWorkbook'
+import { observerDisplayLabel, observerKeyName } from '@/lib/serverExport'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
@@ -19,18 +20,21 @@ type ExportContext = {
   params: Promise<{ projectId: string }>
 }
 
-/** Type/décalage d'une fenêtre : typeLabel de sa passe vidéo, sinon clé générique. */
-function pointTypeOf(video: { typeLabel: string | null } | null): string {
-  return video?.typeLabel?.trim() ?? ''
-}
-
 /**
- * « Export Global (Excel) » — classeur `.xlsx` (Synthèse · Méthodologie ·
- * une feuille par type/décalage · Données_Brutes_Globales).
+ * « Export Observateur (Excel) » — classeur `.xlsx` INDIVIDUEL d'un seul
+ * observateur (`?userId=<id>`), généré CÔTÉ SERVEUR.
  *
- * Auto-authentification de la route `/api/*` : session + accès de gestion
- * (ADMIN propriétaire OU ANALYST propriétaire/invité via `canManage`).
- * ExcelJS ne tourne que côté serveur — aucun import dans un bundle client.
+ * Fichier : `ONA_Field_Observateur_<Nom>_<Date>.xlsx`
+ * Feuilles : Synthèse · <une par type utilisé> · Données_Brutes.
+ *
+ * Autorisation (auto-authentification de la route `/api/*`) :
+ *  — ADMIN / ANALYST (propriétaire ou invité via `canManage`) : peut exporter
+ *    N'IMPORTE QUEL observateur ayant soumis des captures certifiées au projet ;
+ *  — OBSERVER : uniquement ses PROPRES données (`userId === session.uid`).
+ *
+ * Le projet complet (fenêtres configurées + types) est transporté dans le modèle
+ * pour calculer les « points possibles » et la probabilité de détection ; les LIGNES
+ * du classeur sont strictement celles de l'observateur ciblé, certifiées (`isVerified`).
  */
 export async function GET(_request: Request, ctx: ExportContext): Promise<NextResponse> {
   const session = await getCurrentSession()
@@ -39,6 +43,14 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
   }
 
   const { projectId } = await ctx.params
+  const url = new URL(_request.url)
+  const targetUserId = (url.searchParams.get('userId') ?? '').trim()
+  if (!targetUserId) {
+    return NextResponse.json(
+      { error: 'Identifiant de l’observateur manquant (paramètre `userId`).' },
+      { status: 400 },
+    )
+  }
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
@@ -65,17 +77,36 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
     return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
   }
 
+  // ——— Autorisation : gestion (tous observateurs) OU observateur sur ses seules données ———
   const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  const isManager = canManage(level)
+  const isSelfObserver = session.role === 'OBSERVER' && targetUserId === session.uid
+  if (!isManager && !isSelfObserver) {
     return NextResponse.json(
-      { error: 'Accès de gestion requis sur ce projet.' },
+      {
+        error:
+          'Accès refusé : seuls les gestionnaires du projet peuvent exporter un observateur, ' +
+          'et un observateur ne peut exporter que ses propres données.',
+      },
       { status: 403 },
     )
   }
 
+  const observerUser = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    select: { username: true, email: true, anonymousId: true },
+  })
+  if (!observerUser) {
+    return NextResponse.json(
+      { error: 'Observateur introuvable.' },
+      { status: 404 },
+    )
+  }
+  const observerLabel = observerDisplayLabel(observerUser)
+
+  // ——— Données CERTIFIÉES de l'observateur ciblé uniquement ———
   const observations = await prisma.observation.findMany({
-    // Données CERTIFIÉES uniquement (une session « en cours » n'est jamais exportée).
-    where: { projectId, isVerified: true },
+    where: { projectId, isVerified: true, userId: targetUserId },
     include: {
       user: { select: { username: true, email: true, anonymousId: true } },
       point: { select: { id: true, pointName: true } },
@@ -86,18 +117,19 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
 
   if (observations.length === 0) {
     return NextResponse.json(
-      { error: 'Aucune observation à exporter.' },
+      { error: 'Aucune observation certifiée pour cet observateur.' },
       { status: 404 },
     )
   }
 
+  // Périmètre du projet COMPLET : l'observateur a pu détecter n'importe quelle fenêtre.
   const points: GlobalExportPoint[] = project.points.map((point) => ({
     id: point.id,
     label: point.pointName,
     trameDebut: point.trameDebut,
     trameFin: point.trameFin,
     videoName: point.video ? videoDisplayName(point.video) : null,
-    type: pointTypeOf(point.video),
+    type: point.video?.typeLabel?.trim() ?? '',
   }))
 
   const rows: GlobalExportRow[] = observations.map((row) => ({
@@ -133,14 +165,26 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
 
   await recordAudit({
     userId: session.uid,
-    action: AUDIT_ACTIONS.exportExcel,
+    action: AUDIT_ACTIONS.exportObserver,
     entityType: 'export',
     entityId: project.id,
-    metadata: { title: project.title, observations: observations.length, format: 'xlsx' },
+    metadata: {
+      title: project.title,
+      observerUserId: targetUserId,
+      observations: rows.length,
+      scope: isSelfObserver ? 'self' : 'managed',
+      format: 'xlsx',
+    },
   })
 
-  const buffer = await generateExcelWorkbook(source)
-  const filename = `${brandFileName(`${sanitizeBaseName(project.title)}_Export_Global`)}.xlsx`
+  const buffer = await generateObserverWorkbook(source, observerLabel)
+  const dateToken = new Date().toISOString().slice(0, 10)
+  const nameToken = observerKeyName({
+    username: observerUser.username ?? null,
+    email: observerUser.email ?? null,
+    anonymousId: observerUser.anonymousId,
+  })
+  const filename = `${brandFileName(`${sanitizeBaseName(`Observateur_${nameToken}_${dateToken}`)}`)}.xlsx`
 
   const headers = new Headers({
     'Content-Type':

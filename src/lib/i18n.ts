@@ -211,10 +211,18 @@ const en = {
     nextCaptureAria: 'Next capture',
     playAt: 'Play at {{time}}',
     // — Synchronisation immédiate des captures (état par capture) —
+    compressing: 'Compressing…',
     savePending: 'Waiting to save…',
     saveInProgress: 'Saving…',
-    saveDone: 'Capture saved',
+    saveDone: '✓ Capture saved',
     saveFailed: 'Not saved — will retry when back online.',
+    saveFailedPermanent: 'Not saved — storage needs attention.',
+    saveRetry: 'Try again',
+    saveFailureDetail: 'Reason',
+    saveFailedNetwork:
+      'Connection interrupted. The capture is kept locally.',
+    saveFailedServer:
+      'The server could not save the capture. It has been kept locally.',
     captureBlockedByDraft: 'Resume or discard your saved session before capturing.',
     zones: {
       topLeft: 'top-left',
@@ -652,10 +660,16 @@ const en = {
       VIDEO_UPDATED: 'Video updated',
       VIDEO_REMOVED: 'Video removed',
       OBSERVATION_SUBMITTED: 'Observations submitted',
+      SESSION_FINALIZED: 'Session finalized',
+      IMAGE_UPLOADED: 'Capture image uploaded',
+      IMAGE_DELETED: 'Capture image deleted',
       EXPORT_GLOBAL: 'Global export (ZIP)',
       EXPORT_EXCEL: 'Global export (Excel)',
       EXPORT_PACKAGE: 'ZIP export (Excel + charts)',
       EXPORT_CAPTURES: 'Captures export (ZIP)',
+      EXPORT_CHART: 'Chart export (PNG)',
+      EXPORT_PDF: 'Report export (PDF)',
+      EXPORT_OBSERVER: 'Observer export (Excel)',
     },
     kinds: {
       auth: 'Authentication',
@@ -861,10 +875,18 @@ const fr: typeof en = {
     nextCaptureAria: 'Capture suivante',
     playAt: 'Lecture à {{time}}',
     // — Synchronisation immédiate des captures (état par capture) —
+    compressing: 'Compression en cours…',
     savePending: 'En attente d’enregistrement…',
     saveInProgress: 'Enregistrement en cours…',
-    saveDone: 'Capture enregistrée',
+    saveDone: '✓ Capture enregistrée',
     saveFailed: 'Non enregistrée — nouvel essai au retour en ligne.',
+    saveFailedPermanent: 'Non enregistrée — stockage à corriger.',
+    saveRetry: 'Réessayer',
+    saveFailureDetail: 'Raison',
+    saveFailedNetwork:
+      'Connexion interrompue. La capture est conservée localement.',
+    saveFailedServer:
+      'Le serveur n’a pas pu enregistrer la capture. Elle a été conservée localement.',
     captureBlockedByDraft: 'Reprenez ou supprimez la session enregistrée avant de capturer.',
     zones: {
       topLeft: 'haut-gauche',
@@ -1303,10 +1325,16 @@ const fr: typeof en = {
       VIDEO_UPDATED: 'Vidéo mise à jour',
       VIDEO_REMOVED: 'Vidéo retirée',
       OBSERVATION_SUBMITTED: 'Observations soumises',
+      SESSION_FINALIZED: 'Session finalisée',
+      IMAGE_UPLOADED: 'Image de capture téléversée',
+      IMAGE_DELETED: 'Image de capture supprimée',
       EXPORT_GLOBAL: 'Export global (ZIP)',
       EXPORT_EXCEL: 'Export global (Excel)',
       EXPORT_PACKAGE: 'Export ZIP (Excel + graphiques)',
       EXPORT_CAPTURES: 'Export des captures (ZIP)',
+      EXPORT_CHART: 'Export de graphique (PNG)',
+      EXPORT_PDF: 'Export du rapport (PDF)',
+      EXPORT_OBSERVER: 'Export observateur (Excel)',
     },
     kinds: {
       auth: 'Authentification',

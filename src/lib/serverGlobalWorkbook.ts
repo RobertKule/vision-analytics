@@ -2,16 +2,20 @@ import ExcelJS from 'exceljs'
 import type {
   GlobalExportSource,
   LedgerObservation,
-  ObserverMatrix,
-  ProjectSummary,
-  TypeStatistic,
 } from '@/lib/globalExportModel'
 import {
   LEDGER_HEADERS,
+  buildDetectionProbabilityTable,
   buildGlobalObservations,
-  buildObserverMatrix,
+  buildObserverSynthesisRows,
+  buildPointDetailRows,
   buildProjectSummary,
-  buildTypeStatistics,
+  buildTypeSheetRows,
+  clockLabel,
+  countAnalyticDetections,
+  detectionProbability,
+  listDatasetObservers,
+  typeGroupLabel,
 } from '@/lib/globalExportModel'
 
 /**
@@ -19,23 +23,23 @@ import {
  * n'entre jamais dans un bundle client ; n'importer que depuis des route
  * handlers `app/api/**`). Tout est calculé sur le sous-ensemble filtré transmis.
  *
- *   Synthèse_Projet          métadonnées + indicateurs + accord inter-observateurs
- *   Statistiques_par_type    compteurs par type (total · validées · hors trame · observateurs · fenêtres)
- *   Matrice_Observateurs     observateurs × types (colonnes dynamiques)
- *   Données_Brutes_Globales  relevé complet (colonnes réellement persistées)
- *   <Observateur>_Global     statistiques globales de l'observateur
- *   <Observateur>_<Type>     horodatages/statuts de ses captures pour ce type
+ * Nouvelle structure (règle de la détection analytique « observateur + type +
+ * trame », probabilité P = Détections / (points configurés × observateurs)) :
  *
- * Mise en forme : en-têtes en gras, gel de la 1re ligne, autofiltre, pourcentage
- * 0,00 %, largeurs ajustées, et barres de données (mini-graphiques natifs Excel)
- * sur les compteurs pour visualiser la répartition par type.
+ *   Synthèse                analyse des probabilités de détection par type/décalage
+ *                           + détail par point + synthèse par observateur
+ *   Méthodologie            procédure d'analyse (double aveugle) numérotée 1..7
+ *   <Type/décalage>         une feuille par type/décalage : matrice points × observateurs
+ *   Données_Brutes_Globales relevé complet (chaque capture certifiée, sans déduplication)
+ *
+ * Mise en forme : en-têtes en gras, pourcentage 0,00 %, largeurs ajustées, et
+ * barres de données (mini-graphiques natifs Excel) sur les colonnes de comptage.
  */
 
 const INK = 'FF121417'
 const GOLD_FILL = 'FFF6ECD3'
 const GOLD_DEEP = 'FF9C711B'
 const MILK = 'FFFFFFFF'
-const CLAY_FILL = 'FFF3DED6'
 const SHEET_BAND = 'FFFAF7F1'
 
 function darkText(cell: ExcelJS.Cell): void {
@@ -45,6 +49,10 @@ function darkText(cell: ExcelJS.Cell): void {
 
 function valueText(cell: ExcelJS.Cell, wrap = false): void {
   cell.alignment = { vertical: 'top', wrapText: wrap }
+}
+
+function centerText(cell: ExcelJS.Cell): void {
+  cell.alignment = { vertical: 'middle', horizontal: 'center' }
 }
 
 /** Crée un en-tête de tableau avec la signature visuelle des exports du projet. */
@@ -84,223 +92,11 @@ function addDataBars(
   })
 }
 
-/** Feuille 1 : métadonnées + indicateurs + accord inter-observateurs + répartition par type. */
-function writeSummarySheet(
-  workbook: ExcelJS.Workbook,
-  summary: ProjectSummary,
-): ExcelJS.Worksheet {
-  const sheet = workbook.addWorksheet('Synthèse_Projet', {
-    views: [{ state: 'frozen', ySplit: 0 }],
-  })
-  sheet.columns = [{ width: 34 }, { width: 110 }]
-
-  const { project, agreement } = summary
-  const push = (label: string, value: string, wrap = false) => {
-    const row = sheet.addRow([label, value])
-    darkText(row.getCell(1))
-    valueText(row.getCell(2), wrap)
-    if (wrap) row.height = 30
-    return row
-  }
-
-  // ——— Bandeau titre ———
-  const titleRow = sheet.addRow(['ONA Field — Export Global du Projet', ''])
-  titleRow.getCell(1).font = { bold: true, size: 14, color: { argb: MILK } }
-  titleRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
-  titleRow.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
-  titleRow.height = 26
-  sheet.addRow([])
-
-  // ——— Métadonnées ———
-  push('Projet', project.title)
-  push('Description', project.description?.trim() || '—', Boolean(project.description?.trim()))
-  push('Vidéo cible', project.videoUrl?.trim() || '—', Boolean(project.videoUrl?.trim()))
-  push('Créé le', new Date(project.createdAt).toLocaleString('fr-FR'))
-  push('Fenêtres de validation définies', String(project.definedPoints))
-  push(
-    'Types d’observation configurés',
-    project.observationTypes.length > 0 ? project.observationTypes.join(', ') : 'Aucun (types libres)',
-  )
-  sheet.addRow([])
-
-  // ——— Indicateurs ———
-  const kpi: Array<[string, string, boolean]> = [
-    ['Observateurs (ayant envoyé)', String(summary.observerCount), false],
-    ['Observations envoyées', String(summary.totalObservations), false],
-    ['   Dont validées (point trouvé)', String(summary.validatedCount), false],
-    ['   Dont hors trame / fausses alertes', String(summary.ghostCount), false],
-    ['   Sans type d’observation', String(summary.untypedCount), false],
-    ['Fenêtres cibles touchées', String(summary.windowsHit), false],
-    ['Première soumission', summary.firstSubmittedAt ? new Date(summary.firstSubmittedAt).toLocaleString('fr-FR') : '—', false],
-    ['Dernière soumission', summary.lastSubmittedAt ? new Date(summary.lastSubmittedAt).toLocaleString('fr-FR') : '—', false],
-  ]
-  for (const [label, value] of kpi) push(label, value)
-  sheet.addRow([])
-
-  // ——— Accord inter-observateurs (métrique réelle) ———
-  const sectionTitle = (text: string) => {
-    const row = sheet.addRow([text, ''])
-    row.getCell(1).font = { bold: true, color: { argb: GOLD_DEEP } }
-    row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SHEET_BAND } }
-    row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SHEET_BAND } }
-    row.height = 18
-  }
-
-  sectionTitle('ACCORD INTER-OBSERVATEURS (métrique réelle)')
-  const rateLabel = agreement.rate === null
-    ? '—'
-    : `${(agreement.rate * 100).toFixed(2).replace('.', ',')} %`
-  const rateRow = push('Taux d’accord moyen', rateLabel)
-  if (agreement.rate !== null) {
-    rateRow.getCell(2).numFmt = '0.00%'
-    rateRow.getCell(2).value = agreement.rate
-  } else {
-    rateRow.getCell(2).value = rateLabel
-  }
-  push('Paires d’observateurs comparées', String(agreement.pairs))
-  push('Méthode', agreement.method, true)
-  if (agreement.rate === null) {
-    const note = push(
-      'Note',
-      agreement.pairs === 0 && agreement.comparable
-        ? 'Fenêtres cibles définies mais aucune détection mappée commune : taux non calculable.'
-        : 'Calcul possible uniquement avec au moins deux observateurs et des fenêtres cibles définies.',
-      true,
-    )
-    note.getCell(2).font = { italic: true, color: { argb: INK } }
-  }
-  sheet.addRow([])
-
-  // ——— Répartition par type (mini-graphique en barres de données) ———
-  if (summary.perType.length > 0) {
-    sectionTitle('RÉPARTITION PAR TYPE D’OBSERVATION')
-    const header = sheet.addRow(['Type', 'Captures'])
-    styleHeaderRow(header)
-    const firstDataRow = header.number + 1
-    summary.perType.forEach(({ type, count }, index) => {
-      const row = sheet.addRow([type, count])
-      row.getCell(2).alignment = { horizontal: 'center' }
-      row.getCell(1).fill = index % 2 === 0
-        ? { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
-        : { type: 'pattern', pattern: 'solid', fgColor: { argb: SHEET_BAND } }
-    })
-    const lastDataRow = sheet.rowCount
-    if (lastDataRow >= firstDataRow) {
-      addDataBars(sheet, `B${firstDataRow}:B${lastDataRow}`)
-    }
-    sheet.addRow([])
-  }
-
-  // ——— Note de protocole ———
-  const footer = sheet.addRow([
-    'Note de protocole',
-    'La géométrie de capture (coordonnées X/Y, tracés) n’est jamais enregistrée : ' +
-      'les observateurs travaillent en aveugle sur leur propre copie de la vidéo et seules ' +
-      'les captures annotées (image + horodatage + type + statut de validation) sont stockées. ' +
-      'Les colonnes « Coordonnées (X, Y) » sont volontairement vides.',
-  ])
-  footer.getCell(1).font = { bold: true, color: { argb: INK } }
-  valueText(footer.getCell(2), true)
-  footer.height = 60
-
-  return sheet
-}
-
-/** Feuille 2 : matrice observateurs × types dynamiques. */
-function writeObserverMatrixSheet(
-  workbook: ExcelJS.Workbook,
-  matrix: ObserverMatrix,
-): ExcelJS.Worksheet {
-  const sheet = workbook.addWorksheet('Matrice_Observateurs')
-
-  const fixed = [
-    'Observateur',
-    'Email',
-    'Identifiant anonyme',
-  ]
-  const tail = [
-    'Total',
-    'Point trouvé ?',
-    'Hors trame',
-    'Fenêtres touchées',
-    'Précision',
-  ]
-  const columns = [
-    ...fixed.map((header) => ({ header, key: header, width: 28 })),
-    ...matrix.types.map((type) => ({ header: type, key: type, width: 16 })),
-    ...tail.map((header) => ({ header, key: header, width: 15 })),
-  ]
-  sheet.columns = columns
-
-  styleHeaderRow(sheet.getRow(1))
-
-  matrix.observers.forEach((observer) => {
-    const values: Record<string, string | number | null> = {
-      Observateur: observer.displayName,
-      Email: observer.email ?? '',
-      'Identifiant anonyme': observer.anonymousId,
-      ...Object.fromEntries(matrix.types.map((type) => [type, observer.perType[type] ?? 0])),
-      Total: observer.total,
-      'Point trouvé ?': observer.pointFound,
-      'Hors trame': observer.ghosts,
-      'Fenêtres touchées': observer.windowsHit,
-      Précision: observer.precision,
-    }
-    const row = sheet.addRow(values)
-    row.getCell('Précision').numFmt = '0.00%'
-    const band = observer.precision !== null && observer.precision < 0.5
-    if (band) {
-      row.getCell('Précision').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: CLAY_FILL } }
-    }
-  })
-
-  // Mini-graphiques en barres de données sur les colonnes « types ».
-  const lastRow = sheet.rowCount
-  if (lastRow > 1) {
-    const colStart = fixed.length + 1
-    const colEnd = fixed.length + matrix.types.length
-    for (let col = colStart; col <= colEnd; col += 1) {
-      addDataBars(sheet, `${sheet.getColumn(col).letter}2:${sheet.getColumn(col).letter}${lastRow}`)
-    }
-  }
-
-  freezeAndFilter(sheet, columns.length, sheet.rowCount)
-  return sheet
-}
-
-/** Feuille 3 : relevé global complet (colonnes réellement persistées). */
-function writeLedgerSheet(
-  workbook: ExcelJS.Workbook,
-  ledger: LedgerObservation[],
-): ExcelJS.Worksheet {
-  const sheet = workbook.addWorksheet('Données_Brutes_Globales')
-
-  sheet.columns = LEDGER_HEADERS.map((header) => ({
-    header,
-    key: header,
-    width: Math.max(header.length + 6, 18),
-  }))
-
-  styleHeaderRow(sheet.getRow(1))
-
-  ledger.forEach((observation) => {
-    sheet.addRow({
-      [LEDGER_HEADERS[0]]: observation.timecode,
-      [LEDGER_HEADERS[1]]: observation.observationType ?? '',
-      [LEDGER_HEADERS[2]]: observation.pointFound,
-      [LEDGER_HEADERS[3]]: observation.pointLabel ?? '',
-      [LEDGER_HEADERS[4]]: observation.observerName,
-      [LEDGER_HEADERS[5]]: observation.email ?? '',
-      [LEDGER_HEADERS[6]]: observation.anonymousId,
-      [LEDGER_HEADERS[7]]: '', // Coordonnées (X, Y) — non persistées
-      [LEDGER_HEADERS[8]]: observation.status,
-      [LEDGER_HEADERS[9]]: observation.imageUrl,
-      [LEDGER_HEADERS[10]]: observation.capturedAt,
-    })
-  })
-
-  freezeAndFilter(sheet, LEDGER_HEADERS.length, sheet.rowCount)
-  return sheet
+function sectionTitle(sheet: ExcelJS.Worksheet, text: string): void {
+  const row = sheet.addRow([text])
+  row.getCell(1).font = { bold: true, color: { argb: GOLD_DEEP } }
+  row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SHEET_BAND } }
+  row.height = 18
 }
 
 /** Nom de feuille Excel valide : caractères interdits retirés, ≤ 31 caractères. */
@@ -326,219 +122,631 @@ function uniqueSheetName(base: string, used: Set<string>): string {
   return name
 }
 
-/** Feuille « Statistiques_par_type » : compteurs agrégés par type d'observation. */
-function writeTypeStatisticsSheet(
-  workbook: ExcelJS.Workbook,
-  stats: TypeStatistic[],
-): ExcelJS.Worksheet {
-  const sheet = workbook.addWorksheet('Statistiques_par_type')
-  const headers = [
-    'Type d’observation',
-    'Total',
-    'Validées (point trouvé)',
-    'Hors trame',
-    'Observateurs',
-    'Fenêtres touchées',
-    'Précision',
+/** Court identifiant de feuille (base lisible, sans les caractères interdits). */
+function shortToken(value: string, fallback: string, max = 24): string {
+  const cleaned = value.replace(/[\\/?*[\]:]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!cleaned) return fallback
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned
+}
+
+/** Plage horaire lisible d'une fenêtre (MM:SS – MM:SS). */
+function trameRange(start: number, end: number): string {
+  return `${clockLabel(start)} – ${clockLabel(end)}`
+}
+
+// ——— Feuille « Synthèse » ———
+
+/** Écrit une métadonnée « libellé / valeur » (colonne A/B). */
+function writeMetaPair(
+  sheet: ExcelJS.Worksheet,
+  label: string,
+  value: string,
+  wrap = false,
+): void {
+  const row = sheet.addRow([label, value])
+  darkText(row.getCell(1))
+  valueText(row.getCell(2), wrap)
+  if (wrap) row.height = 30
+}
+
+function writeSummarySheet(workbook: ExcelJS.Workbook, source: GlobalExportSource): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet('Synthèse', {
+    views: [{ state: 'frozen', ySplit: 0 }],
+  })
+  sheet.columns = [
+    { width: 34 },
+    { width: 70 },
+    { width: 20 },
+    { width: 22 },
+    { width: 22 },
+    { width: 20 },
   ]
-  sheet.columns = headers.map((header, index) => ({
+
+  const { project } = source
+  const summary = buildProjectSummary(source)
+  const detectionTable = buildDetectionProbabilityTable(source)
+  const pointDetails = buildPointDetailRows(source)
+  const observerSynth = buildObserverSynthesisRows(source)
+
+  // ——— Bandeau titre ———
+  const titleRow = sheet.addRow(['ANALYSE DES PROBABILITÉS DE DÉTECTION', ''])
+  titleRow.getCell(1).font = { bold: true, size: 15, color: { argb: MILK } }
+  titleRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
+  titleRow.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
+  titleRow.height = 28
+  const subtitle = sheet.addRow([`ONA Field — ${project.title}`, ''])
+  subtitle.getCell(1).font = { bold: true, size: 11, color: { argb: GOLD_DEEP } }
+  subtitle.height = 18
+  sheet.addRow([])
+
+  // ——— Métadonnées projet ———
+  writeMetaPair(sheet, 'Projet', project.title)
+  writeMetaPair(sheet, 'Description', project.description?.trim() || '—', Boolean(project.description?.trim()))
+  writeMetaPair(sheet, 'Vidéo cible', project.videoUrl?.trim() || '—', Boolean(project.videoUrl?.trim()))
+  writeMetaPair(sheet, 'Créé le', new Date(project.createdAt).toLocaleString('fr-FR'))
+  writeMetaPair(sheet, 'Points / trames configurés', String(project.definedPoints))
+  writeMetaPair(
+    sheet,
+    'Types d’observation configurés',
+    project.observationTypes.length > 0 ? project.observationTypes.join(', ') : 'Aucun (types libres)',
+  )
+  writeMetaPair(sheet, 'Observateurs distincts', String(summary.observerCount))
+  writeMetaPair(sheet, 'Détections analytiques (total)', String(summary.validatedCount))
+  writeMetaPair(sheet, 'Fausses alertes (fantômes)', String(summary.ghostCount))
+  writeMetaPair(sheet, 'Fenêtres cibles touchées', String(summary.windowsHit))
+  const agreementLabel =
+    summary.agreement.rate === null
+      ? 'Non calculable (moins de deux observateurs actifs)'
+      : `${Math.round(summary.agreement.rate * 100)}% (${summary.agreement.pairs} paire${summary.agreement.pairs > 1 ? 's' : ''})`
+  writeMetaPair(sheet, 'Accord inter-observateurs (Jaccard)', agreementLabel)
+  sheet.addRow([])
+
+  // ——— Tableau principal : probabilités par type / décalage ———
+  sectionTitle(sheet, 'TABLEAU DES PROBABILITÉS DE DÉTECTION PAR TYPE / DÉCALAGE')
+  const headers = [
+    'Décalage',
+    'Nombre de points',
+    'Observations possibles',
+    'Détections',
+    'Probabilité empirique',
+    'Interprétation',
+  ]
+  const header = sheet.addRow(headers)
+  styleHeaderRow(header)
+  const mainTableStart = header.number + 1
+
+  for (const entry of detectionTable) {
+    const row = sheet.addRow([
+      entry.label,
+      entry.pointCount,
+      entry.possibleObservations,
+      entry.detections,
+      entry.probability,
+      entry.interpretation,
+    ])
+    row.getCell(2).alignment = { horizontal: 'center' }
+    row.getCell(3).alignment = { horizontal: 'center' }
+    row.getCell(4).alignment = { horizontal: 'center' }
+    const prob = row.getCell(5)
+    centerText(prob)
+    if (entry.probability !== null) prob.numFmt = '0.00%'
+    else prob.value = '—'
+  }
+  const mainTableEnd = sheet.rowCount
+  if (mainTableEnd >= mainTableStart) {
+    addDataBars(sheet, `D${mainTableStart}:D${mainTableEnd}`)
+  }
+  sheet.addRow([])
+
+  // ——— Détail par point ———
+  sectionTitle(sheet, 'DÉTAIL PAR POINT')
+  const pointHeader = sheet.addRow([
+    'Point',
+    'Trame vidéo',
+    'Vidéo',
+    'Observateurs ayant détecté',
+    'Détections',
+  ])
+  styleHeaderRow(pointHeader)
+  for (const point of pointDetails) {
+    sheet.addRow([
+      point.label,
+      trameRange(point.trameDebut, point.trameFin),
+      point.videoName || '—',
+      point.observersDetected,
+      point.detections,
+    ])
+  }
+  sheet.addRow([])
+
+  // ——— Synthèse par observateur ———
+  sectionTitle(sheet, 'SYNTHÈSE PAR OBSERVATEUR')
+  const obsHeader = sheet.addRow([
+    'Observateur',
+    'Email',
+    'Points uniques détectés',
+    'Points possibles',
+    'Taux de couverture',
+  ])
+  styleHeaderRow(obsHeader)
+  const obsFirstData = obsHeader.number + 1
+  for (const obs of observerSynth) {
+    const row = sheet.addRow([
+      obs.displayName,
+      obs.email ?? '',
+      obs.uniqueDetections,
+      obs.pointsPossible,
+      obs.rate,
+    ])
+    const rate = row.getCell(5)
+    if (obs.rate !== null) rate.numFmt = '0.00%'
+    else rate.value = '—'
+  }
+  const obsLastData = sheet.rowCount
+  if (obsLastData >= obsFirstData) {
+    addDataBars(sheet, `C${obsFirstData}:C${obsLastData}`)
+  }
+  sheet.addRow([])
+
+  // ——— Note de protocole ———
+  const footer = sheet.addRow([
+    'Note de protocole',
+    'Détection analytique : UNE par (observateur, type d’observation, trame). Le relevé brut ' +
+      'conserve chaque capture certifiée. La géométrie de capture (coordonnées X/Y) n’est jamais ' +
+      'enregistrée : les observateurs travaillent en aveugle sur leur propre copie de la vidéo.',
+  ])
+  footer.getCell(1).font = { bold: true, color: { argb: INK } }
+  valueText(footer.getCell(2), true)
+  footer.height = 50
+
+  return sheet
+}
+
+// ——— Feuille « Méthodologie » ———
+
+const METHODOLOGY_STEPS: ReadonlyArray<[string, string]> = [
+  [
+    '1. Copies vidéo indépendantes',
+    'Chaque observateur travaille en aveugle sur SA propre copie de la vidéo, sans voir les ' +
+      'annotations des autres ni les fenêtres de validation.',
+  ],
+  [
+    '2. Fenêtres de validation masquées',
+    'Les trames temporelles (début/fin) qui définissent les cibles scientifiques ne sont jamais ' +
+      'communiquées à l’observateur pendant la session.',
+  ],
+  [
+    '3. Capture & persistance immédiate',
+    'À chaque détection, une capture annotée (image + horodatage + type d’observation) est ' +
+      'enregistrée immédiatement, une par une.',
+  ],
+  [
+    '4. Finalisation de la session',
+    'La clôture (« finaliser ») certifie les observations de la session : seules les captures ' +
+      'certifiées (`isVerified`) alimentent les statistiques et les exports.',
+  ],
+  [
+    '5. Détection analytique (déduplication)',
+    'Une détection analytique = UNE par (observateur + type d’observation + trame). Plusieurs ' +
+      'captures du même observateur dans la même trame et sous le même type comptent pour une seule.',
+  ],
+  [
+    '6. Probabilité de détection',
+    'Pour chaque type/décalage : P = Détections analytiques / (points/trames configurés × ' +
+      'observateurs distincts). Les bandes d’interprétation sont calées sur cette probabilité.',
+  ],
+  [
+    '7. Données brutes intégrales',
+    'Le relevé brut conserve TOUTES les captures certifiées, sans déduplication : c’est la donnée ' +
+      'source de référence, distincte des compteurs analytiques.',
+  ],
+]
+
+/** Feuille « Méthodologie » : procédure d'analyse numérotée + note mise en exergue. */
+function writeMethodologySheet(workbook: ExcelJS.Workbook): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet('Méthodologie', {
+    views: [{ state: 'frozen', ySplit: 0 }],
+  })
+  sheet.columns = [{ width: 46 }, { width: 120 }]
+
+  const title = sheet.addRow(['PROCÉDURE D’ANALYSE', ''])
+  title.getCell(1).font = { bold: true, size: 14, color: { argb: MILK } }
+  title.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
+  title.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
+  title.height = 26
+  sheet.addRow([])
+
+  for (const [step, detail] of METHODOLOGY_STEPS) {
+    const row = sheet.addRow([step, detail])
+    darkText(row.getCell(1))
+    valueText(row.getCell(2), true)
+    row.height = 42
+  }
+  sheet.addRow([])
+
+  // Note verbatim mise en exergue (cellule surlignée).
+  const note = sheet.addRow([
+    'Règle de comptage',
+    "Les trames constituent l'unité d'observation. Plusieurs captures d'un même observateur " +
+      "dans une même trame constituent une seule détection analytique.",
+  ])
+  darkText(note.getCell(1))
+  note.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GOLD_FILL } }
+  note.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GOLD_FILL } }
+  note.getCell(2).font = { bold: true, color: { argb: INK } }
+  valueText(note.getCell(2), true)
+  note.height = 45
+
+  return sheet
+}
+
+// ——— Feuille « Données_Brutes_Globales » ———
+
+/** Feuille du relevé brut global (chaque capture certifiée = une ligne). */
+function writeLedgerSheet(
+  workbook: ExcelJS.Workbook,
+  ledger: LedgerObservation[],
+): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet('Données_Brutes_Globales')
+
+  sheet.columns = LEDGER_HEADERS.map((header) => ({
     header,
     key: header,
-    width:
-      index === 0 ? 36 : index === headers.length - 1 ? 12 : Math.max(header.length + 2, 14),
+    width: Math.max(header.length + 6, 18),
+  }))
+
+  styleHeaderRow(sheet.getRow(1))
+
+  ledger.forEach((observation) => {
+    sheet.addRow({
+      [LEDGER_HEADERS[0]]: observation.timecode,
+      [LEDGER_HEADERS[1]]: observation.observationType ?? '',
+      [LEDGER_HEADERS[2]]: observation.pointFound,
+      [LEDGER_HEADERS[3]]: observation.pointLabel ?? '',
+      [LEDGER_HEADERS[4]]: observation.videoName,
+      [LEDGER_HEADERS[5]]: observation.observerName,
+      [LEDGER_HEADERS[6]]: observation.email ?? '',
+      [LEDGER_HEADERS[7]]: observation.anonymousId,
+      [LEDGER_HEADERS[8]]: '', // Coordonnées (X, Y) — non persistées
+      [LEDGER_HEADERS[9]]: observation.status,
+      [LEDGER_HEADERS[10]]: observation.imageUrl,
+      [LEDGER_HEADERS[11]]: observation.driveFileId,
+      [LEDGER_HEADERS[12]]: observation.capturedAt,
+    })
+  })
+
+  freezeAndFilter(sheet, LEDGER_HEADERS.length, sheet.rowCount)
+  return sheet
+}
+
+// ——— Feuilles par type / décalage ———
+
+/**
+ * Feuille « <Type/décalage> » : matrice points configurés du type × observateurs
+ * (1 = l'observateur a ≥ 1 détection analytique sur le point), avec colonnes
+ * « Détections » (points avec ≥ 1 observateur) et « Probabilité » par point.
+ */
+/** Jeton d'en-tête unique pour chaque observateur (nom seul si sans collision). */
+function uniqueObserverHeaders(
+  observers: ReadonlyArray<{ observerId: string; displayName: string }>,
+): Array<{ token: string; observerId: string }> {
+  const used = new Set<string>(['Point', 'Trame vidéo', 'Détections', 'Probabilité'])
+  const tokens: Array<{ token: string; observerId: string }> = []
+  const counts = new Map<string, number>()
+  for (const observer of observers) {
+    const base = observer.displayName || 'Observateur'
+    const occurrence = (counts.get(base) ?? 0) + 1
+    counts.set(base, occurrence)
+    const candidate = occurrence === 1 ? base : `${base} (${occurrence})`
+    const token = used.has(candidate) ? `${candidate} #${occurrence}` : candidate
+    used.add(token)
+    tokens.push({ token, observerId: observer.observerId })
+  }
+  return tokens
+}
+
+function writeTypeSheet(
+  workbook: ExcelJS.Workbook,
+  source: GlobalExportSource,
+  typeKey: string,
+  label: string,
+  usedNames: Set<string>,
+): ExcelJS.Worksheet | null {
+  const observers = listDatasetObservers(source)
+  const rowsData = buildTypeSheetRows(source, typeKey, observers)
+  if (rowsData.length === 0) return null
+
+  const name = uniqueSheetName(
+    sanitizeSheetToken(shortToken(label, 'Type', 20), 'Type'),
+    usedNames,
+  )
+  const sheet = workbook.addWorksheet(name)
+
+  const observerColumns = uniqueObserverHeaders(observers)
+  const headers = [
+    'Point',
+    'Trame vidéo',
+    ...observerColumns.map((entry) => entry.token),
+    'Détections',
+    'Probabilité',
+  ]
+  sheet.columns = headers.map((header) => ({
+    header,
+    key: header,
+    width: header === 'Point' || header === 'Trame vidéo' ? 24 : header === 'Probabilité' ? 12 : 14,
   }))
   styleHeaderRow(sheet.getRow(1))
 
-  stats.forEach((entry, index) => {
-    const row = sheet.addRow({
-      [headers[0]]: entry.type,
-      [headers[1]]: entry.total,
-      [headers[2]]: entry.validated,
-      [headers[3]]: entry.ghosts,
-      [headers[4]]: entry.observers,
-      [headers[5]]: entry.windowsHit,
-      [headers[6]]: entry.precision,
-    })
-    row.getCell(headers[6]).numFmt = '0.00%'
-    if (index % 2 === 1) {
-      for (let col = 1; col <= headers.length; col += 1) {
-        row.getCell(col).fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: SHEET_BAND },
-        }
-      }
+  for (const point of rowsData) {
+    const values: Record<string, string | number | null> = {
+      Point: point.label,
+      'Trame vidéo': point.videoName || trameRange(point.trameDebut, point.trameFin),
     }
-  })
+    for (const entry of observerColumns) {
+      values[entry.token] = point.detectionsByObserver[entry.observerId] ?? 0
+    }
+    values['Détections'] = point.detectorCount
+    values['Probabilité'] = point.probability
+    const row = sheet.addRow(values)
+    row.getCell('Détections').alignment = { horizontal: 'center' }
+    const prob = row.getCell('Probabilité')
+    if (point.probability !== null) prob.numFmt = '0.00%'
+    else prob.value = '—'
+  }
 
   const lastRow = sheet.rowCount
   if (lastRow > 1) {
-    addDataBars(sheet, `B2:B${lastRow}`)
+    const detectionCol = sheet.getColumn('Détections')
+    if (detectionCol) {
+      addDataBars(sheet, `${detectionCol.letter}2:${detectionCol.letter}${lastRow}`)
+    }
   }
   freezeAndFilter(sheet, headers.length, sheet.rowCount)
   return sheet
 }
 
 /**
- * Feuille « <Observateur>_Global » : statistiques individuelles d'un observateur
- * (compteurs + précision) puis répartition par type en mini-tableau.
- */
-function writeObserverGlobalSheet(
-  workbook: ExcelJS.Workbook,
-  name: string,
-  observer: ObserverMatrix['observers'][number],
-): ExcelJS.Worksheet {
-  const sheet = workbook.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 0 }] })
-  sheet.columns = [{ width: 36 }, { width: 60 }]
-
-  const push = (label: string, value: string, bold = false) => {
-    const row = sheet.addRow([label, value])
-    darkText(row.getCell(1))
-    valueText(row.getCell(2))
-    if (bold) row.getCell(2).font = { bold: true }
-    return row
-  }
-
-  const titleRow = sheet.addRow(['Observateur — ' + (observer.displayName || '—'), ''])
-  titleRow.getCell(1).font = { bold: true, size: 13, color: { argb: MILK } }
-  titleRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
-  titleRow.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
-  titleRow.height = 24
-  sheet.addRow([])
-
-  const precision = observer.precision === null ? '—' : observer.precision
-  push('Email', observer.email || '—')
-  push('Identifiant anonyme', observer.anonymousId)
-  sheet.addRow([])
-  push('Observations envoyées', String(observer.total), true)
-  push('Validées (point trouvé)', String(observer.pointFound))
-  push('Hors trame (fausses alertes)', String(observer.ghosts))
-  push('Fenêtres cibles touchées', String(observer.windowsHit))
-  const precisionRow = push('Précision', precision === '—' ? '—' : '', true)
-  if (observer.precision !== null) {
-    precisionRow.getCell(2).numFmt = '0.00%'
-    precisionRow.getCell(2).value = observer.precision
-  } else {
-    precisionRow.getCell(2).value = '—'
-  }
-  sheet.addRow([])
-
-  const header = sheet.addRow(['Répartition par type', 'Captures'])
-  styleHeaderRow(header)
-  const firstDataRow = header.number + 1
-  for (const [type, count] of Object.entries(observer.perType)) {
-    if (count <= 0) continue
-    const row = sheet.addRow([type, count])
-    row.getCell(2).alignment = { horizontal: 'center' }
-  }
-  const lastDataRow = sheet.rowCount
-  if (lastDataRow >= firstDataRow) {
-    addDataBars(sheet, `B${firstDataRow}:B${lastDataRow}`)
-  }
-  return sheet
-}
-
-/** En-têtes du relevé par type d'un observateur (feuille de détail). */
-const TYPE_LEDGER_HEADERS = [
-  'Minuterie (MM:SS)',
-  'Point trouvé ?',
-  'Fenêtre cible',
-  'Statut',
-  'Image (URL)',
-  'Date de Capture',
-] as const
-
-/** Feuille « <Observateur>_<Type> » : horodatages et statuts des captures d'un type. */
-function writeObserverTypeSheet(
-  workbook: ExcelJS.Workbook,
-  name: string,
-  rows: LedgerObservation[],
-): ExcelJS.Worksheet {
-  const sheet = workbook.addWorksheet(name)
-  const widths = [18, 16, 24, 26, 58, 24]
-  sheet.columns = TYPE_LEDGER_HEADERS.map((header, index) => ({
-    header,
-    key: header,
-    width: widths[index] ?? 20,
-  }))
-  styleHeaderRow(sheet.getRow(1))
-
-  rows.forEach((observation) => {
-    sheet.addRow({
-      [TYPE_LEDGER_HEADERS[0]]: observation.timecode,
-      [TYPE_LEDGER_HEADERS[1]]: observation.pointFound,
-      [TYPE_LEDGER_HEADERS[2]]: observation.pointLabel ?? '',
-      [TYPE_LEDGER_HEADERS[3]]: observation.status,
-      [TYPE_LEDGER_HEADERS[4]]: observation.imageUrl,
-      [TYPE_LEDGER_HEADERS[5]]: observation.capturedAt,
-    })
-  })
-
-  freezeAndFilter(sheet, TYPE_LEDGER_HEADERS.length, sheet.rowCount)
-  return sheet
-}
-
-/** Court identifiant de feuille (base lisible, sans les caractères interdits). */
-function shortToken(value: string, fallback: string, max = 22): string {
-  const cleaned = value.replace(/[\\/?*[\]:]/g, ' ').replace(/\s+/g, ' ').trim()
-  if (!cleaned) return fallback
-  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}…` : cleaned
-}
-
-/**
  * Construit le classeur `.xlsx` global du projet et renvoie son buffer.
- * Feuilles : Synthèse, Statistiques par type, Matrice, Relevé brut, puis pour
- * chaque observateur une feuille globale + une feuille de détail par type utilisé.
+ * Feuilles : Synthèse · Méthodologie · <une par type/décalage> · Données_Brutes_Globales.
  */
 export async function generateExcelWorkbook(source: GlobalExportSource): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'ONA Field'
   workbook.created = new Date()
 
-  const summary = buildProjectSummary(source)
-  const typeStats = buildTypeStatistics(source)
-  const matrix = buildObserverMatrix(source)
-  const ledger = buildGlobalObservations(source)
+  const usedNames = new Set<string>(['Synthèse', 'Méthodologie', 'Données_Brutes_Globales'])
 
-  writeSummarySheet(workbook, summary)
-  if (typeStats.length > 0) writeTypeStatisticsSheet(workbook, typeStats)
-  writeObserverMatrixSheet(workbook, matrix)
+  writeSummarySheet(workbook, source)
+  writeMethodologySheet(workbook)
+
+  const table = buildDetectionProbabilityTable(source)
+  // Une feuille par type/décalage ayant au moins un point configuré, ordre du tableau.
+  for (const entry of table) {
+    if (entry.pointCount <= 0) continue
+    writeTypeSheet(workbook, source, entry.type, typeGroupLabel(entry.type), usedNames)
+  }
+
+  const ledger = buildGlobalObservations(source)
   writeLedgerSheet(workbook, ledger)
 
-  // ——— Feuilles par observateur (global + une par type utilisé) ———
-  const usedNames = new Set<string>([
-    'Synthèse_Projet',
-    'Statistiques_par_type',
-    'Matrice_Observateurs',
-    'Données_Brutes_Globales',
-  ])
+  const buffer = await workbook.xlsx.writeBuffer()
+  return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)
+}
 
-  for (const observer of matrix.observers) {
-    const observerLedger = ledger.filter(
-      (row) => row.anonymousId === observer.anonymousId,
-    )
-    const base = shortToken(observer.displayName, 'Observateur')
-    const globalName = uniqueSheetName(
-      sanitizeSheetToken(`${base}_Global`, 'Observateur_Global'),
-      usedNames,
-    )
-    writeObserverGlobalSheet(workbook, globalName, observer)
+// ——— Classeur INDIVIDUEL d'un observateur ———
 
-    for (const type of matrix.types) {
-      const count = observer.perType[type] ?? 0
-      if (count <= 0) continue
-      const rows = observerLedger.filter((row) => row.observationType === type)
-      if (rows.length === 0) continue
-      const typeName = uniqueSheetName(
-        sanitizeSheetToken(
-          `${shortToken(base, 'Observateur', 14)}_${shortToken(type, 'Type', 14)}`,
-          'Observateur_Type',
-        ),
-        usedNames,
-      )
-      writeObserverTypeSheet(workbook, typeName, rows)
-    }
+/**
+ * Feuille « Synthèse » du classeur individuel : identité, points détectés uniques
+ * (règle analytique), points possibles, probabilité, puis mini-tableau par type.
+ */
+function writeObserverSummarySheet(
+  workbook: ExcelJS.Workbook,
+  source: GlobalExportSource,
+  observerLabel: string,
+): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet('Synthèse', {
+    views: [{ state: 'frozen', ySplit: 0 }],
+  })
+  sheet.columns = [{ width: 42 }, { width: 52 }, { width: 24 }, { width: 20 }]
+
+  const { project, rows } = source
+  const detections = countAnalyticDetections(rows)
+  const pointsPossible = project.definedPoints
+  const probability = detectionProbability(detections, pointsPossible, 1)
+
+  const title = sheet.addRow([`Observateur — ${observerLabel}`, ''])
+  title.getCell(1).font = { bold: true, size: 13, color: { argb: MILK } }
+  title.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
+  title.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
+  title.height = 24
+  sheet.addRow([])
+  writeMetaPair(sheet, 'Projet', project.title)
+  writeMetaPair(sheet, 'Points / trames configurés', String(pointsPossible))
+  sheet.addRow([])
+  writeMetaPair(sheet, 'Points uniques détectés (analytique)', String(detections))
+  writeMetaPair(sheet, 'Points possibles', String(pointsPossible))
+  const probRow = sheet.addRow(['Probabilité de détection', probability])
+  darkText(probRow.getCell(1))
+  if (probability !== null) {
+    probRow.getCell(2).numFmt = '0.00%'
+  } else {
+    probRow.getCell(2).value = '—'
   }
+  sheet.addRow([])
+
+  // Mini-tableau par type utilisé.
+  const header = sheet.addRow(['Type / décalage', 'Points uniques détectés', 'Points possibles', 'Probabilité'])
+  styleHeaderRow(header)
+  const types = new Set<string>()
+  for (const row of rows) {
+    const trimmed = row.observationType?.trim()
+    if (trimmed) types.add(trimmed)
+  }
+  for (const type of Array.from(types).sort((a, b) => a.localeCompare(b))) {
+    const typeRows = rows.filter((row) => (row.observationType?.trim() || '') === type)
+    const typeDetections = countAnalyticDetections(typeRows)
+    const typePoints = project.definedPointsByType[type] ?? 0
+    const typeProbability = detectionProbability(typeDetections, typePoints, 1)
+    const row = sheet.addRow([type, typeDetections, typePoints, typeProbability])
+    if (typeProbability !== null) row.getCell(4).numFmt = '0.00%'
+    else row.getCell(4).value = '—'
+  }
+  // Types observés hors liste configurée (projet à types libres) : clé générique.
+  const hasUntyped = rows.some((row) => !(row.observationType?.trim() || ''))
+  if (hasUntyped) {
+    const genericDetections = countAnalyticDetections(
+      rows.filter((row) => !(row.observationType?.trim() || '')),
+    )
+    const genericPoints = project.definedPointsByType[''] ?? 0
+    const genericProbability = detectionProbability(genericDetections, genericPoints, 1)
+    const row = sheet.addRow([
+      'Sans type (passe générique)',
+      genericDetections,
+      genericPoints,
+      genericProbability,
+    ])
+    if (genericProbability !== null) row.getCell(4).numFmt = '0.00%'
+    else row.getCell(4).value = '—'
+  }
+  sheet.addRow([])
+
+  const note = sheet.addRow([
+    'Règle de comptage',
+    'Plusieurs captures d’une même trame comptent pour une seule détection analytique ' +
+      '(une par observateur + type + trame).',
+  ])
+  note.getCell(1).font = { bold: true, color: { argb: INK } }
+  valueText(note.getCell(2), true)
+  note.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GOLD_FILL } }
+  note.height = 42
+
+  return sheet
+}
+
+/**
+ * Feuille de détail par type du classeur individuel : conserve les captures
+ * BRUTES, avec un rappel de la règle analytique en note.
+ */
+function writeObserverTypeDetailSheet(
+  workbook: ExcelJS.Workbook,
+  name: string,
+  typeLabel: string,
+  ledger: LedgerObservation[],
+): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet(name)
+
+  const headers = [
+    'Minuterie (MM:SS)',
+    'Point trouvé ?',
+    'Fenêtre cible',
+    'Trame vidéo',
+    'Statut',
+    'Image (URL)',
+    'Date de Capture',
+  ]
+  sheet.columns = headers.map((header, index) => ({
+    header,
+    key: header,
+    width: [18, 16, 24, 24, 26, 58, 24][index] ?? 20,
+  }))
+  styleHeaderRow(sheet.getRow(1))
+
+  // Note de rappel de la règle analytique (ligne mise en évidence sous l'en-tête).
+  const note = sheet.addRow([
+    'Règle analytique : plusieurs captures d’une même trame comptent pour une seule détection analytique.',
+  ])
+  note.getCell(1).font = { italic: true, color: { argb: INK } }
+  note.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GOLD_FILL } }
+  note.height = 20
+
+  const emptyRow = sheet.addRow([''])
+  emptyRow.height = 2
+
+  ledger.forEach((observation) => {
+    sheet.addRow({
+      [headers[0]]: observation.timecode,
+      [headers[1]]: observation.pointFound,
+      [headers[2]]: observation.pointLabel ?? '',
+      [headers[3]]: observation.videoName,
+      [headers[4]]: observation.status,
+      [headers[5]]: observation.imageUrl,
+      [headers[6]]: observation.capturedAt,
+    })
+  })
+
+  void typeLabel
+  return sheet
+}
+
+/** En-têtes du relevé brut individuel (réutilise le relevé global, observateur unique). */
+function writeObserverLedgerSheet(
+  workbook: ExcelJS.Workbook,
+  ledger: LedgerObservation[],
+): ExcelJS.Worksheet {
+  const sheet = workbook.addWorksheet('Données_Brutes')
+  sheet.columns = LEDGER_HEADERS.map((header) => ({
+    header,
+    key: header,
+    width: Math.max(header.length + 4, 16),
+  }))
+  styleHeaderRow(sheet.getRow(1))
+
+  ledger.forEach((observation) => {
+    sheet.addRow({
+      [LEDGER_HEADERS[0]]: observation.timecode,
+      [LEDGER_HEADERS[1]]: observation.observationType ?? '',
+      [LEDGER_HEADERS[2]]: observation.pointFound,
+      [LEDGER_HEADERS[3]]: observation.pointLabel ?? '',
+      [LEDGER_HEADERS[4]]: observation.videoName,
+      [LEDGER_HEADERS[5]]: observation.observerName,
+      [LEDGER_HEADERS[6]]: observation.email ?? '',
+      [LEDGER_HEADERS[7]]: observation.anonymousId,
+      [LEDGER_HEADERS[8]]: '', // Coordonnées (X, Y) — non persistées
+      [LEDGER_HEADERS[9]]: observation.status,
+      [LEDGER_HEADERS[10]]: observation.imageUrl,
+      [LEDGER_HEADERS[11]]: observation.driveFileId,
+      [LEDGER_HEADERS[12]]: observation.capturedAt,
+    })
+  })
+
+  freezeAndFilter(sheet, LEDGER_HEADERS.length, sheet.rowCount)
+  return sheet
+}
+
+/**
+ * Construit le classeur `.xlsx` INDIVIDUEL d'un observateur (source = lignes
+ * certifiées de cet observateur, projet = métadonnées complètes du projet).
+ * Feuilles : Synthèse · <une par type utilisé> · Données_Brutes.
+ */
+export async function generateObserverWorkbook(
+  source: GlobalExportSource,
+  observerLabel: string,
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook()
+  workbook.creator = 'ONA Field'
+  workbook.created = new Date()
+
+  const usedNames = new Set<string>(['Synthèse', 'Données_Brutes'])
+
+  writeObserverSummarySheet(workbook, source, observerLabel)
+
+  // Une feuille par type utilisé par l'observateur (détail des captures + note).
+  const ledger = buildGlobalObservations(source)
+  const types = new Set<string>()
+  for (const row of source.rows) {
+    const trimmed = row.observationType?.trim()
+    types.add(trimmed || '')
+  }
+  for (const type of Array.from(types).sort((a, b) => a.localeCompare(b))) {
+    const typeLedger = ledger.filter(
+      (entry) => (entry.observationType?.trim() || '') === type,
+    )
+    const base = shortToken(type ? type : 'Sans type', 'Type', 18)
+    const name = uniqueSheetName(sanitizeSheetToken(base, 'Type'), usedNames)
+    writeObserverTypeDetailSheet(workbook, name, type, typeLedger)
+  }
+
+  writeObserverLedgerSheet(workbook, ledger)
 
   const buffer = await workbook.xlsx.writeBuffer()
   return Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)

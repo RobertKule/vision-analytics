@@ -5,7 +5,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
-import { deleteManyCloudinaryAssets } from '@/lib/cloudinary'
+import { deleteManyDriveFiles } from '@/lib/drive'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
 import type {
@@ -605,23 +605,19 @@ export async function deleteProject(projectId: string): Promise<ActionResult> {
       }
     }
 
-    // Purge des assets Cloudinary AVANT la suppression des lignes en base : on évite de
+    // Purge des fichiers Google Drive AVANT la suppression des lignes en base : on évite de
     // laisser des images orphelines. Suppression groupée « best effort » — un échec réseau
-    // sur UN asset n'empêche pas la purge du projet ; les échecs restants sont comptés et
-    // tracés (jamais traités en silence) pour un éventuel nettoyage ultérieur.
+    // sur UN fichier n'empêche pas la purge du projet ; les échecs restants sont comptés et
+    // tracés (jamais traités en silence) pour un éventuel nettoyage ultérieur. Les lignes de
+    // l'ancien stockage (Cloudinary, `driveFileId` null) sont comptées « skipped ».
     const captureReferences = await prisma.observation.findMany({
       where: { projectId },
-      select: { imagePublicId: true, imageUrl: true },
+      select: { driveFileId: true, imageUrl: true },
     })
-    const cloudinaryCleanup = await deleteManyCloudinaryAssets(
-      captureReferences.map((capture) => ({
-        publicId: capture.imagePublicId,
-        imageUrl: capture.imageUrl,
-      })),
-    )
-    if (cloudinaryCleanup.failed > 0) {
+    const driveCleanup = await deleteManyDriveFiles(captureReferences)
+    if (driveCleanup.failed > 0) {
       console.error(
-        `[deleteProject] ${cloudinaryCleanup.failed}/${cloudinaryCleanup.deleted + cloudinaryCleanup.failed} assets Cloudinary non supprimés (projet ${projectId}) — nettoyage différé nécessaire.`,
+        `[deleteProject] ${driveCleanup.failed}/${driveCleanup.deleted + driveCleanup.failed + driveCleanup.skipped} fichiers Drive non supprimés (projet ${projectId}) — nettoyage différé nécessaire.`,
       )
     }
 
@@ -637,8 +633,9 @@ export async function deleteProject(projectId: string): Promise<ActionResult> {
       entityType: 'project',
       entityId: projectId,
       metadata: {
-        cloudinaryDeleted: cloudinaryCleanup.deleted,
-        cloudinaryFailed: cloudinaryCleanup.failed,
+        driveDeleted: driveCleanup.deleted,
+        driveFailed: driveCleanup.failed,
+        driveLegacySkipped: driveCleanup.skipped,
       },
     })
     revalidateProject(projectId)
