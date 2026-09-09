@@ -77,7 +77,7 @@ const en: DocsLocale = {
             'Choose an active experiment, then start an observation session.',
             'Load the experiment video (your own copy — the platform never streams it).',
             'Watch, and at each event to record, pause, click on the frame, then confirm the capture.',
-            'Each confirmed capture is saved to the server immediately (upload + reference). A small “saving…” then “✓ saved” indicator confirms it — you can keep watching without waiting.',
+            'Each confirmed capture is compressed to WebP on the device, then saved to the server immediately (upload + reference). Honest per-capture statuses — “Compression en cours…”, “Enregistrement en cours…”, then “✓ Capture enregistrée” — confirm each step; you can keep watching without waiting.',
             'Select the observation type if the study offers several, or let the video pass impose its bound type.',
             'Move to the next video pass (or type) when required by the protocol.',
             'Interrupt freely — offline, browser closed: captures waiting for the network stay on the device and synchronize automatically on reconnection. You resume the same session later.',
@@ -108,7 +108,7 @@ const en: DocsLocale = {
         },
         {
           kind: 'p',
-          text: 'Exports available: Excel global workbook (summary, observers × types matrix, raw ledger), hierarchical ZIP with per-observer workbooks and captures, captures ZIP, and a scientific report downloadable as a PDF. Analysts never see another analyst’s projects.',
+          text: 'Exports available: the global Excel workbook `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` (Synthèse + Méthodologie + one sheet per type/décalage + raw global data), the per-observer Excel workbook `ONA_Field_Observateur_<Nom>_<Date>.xlsx`, and a scientific report downloadable as a real PDF (`ONA_Field_Rapport_<Projet>_<Date>.pdf`). Analysts never see another analyst’s projects.',
         },
       ],
     },
@@ -171,6 +171,7 @@ const en: DocsLocale = {
           items: [
             'Server Actions grouped by zone (auth, user admin, projects, analyst, observations, dashboard). Each action re-checks the session and the role.',
             'Route handlers under /api are not covered by the proxy; they self-authenticate with the signed session cookie and the project-access guard.',
+            'Capture images are stored in Google Drive by a server-only service-account layer (upload, delete, metadata, folder); the browser never talks to Drive nor sees credentials, and PostgreSQL keeps only `imageUrl` + `driveFileId`.',
             'Excel (exceljs) and ZIP (jszip) generation are server-only, never bundled client-side.',
           ],
         },
@@ -221,7 +222,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Independent observation: each confirmed capture is persisted immediately as a “non-certified” observation (isVerified=false), invisible to statistics. At session finalize the server certifies the whole run (isVerified=true) and matches each capture timestamp against the confidential windows of its own video pass to tag it validated or ghost (false alert). Reference windows and benchmarks never reach the observer client. Spatial click positions are not persisted; the media live on Cloudinary and the database keeps only references.',
+          text: 'Independent observation: each confirmed capture is persisted immediately as a “non-certified” observation (isVerified=false), invisible to statistics. At session finalize the server certifies the whole run (isVerified=true) and matches each capture timestamp against the confidential windows of its own video pass to tag it validated or ghost (false alert). Reference windows and benchmarks never reach the observer client. Spatial click positions are not persisted. Capture images are stored in Google Drive through a server-only service-account layer: the browser never talks to Drive nor sees its credentials, and PostgreSQL keeps only a public link (`imageUrl`) plus a server-internal Drive file id (`driveFileId`). Legacy rows from the former Cloudinary era stay readable through their stored URL but are no longer uploaded or deleted through any third-party SDK.',
         },
         {
           kind: 'ul',
@@ -248,7 +249,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Per-project analytics count unique points (for one observer, several captures inside the same temporal window of the same type count as one detection) to compute precision, concordance between observers, average detection delay and the ghost distribution — per target window, per video pass, per observer. Only certified sessions (isVerified=true) feed the analytics; the raw ledger still lists every capture. Charts (Recharts) render the time distribution of detections and the validated/ghost split.',
+          text: 'Per-project analytics apply a single detection rule on every surface (dashboard, analytics, global Excel, per-observer Excel, PDF): for one observer, several captures inside the same frame/type-décalage window count as ONE analytical detection. The empirical probability of detection is P(detection) = detections ÷ (configured points/frames × observers) × 100. Only certified sessions (isVerified=true) feed these counters, while raw exports (Données brutes) always keep every capture line. Charts (Recharts) render the time distribution of detections and the validated/ghost split.',
         },
       ],
     },
@@ -259,16 +260,15 @@ const en: DocsLocale = {
         {
           kind: 'ul',
           items: [
-            'Excel global export: 3 sheets — project summary, observers × types matrix, full raw ledger.',
-            'Hierarchical global ZIP: project CSV + one Excel workbook + annotated captures per observer + manifest.',
-            'Captures ZIP and per-observer data workbook.',
+            'Global Excel export `ONA_Field_Export_Global_<Projet>_<Date>.xlsx`: a Synthèse sheet (table of Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation, with a DÉTAIL PAR POINT section and a SYNTHÈSE PAR OBSERVATEUR section), a Méthodologie sheet (PROCÉDURE D’ANALYSE 1–7 and the note that frames are the observation unit — several captures of the same observer inside the same frame count as one analytical detection), one sheet per type/décalage (grid of Point / Trame vidéo / Observer cells in 1/0, plus Détections and Probabilité), and a Données_Brutes_Globales sheet listing every capture (including its Drive file id).',
+            'Per-observer Excel export `ONA_Field_Observateur_<Nom>_<Date>.xlsx`: a Synthèse sheet (unique points detected over possible), one sheet per type/décalage and a Données_Brutes sheet.',
             'Scientific report as a real PDF file (title, metadata, KPIs and the report charts) — download button “Télécharger le rapport PDF”, filename ONA_Field_Rapport_<Projet>_<Date>.pdf.',
             'Chart PNG export (high resolution) from the analytics views.',
           ],
         },
         {
           kind: 'p',
-          text: 'Every export is traced in the audit log with its project and format.',
+          text: 'Every export is traced in the append-only audit log (EXPORT_GLOBAL, EXPORT_OBSERVER, EXPORT_PDF, EXPORT_CHART) with its author and project — never any secret. Access follows RBAC: ADMIN exports anything, ANALYST only the projects they own or that are shared with them, OBSERVER only their own exports.',
         },
       ],
     },
@@ -278,7 +278,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Important actions are written to an append-only AuditLog: authentication, accounts, projects, videos, observation submissions and exports. Metadata never contains passwords, tokens or secrets. The ADMIN history page filters by user, action, resource type, project and date; each other user only ever reads “My activity”.',
+          text: 'Important actions are written to an append-only AuditLog: authentication, accounts, projects, videos, observation submissions, capture image events and exports (IMAGE_UPLOADED, IMAGE_DELETED, EXPORT_GLOBAL, EXPORT_OBSERVER, EXPORT_PDF, EXPORT_CHART). Metadata never contains passwords, tokens or secrets. The ADMIN history page filters by user, action, resource type, project and date; each other user only ever reads “My activity”.',
         },
       ],
     },
@@ -288,7 +288,7 @@ const en: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Each confirmed capture is sent to the server as soon as it is taken and tracked locally until confirmed (states pending → syncing → synced; failed while offline). Captures waiting for the network stay on the device (IndexedDB, keyed by owner + project) and are retried on reconnection. A stable session runId lets the observer resume the same session after a reload or an offline interruption — nothing is lost. Finalizing the session clears the draft; every save is idempotent via the clientKey.',
+          text: 'Each confirmed capture is compressed to WebP on the device, then sent to the server and tracked locally until confirmed (states PENDING → SYNCING → SYNCED; FAILED while offline). The user sees honest statuses: “Compression en cours…”, “Enregistrement en cours…”, then “✓ Capture enregistrée”. Captures waiting for the network stay on the device (IndexedDB, keyed by owner + project) and are retried on reconnection; a synced capture is never re-sent (clientKey idempotency). A stable session runId lets the observer resume the same session after a reload or an offline interruption — nothing is lost. Finalizing the session clears the draft and only finalizes already-persisted captures.',
         },
       ],
     },
@@ -301,7 +301,7 @@ const en: DocsLocale = {
           items: [
             'Prerequisites: Node.js 20+ and npm.',
             'Install dependencies: `npm install` (postinstall runs `prisma generate`).',
-            'Copy `.env.example` to `.env` and fill the placeholder values (DATABASE_URL, DIRECT_URL, CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET, AUTH_SECRET, optional SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD).',
+            'Copy `.env.example` to `.env` and fill the placeholder values (DATABASE_URL, DIRECT_URL, the Google Drive storage variables GOOGLE_DRIVE_CLIENT_EMAIL and GOOGLE_DRIVE_PRIVATE_KEY, optional GOOGLE_DRIVE_FOLDER_ID, AUTH_SECRET, optional SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD).',
             'Apply the schema to the database: `npm run db:deploy`.',
             'Optional first administrator: `npm run db:seed`.',
             'Development: `npm run dev`.',
@@ -311,7 +311,7 @@ const en: DocsLocale = {
         },
         {
           kind: 'code',
-          text: 'DATABASE_URL        // PostgreSQL (Neon), application connection\nDIRECT_URL          // direct connection for Prisma CLI / migrations\nCLOUDINARY_CLOUD_NAME\nCLOUDINARY_API_KEY\nCLOUDINARY_API_SECRET // capture media storage\nAUTH_SECRET          // session cookie signing (required in production)\nSEED_ADMIN_EMAIL     // optional, for `prisma db seed`\nSEED_ADMIN_PASSWORD  // optional, for `prisma db seed`',
+          text: 'DATABASE_URL               // PostgreSQL (Neon), application connection\nDIRECT_URL                 // direct connection for Prisma CLI / migrations\nGOOGLE_DRIVE_CLIENT_EMAIL  // service-account email for capture-image storage\nGOOGLE_DRIVE_PRIVATE_KEY   // service-account RSA private key (PEM, escaped line breaks ok)\nGOOGLE_DRIVE_FOLDER_ID     // optional — root Drive folder for capture images\nAUTH_SECRET                // session cookie signing (required in production)\nSEED_ADMIN_EMAIL           // optional, for `prisma db seed`\nSEED_ADMIN_PASSWORD        // optional, for `prisma db seed`',
         },
       ],
     },
@@ -367,7 +367,7 @@ const fr: DocsLocale = {
             'Choisissez une expérience active, puis démarrez une session d’observation.',
             'Chargez la vidéo de l’expérience (votre propre copie — la plateforme ne la diffuse jamais).',
             'Regardez, puis à chaque événement à relever, mettez en pause, cliquez sur l’image puis confirmez la capture.',
-            'Chaque capture confirmée est enregistrée sur le serveur immédiatement (téléversement + référence). Un indicateur « Enregistrement en cours… » puis « ✓ Capture enregistrée » le confirme — vous pouvez continuer à regarder sans attendre.',
+            'Chaque capture confirmée est compressée en WebP sur l’appareil puis enregistrée sur le serveur immédiatement (téléversement + référence). Des états honnêtes par capture — « Compression en cours… », « Enregistrement en cours… », puis « ✓ Capture enregistrée » — le confirment ; vous pouvez continuer à regarder sans attendre.',
             'Sélectionnez le type d’observation si l’étude en propose plusieurs, ou laissez la passe vidéo imposer son type associé.',
             'Passez à la passe vidéo (ou au type) suivante si le protocole l’exige.',
             'Interrompez librement — hors-ligne, navigateur fermé : les captures en attente du réseau restent sur l’appareil et se synchronisent automatiquement à la reconnexion. Vous reprenez la même session plus tard.',
@@ -398,7 +398,7 @@ const fr: DocsLocale = {
         },
         {
           kind: 'p',
-          text: 'Exports disponibles : classeur Excel global (synthèse, matrice observateurs × types, relevé brut), ZIP hiérarchique avec classeurs et captures par observateur, ZIP des captures, et rapport scientifique téléchargeable en PDF. Un analyste ne voit jamais les projets d’un autre analyste.',
+          text: 'Exports disponibles : classeur Excel global `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` (Synthèse + Méthodologie + une feuille par type/décalage + données brutes globales), classeur Excel par observateur `ONA_Field_Observateur_<Nom>_<Date>.xlsx`, et rapport scientifique téléchargeable en vrai PDF (`ONA_Field_Rapport_<Projet>_<Date>.pdf`). Un analyste ne voit jamais les projets d’un autre analyste.',
         },
       ],
     },
@@ -461,6 +461,7 @@ const fr: DocsLocale = {
           items: [
             'Server Actions regroupées par zone (auth, admin utilisateurs, projets, analyste, observations, tableau de bord). Chaque action re-vérifie session et rôle.',
             'Les gestionnaires de routes /api ne sont pas couverts par le proxy ; ils s’authentifient eux-mêmes avec le cookie de session signé et la garde d’accès projet.',
+            'Les images des captures sont stockées dans Google Drive par une couche serveur dédiée (compte de service : téléversement, suppression, métadonnées, dossier) ; le navigateur ne dialogue jamais avec Drive ni n’en voit les identifiants, et PostgreSQL ne conserve que `imageUrl` + `driveFileId`.',
             'Génération Excel (exceljs) et ZIP (jszip) exclusivement côté serveur, jamais dans le bundle client.',
           ],
         },
@@ -511,7 +512,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Observation indépendante : chaque capture confirmée est persistée immédiatement en observation « non certifiée » (isVerified=false), invisible des statistiques. À la finalisation de la session, le serveur certifie l’ensemble (isVerified=true) et compare chaque horodatage aux fenêtres confidentielles de sa propre passe vidéo pour qualifier la capture de validée ou fantôme (fausse alerte). Fenêtres de référence et benchmarks n’atteignent jamais le client observateur. Les positions spatiales des clics ne sont pas persistées ; les médias vivent chez Cloudinary et la base ne conserve que des références.',
+          text: 'Observation indépendante : chaque capture confirmée est persistée immédiatement en observation « non certifiée » (isVerified=false), invisible des statistiques. À la finalisation de la session, le serveur certifie l’ensemble (isVerified=true) et compare chaque horodatage aux fenêtres confidentielles de sa propre passe vidéo pour qualifier la capture de validée ou fantôme (fausse alerte). Fenêtres de référence et benchmarks n’atteignent jamais le client observateur. Les positions spatiales des clics ne sont pas persistées. Les images des captures sont stockées dans Google Drive via une couche serveur dédiée (compte de service) : le navigateur ne dialogue jamais avec Drive et n’en voit jamais les identifiants, et PostgreSQL ne conserve qu’un lien public (`imageUrl`) plus un identifiant Drive interne au serveur (`driveFileId`). Les lignes historiques de l’ère Cloudinary restent lisibles par leur URL stockée, mais ne sont plus téléversées ni supprimées via le moindre SDK tiers.',
         },
         {
           kind: 'ul',
@@ -538,7 +539,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Les analyses par projet comptent des points uniques (pour un observateur, plusieurs captures dans la même fenêtre temporelle du même type comptent pour une détection) pour calculer précision, concordance entre observateurs, délai moyen de détection et répartition des fantômes — par fenêtre cible, par passe vidéo et par observateur. Seules les sessions certifiées (isVerified=true) alimentent les analyses ; le relevé brut conserve chaque capture. Les graphiques (Recharts) représentent la distribution temporelle des détections et la ventilation validées / fantômes.',
+          text: 'Les analyses par projet appliquent une règle de détection unique partout (tableau de bord, analyses, Excel global, Excel par observateur, PDF) : pour un observateur, plusieurs captures dans la même fenêtre trame/type-décalage comptent pour UNE seule détection analytique. La probabilité empirique de détection est P(détection) = Détections / (Nombre de points/trames configurés × Nombre d’observateurs) × 100. Seules les sessions certifiées (isVerified=true) alimentent ces compteurs ; les exports bruts (Données brutes) conservent toujours chaque ligne de capture. Les graphiques (Recharts) représentent la distribution temporelle des détections et la ventilation validées / fantômes.',
         },
       ],
     },
@@ -549,16 +550,15 @@ const fr: DocsLocale = {
         {
           kind: 'ul',
           items: [
-            'Export global Excel : 3 feuilles — synthèse du projet, matrice observateurs × types, relevé global.',
-            'ZIP global hiérarchique : CSV du projet + un classeur Excel et les captures annotées par observateur + manifest.',
-            'ZIP des captures et classeur de données par observateur.',
+            'Export global Excel `ONA_Field_Export_Global_<Projet>_<Date>.xlsx` : une feuille Synthèse (tableau Décalage / Nombre de points / Observations possibles / Détections / Probabilité empirique / Interprétation, avec une section DÉTAIL PAR POINT et une section SYNTHÈSE PAR OBSERVATEUR), une feuille Méthodologie (PROCÉDURE D’ANALYSE 1–7 et la note « Les trames constituent l’unité d’observation. Plusieurs captures d’un même observateur dans une même trame constituent une seule détection analytique. »), une feuille par type/décalage (grille Point / Trame vidéo / Observateur en cellules 1/0, avec Détections et Probabilité), et une feuille Données_Brutes_Globales listant chaque capture (identifiant Drive inclus).',
+            'Export Excel par observateur `ONA_Field_Observateur_<Nom>_<Date>.xlsx` : une feuille Synthèse (points uniques détectés sur possibles), une feuille par type/décalage et une feuille Données_Brutes.',
             'Rapport scientifique en vrai fichier PDF (titre, métadonnées, indicateurs et graphiques du rapport) — bouton « Télécharger le rapport PDF », fichier ONA_Field_Rapport_<Projet>_<Date>.pdf.',
             'Export PNG des graphiques (haute résolution) depuis les vues d’analyses.',
           ],
         },
         {
           kind: 'p',
-          text: 'Chaque export est tracé dans le journal d’audit avec son projet et son format.',
+          text: 'Chaque export est tracé dans le journal d’audit append-only (EXPORT_GLOBAL, EXPORT_OBSERVER, EXPORT_PDF, EXPORT_CHART) avec son auteur et son projet — jamais aucun secret. L’accès suit la RBAC : l’ADMIN exporte tout, l’ANALYST uniquement ses projets ou ceux partagés, l’OBSERVER uniquement ses propres exports.',
         },
       ],
     },
@@ -568,7 +568,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Les actions importantes sont écrites dans un AuditLog en écriture seule : authentification, comptes, projets, vidéos, soumissions d’observations et exports. Les métadonnées ne contiennent jamais de mots de passe, jetons ou secrets. La page d’historique ADMIN filtre par utilisateur, action, type de ressource, projet et date ; chaque autre utilisateur ne lit que « Mon activité ».',
+          text: 'Les actions importantes sont écrites dans un AuditLog en écriture seule : authentification, comptes, projets, vidéos, soumissions d’observations, événements d’images de capture et exports (IMAGE_UPLOADED, IMAGE_DELETED, EXPORT_GLOBAL, EXPORT_OBSERVER, EXPORT_PDF, EXPORT_CHART). Les métadonnées ne contiennent jamais de mots de passe, jetons ou secrets. La page d’historique ADMIN filtre par utilisateur, action, type de ressource, projet et date ; chaque autre utilisateur ne lit que « Mon activité ».',
         },
       ],
     },
@@ -578,7 +578,7 @@ const fr: DocsLocale = {
       blocks: [
         {
           kind: 'p',
-          text: 'Chaque capture confirmée est envoyée au serveur dès qu’elle est prise et suivie localement jusqu’à sa confirmation (états pending → syncing → synced ; failed hors-ligne). Les captures en attente du réseau restent sur l’appareil (IndexedDB, clé propriétaire + projet) et sont réessayées à la reconnexion. Un sessionRunId stable permet à l’observateur de reprendre la même session après rechargement ou coupure hors-ligne — rien n’est perdu. Finaliser la session vide le brouillon ; chaque enregistrement est idempotent via la clientKey.',
+          text: 'Chaque capture confirmée est compressée en WebP sur l’appareil, puis envoyée au serveur et suivie localement jusqu’à sa confirmation (états PENDING → SYNCING → SYNCED ; FAILED hors-ligne). L’utilisateur voit des états honnêtes : « Compression en cours… », « Enregistrement en cours… », puis « ✓ Capture enregistrée ». Les captures en attente du réseau restent sur l’appareil (IndexedDB, clé propriétaire + projet) et sont réessayées à la reconnexion ; une capture synchronisée n’est jamais renvoyée (idempotence via la clientKey). Un sessionRunId stable permet à l’observateur de reprendre la même session après rechargement ou coupure hors-ligne — rien n’est perdu. Finaliser la session vide le brouillon et ne fait que finaliser des captures déjà persistées.',
         },
       ],
     },
@@ -591,7 +591,7 @@ const fr: DocsLocale = {
           items: [
             'Prérequis : Node.js 20+ et npm.',
             'Installez les dépendances : `npm install` (postinstall exécute `prisma generate`).',
-            'Copiez `.env.example` vers `.env` et renseignez les valeurs (DATABASE_URL, DIRECT_URL, CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET, AUTH_SECRET, SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD optionnels).',
+            'Copiez `.env.example` vers `.env` et renseignez les valeurs (DATABASE_URL, DIRECT_URL, les variables de stockage Google Drive GOOGLE_DRIVE_CLIENT_EMAIL et GOOGLE_DRIVE_PRIVATE_KEY, GOOGLE_DRIVE_FOLDER_ID optionnel, AUTH_SECRET, SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD optionnels).',
             'Appliquez le schéma à la base : `npm run db:deploy`.',
             'Premier administrateur optionnel : `npm run db:seed`.',
             'Développement : `npm run dev`.',
@@ -601,7 +601,7 @@ const fr: DocsLocale = {
         },
         {
           kind: 'code',
-          text: 'DATABASE_URL        // PostgreSQL (Neon), connexion application\nDIRECT_URL          // connexion directe pour Prisma CLI / migrations\nCLOUDINARY_CLOUD_NAME\nCLOUDINARY_API_KEY\nCLOUDINARY_API_SECRET // stockage des captures\nAUTH_SECRET          // signature du cookie de session (obligatoire en production)\nSEED_ADMIN_EMAIL     // optionnel, pour `prisma db seed`\nSEED_ADMIN_PASSWORD  // optionnel, pour `prisma db seed`',
+          text: 'DATABASE_URL               // PostgreSQL (Neon), connexion application\nDIRECT_URL                 // connexion directe pour Prisma CLI / migrations\nGOOGLE_DRIVE_CLIENT_EMAIL  // email du compte de service (stockage des captures)\nGOOGLE_DRIVE_PRIVATE_KEY   // clé privée RSA du compte de service (PEM, retours à la ligne échappés ok)\nGOOGLE_DRIVE_FOLDER_ID     // optionnel — dossier Drive racine des captures\nAUTH_SECRET                // signature du cookie de session (obligatoire en production)\nSEED_ADMIN_EMAIL           // optionnel, pour `prisma db seed`\nSEED_ADMIN_PASSWORD        // optionnel, pour `prisma db seed`',
         },
       ],
     },
