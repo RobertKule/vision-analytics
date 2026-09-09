@@ -248,7 +248,7 @@ export default function UserActions({
             {/* En-tête du panneau */}
             <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 dark:border-white/10">
               <p className="text-sm font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-                Vision Analytics
+                ONA Field
               </p>
               <button
                 type="button"
