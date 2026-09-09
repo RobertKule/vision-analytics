@@ -3,9 +3,10 @@ import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
-import { sanitizeBaseName } from '@/lib/exportHelpers'
+import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import type { ExportObservationRow } from '@/lib/exportHelpers'
 import { buildObservationExportCsv } from '@/lib/exportHelpers'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import {
   buildObserverWorkbookBuffer,
   fetchImage,
@@ -249,8 +250,21 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
     ),
   )
 
+  await recordAudit({
+    userId: session.uid,
+    action: AUDIT_ACTIONS.exportGlobal,
+    entityType: 'export',
+    entityId: project.id,
+    metadata: {
+      title: project.title,
+      observations: exportRows.length,
+      framesWritten: writtenFrames,
+      failedImages,
+    },
+  })
+
   const nodeBuffer = await zip.generateAsync({ type: 'nodebuffer' })
-  const filename = `${rootFolder}.zip`
+  const filename = `${brandFileName(rootFolder)}.zip`
 
   const headers = new Headers({
     'Content-Type': 'application/zip',
