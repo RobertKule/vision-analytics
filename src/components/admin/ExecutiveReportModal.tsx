@@ -312,9 +312,16 @@ export default function ExecutiveReportModal({
                 <span className="text-[10px] text-zinc-400">Non enregistrée en base</span>
               </div>
               <div className={KPICARD}>
-                <span className={KPILABEL}>Identification de l’espèce</span>
-                <p className={KPIVALUE}>N/A</p>
-                <span className="text-[10px] text-zinc-400">Non saisie lors des captures</span>
+                <span className={KPILABEL}>Probabilité de détection</span>
+                <p className={KPIVALUE}>
+                  {summary.detectionProbability !== null &&
+                  summary.detectionProbability !== undefined
+                    ? `${Math.round(summary.detectionProbability * 100)}%`
+                    : '—'}
+                </p>
+                <span className="text-[10px] text-zinc-400">
+                  Détections / (points configurés × observateurs)
+                </span>
               </div>
             </div>
           </section>

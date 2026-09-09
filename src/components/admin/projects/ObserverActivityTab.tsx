@@ -105,12 +105,12 @@ export default function ObserverActivityTab({ projectId, projectTitle, rows }: O
               </p>
             </div>
             <a
-              href={`/api/admin/projects/${projectId}/data?observerId=${encodeURIComponent(activeGroup.observerId)}`}
+              href={`/api/admin/projects/${projectId}/export-observer-excel?userId=${encodeURIComponent(activeGroup.observerId)}`}
               className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3.5 text-xs font-semibold text-zinc-700 shadow-sm transition-colors hover:border-gold-500/60 hover:bg-gold-500/5 hover:text-gold-800 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-gold-400/50 dark:hover:bg-gold-400/5 dark:hover:text-gold-200"
-              title="Télécharger les données — classeur Excel des observations de cet observateur"
+              title="Télécharger le classeur individuel de cet observateur (ONA_Field_Observateur_…) — Synthèse, une feuille par type, Données brutes"
             >
               <FileSpreadsheet aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
-              Télécharger les données (.xlsx)
+              Classeur de l’observateur (.xlsx)
             </a>
             <a
               href={`/api/admin/projects/${projectId}/captures?observerId=${encodeURIComponent(activeGroup.observerId)}`}
@@ -122,11 +122,13 @@ export default function ObserverActivityTab({ projectId, projectTitle, rows }: O
           </div>
 
           <p className="text-xs text-zinc-400 dark:text-zinc-500">
-            Le classeur <span className="font-mono">Donnees_{activeGroup.label}.xlsx</span> liste
-            les colonnes Minuterie (MM:SS) · Type d’observation · Point trouvé ? · Coordonnées
-            (X, Y) · Date de Capture. Le ZIP rassemble ces captures et le même classeur sous le
-            nom <span className="font-mono">{projectTitle} · {activeGroup.label}</span> — le
-            téléchargement peut prendre quelques secondes selon le nombre d’images.
+            Le bouton « Classeur de l’observateur » télécharge le rapport individuel{' '}
+            <span className="font-mono">ONA_Field_Observateur_…_Date.xlsx</span> conforme à la
+            spécification : Synthèse (points détectés uniques / points possibles, probabilité par
+            type), une feuille par type d’observation utilisé, puis le relevé{' '}
+            <span className="font-mono">Données_Brutes</span> de ses captures certifiées. Pour le
+            projet « {projectTitle} », le ZIP « Images de l’observateur » rassemble ces captures et
+            un relevé associé — quelques secondes selon le nombre d’images.
           </p>
 
           <CaptureGallery rows={captures} showObserver={false} />
