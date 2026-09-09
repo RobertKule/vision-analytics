@@ -39,3 +39,5 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+/secrets
+secrets/onafield-38f765ecc8df.json
