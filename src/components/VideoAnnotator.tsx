@@ -42,7 +42,9 @@ import {
 import {
   addPendingSync,
   countSyncStates,
+  hasRetryableFailure,
   markFailed,
+  markPending,
   markSynced,
   markSyncing,
   normalizeResumedSync,
@@ -52,6 +54,7 @@ import {
   selectNextToSync,
   type CaptureSyncMap,
 } from '@/lib/captureSyncState'
+import { isNetworkLikeError } from '@/lib/netError'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import {
   clearStoredDraft,
@@ -142,6 +145,59 @@ function generateId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+/** Qualité WebP du condensé de capture (≈0,82, cible ≤ ~1,2 Mo). */
+const CAPTURE_WEBP_QUALITY = 0.82
+
+/** Lit un Blob depuis un canvas détaché (encodage asynchrone, hors du fil React). */
+function readCanvasBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality?: number,
+): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob(resolve, type, quality)
+  })
+}
+
+/** Convertit un Blob en data URL lisible par `<img>` et envoyable au serveur. */
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result === 'string' && result.length > 0) resolve(result)
+      else reject(new Error('Lecture du condensé d’image impossible.'))
+    }
+    reader.onerror = () => reject(new Error('Lecture du condensé d’image impossible.'))
+    reader.readAsDataURL(blob)
+  })
+}
+
+/**
+ * Produit l'artefact de capture : WebP compressé (qualité ≈ 0,82) si le navigateur
+ * sait l'encoder, sinon PNG (toujours décodable). Dernier repli : `toDataURL` PNG.
+ */
+async function compressCaptureToDataUrl(canvas: HTMLCanvasElement): Promise<string> {
+  const webp = await readCanvasBlob(canvas, 'image/webp', CAPTURE_WEBP_QUALITY)
+  if (webp && webp.type === 'image/webp') return blobToDataUrl(webp)
+  const png = await readCanvasBlob(canvas, 'image/png')
+  if (png) return blobToDataUrl(png)
+  return canvas.toDataURL('image/png')
+}
+
+/** Marque une capture comme « compression en cours » (carte pure, jamais mutée). */
+function addCompressing(map: Record<string, true>, id: string): Record<string, true> {
+  return map[id] ? map : { ...map, [id]: true }
+}
+
+/** Retire la marque de compression (condensé prêt, capture retirée ou repli). */
+function removeCompressing(map: Record<string, true>, id: string): Record<string, true> {
+  if (!map[id]) return map
+  const next = { ...map }
+  delete next[id]
+  return next
+}
+
 /** Formate un nombre de secondes en `MM:SS.d`. */
 function formatTime(totalSeconds: number): string {
   if (!Number.isFinite(totalSeconds)) return '00:00.0'
@@ -197,6 +253,12 @@ function getLocalPoint(canvas: HTMLCanvasElement, clientX: number, clientY: numb
   return { x: clientX - rect.left, y: clientY - rect.top }
 }
 
+/**
+ * Cercle d'annotation — anneau simple : contour seul, centre vide, aucun
+ * remplissage translucide ne masque la vidéo. Dessiné sur le calque ET dans
+ * l'image de capture persistée (comportement attendu). L'état sélectionné se
+ * distingue uniquement par la couleur et l'épaisseur du trait.
+ */
 function paintCircle(
   ctx: CanvasRenderingContext2D,
   circle: AnnotationCircle,
@@ -204,18 +266,9 @@ function paintCircle(
 ): void {
   ctx.beginPath()
   ctx.arc(circle.x, circle.y, Math.max(0, circle.r), 0, Math.PI * 2)
-  ctx.fillStyle = selected ? 'rgba(34, 211, 238, 0.14)' : 'rgba(16, 185, 129, 0.12)'
-  ctx.fill()
-  ctx.lineWidth = selected ? 2.5 : 3
+  ctx.lineWidth = selected ? 3 : 2.5
   ctx.strokeStyle = selected ? SELECT_COLOR : BASE_COLOR
-  ctx.setLineDash(selected ? [6, 4] : [])
   ctx.stroke()
-  ctx.setLineDash([])
-  // Point central — toujours visible, même pour un tout petit cercle.
-  ctx.beginPath()
-  ctx.arc(circle.x, circle.y, 2, 0, Math.PI * 2)
-  ctx.fillStyle = selected ? SELECT_COLOR : BASE_COLOR
-  ctx.fill()
 }
 
 export default function VideoAnnotator({
@@ -333,6 +386,8 @@ export default function VideoAnnotator({
   const [runId, setRunId] = useState<string>(() => newSessionToken())
   /** État de synchronisation par capture (pending → syncing → synced | failed). */
   const [syncStates, setSyncStates] = useState<CaptureSyncMap>({})
+  /** Identifiants des captures dont le condensé WebP est encore en cours de compression. */
+  const [compressingIds, setCompressingIds] = useState<Record<string, true>>({})
 
   /**
    * Types « couvrables » de la session = configuration du projet restreinte à ce
@@ -396,6 +451,10 @@ export default function VideoAnnotator({
   const observerIdentifierRef = useRef<string>(observerIdentifier)
   const resumeDraftRef = useRef<StoredObservationDraft | null>(null)
   const pumpChainRef = useRef<Promise<void>>(Promise.resolve())
+  /** Miroir synchrone des compressions en cours (lecture par les effets). */
+  const compressingIdsRef = useRef<Record<string, true>>({})
+  /** Tâches de compression en vol (attendues avant la finalisation d'une session). */
+  const inflightCompressionsRef = useRef<Map<string, Promise<void>>>(new Map())
 
   useEffect(() => {
     observationsRef.current = observations
@@ -421,6 +480,16 @@ export default function VideoAnnotator({
     syncStatesRef.current = next
     setSyncStates(next)
   }, [])
+
+  /** Applique une transition pure à l'ensemble des compressions (ref + état React). */
+  const updateCompressingMap = useCallback(
+    (updater: (prev: Record<string, true>) => Record<string, true>) => {
+      const next = updater(compressingIdsRef.current)
+      compressingIdsRef.current = next
+      setCompressingIds(next)
+    },
+    [],
+  )
 
   const isBrowserOnline = (): boolean =>
     typeof navigator === 'undefined' || navigator.onLine !== false
@@ -487,8 +556,18 @@ export default function VideoAnnotator({
           locale,
         })
       } catch (error) {
+        // Exception = la réponse serveur n'est jamais arrivée (transport). L'erreur est
+        // RE-tentable ; son message distingue une coupure réseau d'une erreur imprévue.
         console.error('[VideoAnnotator] Enregistrement immédiat impossible.', error)
-        updateSyncMap((prev) => markFailed(prev, id))
+        const networkLike = isNetworkLikeError(error)
+        updateSyncMap((prev) =>
+          markFailed(prev, id, {
+            retryable: true,
+            message: networkLike
+              ? t.annotator.saveFailedNetwork
+              : t.annotator.saveFailedServer,
+          }),
+        )
         return
       }
       const deleteRequested = syncStatesRef.current[id]?.pendingServerDelete === true
@@ -506,9 +585,16 @@ export default function VideoAnnotator({
         updateSyncMap((prev) => removeSyncEntry(prev, id))
         return
       }
-      updateSyncMap((prev) => markFailed(prev, id))
+      // Le serveur a répondu par un échec CLASSÉ (code + re-tentabilité + message fixe) :
+      // la capture reste locale avec le message exact — jamais le libellé « hors ligne »
+      // pour un problème de stockage.
+      if (!result.ok) {
+        updateSyncMap((prev) =>
+          markFailed(prev, id, { retryable: result.retryable, message: result.error }),
+        )
+      }
     },
-    [attemptServerDelete, locale, projectId, updateSyncMap],
+    [attemptServerDelete, locale, projectId, t.annotator.saveFailedNetwork, t.annotator.saveFailedServer, updateSyncMap],
   )
 
   /** Un passage complet : chaque capture en attente une fois, puis les suppressions orphelines. */
@@ -543,10 +629,71 @@ export default function VideoAnnotator({
     [runPumpPass],
   )
 
+  /**
+   * Compresse une capture confirmée puis l'enregistre. Exécuté hors du fil
+   * d'annotation (encodage asynchrone WebP ≈0,82, repli PNG) : la capture n'est
+   * ajoutée à la file d'envoi qu'une fois le condensé prêt, jamais avant. Si la
+   * capture a été retirée entre-temps (corbeille / édition), la mise à jour est
+   * sans effet et l'éventuelle entrée orpheline est auto-nettoyée par la file.
+   */
+  const persistCaptureArtifact = useCallback(
+    async (
+      captureId: string,
+      snapshot: HTMLCanvasElement,
+      fallbackDataUrl: string,
+    ): Promise<void> => {
+      let artifact: string
+      console.info(`[CaptureSync] COMPRESSION_START capture=${captureId}`)
+      try {
+        artifact = await compressCaptureToDataUrl(snapshot)
+        console.info(
+          `[CaptureSync] COMPRESSION_SUCCESS capture=${captureId} bytes≈${Math.round(artifact.length * 0.75)}`,
+        )
+      } catch (error) {
+        console.error('[VideoAnnotator] COMPRESSION_ERROR — compression impossible, repli PNG.', error)
+        artifact = fallbackDataUrl
+      }
+      // Le condensé remplace l'aperçu PNG : la prévisualisation locale et l'artefact
+      // envoyé au serveur deviennent l'image compressée.
+      setObservations((previous) =>
+        previous.map((capture) =>
+          capture.id === captureId ? { ...capture, imageDataUrl: artifact } : capture,
+        ),
+      )
+      updateCompressingMap((prev) => removeCompressing(prev, captureId))
+      if (!projectId) return
+      updateSyncMap((prev) => addPendingSync(prev, captureId))
+      if (isBrowserOnline()) void enqueuePump(false)
+    },
+    [enqueuePump, projectId, updateCompressingMap, updateSyncMap],
+  )
+
+  /** Démarre la compression d'une capture et la suit pour la finalisation de session. */
+  const launchCompression = useCallback(
+    (captureId: string, snapshot: HTMLCanvasElement, fallbackDataUrl: string) => {
+      const task = persistCaptureArtifact(captureId, snapshot, fallbackDataUrl)
+      inflightCompressionsRef.current.set(captureId, task)
+      void task.finally(() => {
+        inflightCompressionsRef.current.delete(captureId)
+      })
+    },
+    [persistCaptureArtifact],
+  )
+
+  /** Attend la fin des compressions en cours (aucune capture ne part sans condensé). */
+  const waitForCompressions = useCallback(async (): Promise<void> => {
+    while (inflightCompressionsRef.current.size > 0) {
+      await Promise.allSettled([...inflightCompressionsRef.current.values()])
+    }
+  }, [])
+
   type DrainResult = 'clean' | 'offline' | 'stuck'
 
   /** Tente d'amener chaque capture et chaque suppression orpheline à terme. */
   const drainAllForFinalize = useCallback(async (): Promise<DrainResult> => {
+    // Une capture encore en cours de compression n'a pas d'entrée de file : on
+    // attend que son condensé soit prêt (et qu'elle soit enregistrée) avant de vider.
+    await waitForCompressions()
     const isOffline = (): boolean => typeof navigator !== 'undefined' && navigator.onLine === false
     for (let pass = 0; pass < 4; pass += 1) {
       if (isOffline()) return 'offline'
@@ -569,7 +716,7 @@ export default function VideoAnnotator({
       }
     }
     return isOffline() ? 'offline' : 'stuck'
-  }, [enqueuePump])
+  }, [enqueuePump, waitForCompressions])
 
   /** Vidange les captures restantes puis certifie la session côté serveur. */
   const handleFinalizeSession = useCallback(
@@ -585,7 +732,18 @@ export default function VideoAnnotator({
       }
       if (drain === 'stuck') {
         const offline = typeof navigator !== 'undefined' && navigator.onLine === false
-        return { ok: false, error: t.stepper.errorNetwork, offline }
+        // Un échec DÉFINITIF (stockage) ne se videra pas seul : on affiche son motif précis
+        // au lieu d'un faux « problème réseau » — l'observateur sait quoi corriger (Réessayer).
+        const stuckFailure = observationsRef.current
+          .map((observation) => syncStatesRef.current[observation.id])
+          .find(
+            (state) =>
+              state?.status === 'failed' &&
+              state.failure?.retryable === false &&
+              Boolean(state.failure.message),
+          )
+        const message = stuckFailure?.failure?.message
+        return { ok: false, error: message ?? t.stepper.errorNetwork, offline }
       }
       onPhase('finalizing')
       let result: Awaited<ReturnType<typeof finalizeObservationSession>>
@@ -622,6 +780,11 @@ export default function VideoAnnotator({
    */
   const reconcileRemovedCapture = useCallback(
     (captureId: string): void => {
+      // Une capture retirée pendant sa compression ne doit pas être enregistrée
+      // ensuite : on retire sa marque (l'encodage en vol reste sans effet).
+      if (compressingIdsRef.current[captureId]) {
+        updateCompressingMap((prev) => removeCompressing(prev, captureId))
+      }
       const current = syncStatesRef.current[captureId]
       if (!current || current.pendingServerDelete === true) return
       if (current.status === 'pending' || current.status === 'failed') {
@@ -633,7 +796,7 @@ export default function VideoAnnotator({
         void enqueuePump(false)
       }
     },
-    [enqueuePump, updateSyncMap],
+    [enqueuePump, updateCompressingMap, updateSyncMap],
   )
 
   /** Supprime une capture (corbeille du carrousel ou de la revue du stepper). */
@@ -1174,13 +1337,22 @@ export default function VideoAnnotator({
     const selected = selectedIdRef.current
     for (const circle of circlesRef.current) paintCircle(ctx, circle, circle.id === selected)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
-    let imageDataUrl: string
+    // Aperçu local immédiat (PNG) — double aussi de détection d'une source distante
+    // non lisible (canvas « tainté ») : on refuse la capture avant tout encodage.
+    let previewDataUrl: string
     try {
-      imageDataUrl = canvas.toDataURL('image/png')
+      previewDataUrl = canvas.toDataURL('image/png')
     } catch {
       setErrorMessage(t.annotator.remoteTaintError)
       return
     }
+    // Copie de travail du cadre figé (frame + anneaux) pour l'encodage WebP hors du
+    // fil d'annotation, avant de restaurer le calque transparent ci-dessous.
+    const snapshot = document.createElement('canvas')
+    snapshot.width = canvas.width
+    snapshot.height = canvas.height
+    const snapshotCtx = snapshot.getContext('2d')
+    if (snapshotCtx) snapshotCtx.drawImage(canvas, 0, 0)
     // Restaurer le calque transparent pour poursuivre l'annotation.
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     redraw()
@@ -1202,7 +1374,7 @@ export default function VideoAnnotator({
     const capture: CaptureRecord = {
       id: generateId(),
       timestamp: video.currentTime,
-      imageDataUrl,
+      imageDataUrl: previewDataUrl,
       circleCount: n,
       // Type verrouillé par l'onglet (association vidéo → type), sinon type choisi
       // par l'observateur (null si le projet n'impose rien).
@@ -1212,17 +1384,25 @@ export default function VideoAnnotator({
       centroid,
     }
     setObservations((previous) => [capture, ...previous])
-    // Enregistrement IMMÉDIAT : la capture confirmée rejoint la file locale puis est
-    // persistée côté serveur sans bloquer l'annotation (idempotent par `clientKey`).
+    // La capture confirmée est compressée (WebP ≈ 0,82, sans réseau) avant d'être
+    // mise en file : elle n'est jamais envoyée non compressée, et l'annotation peut
+    // continuer sans attendre — l'encodage tourne hors de ce fil (toBlob).
     if (projectId) {
-      updateSyncMap((prev) => addPendingSync(prev, capture.id))
-      if (isBrowserOnline()) void enqueuePump(false)
+      if (snapshotCtx) {
+        updateCompressingMap((prev) => addCompressing(prev, capture.id))
+        void launchCompression(capture.id, snapshot, previewDataUrl)
+      } else {
+        // Cas dégénéré (contexte 2D indisponible) : on envoie l'aperçu PNG tel quel.
+        updateSyncMap((prev) => addPendingSync(prev, capture.id))
+        if (isBrowserOnline()) void enqueuePump(false)
+      }
     }
     // Les marqueurs restent affichés : l'observateur peut en ajuster sur la frame
     // avant une nouvelle capture, ou les effacer pour changer de frame.
   }, [
     activeKey,
     enqueuePump,
+    launchCompression,
     lockedType,
     nextObservationType,
     projectId,
@@ -1230,6 +1410,7 @@ export default function VideoAnnotator({
     syncCanvasSize,
     t.annotator.remoteTaintError,
     typeRequired,
+    updateCompressingMap,
     updateSyncMap,
   ])
 
@@ -1477,13 +1658,26 @@ export default function VideoAnnotator({
     const owner = draftOwnerRef.current
     if (!owner || !draftReady || resumeDraft || submittedCount !== null) return
     if (observations.length === 0) return
+    // Une capture dont le condensé est encore en cours de compression n'est pas
+    // encore « enregistrée » : on l'écarte du brouillon — une fermeture d'onglet à
+    // ce stade ne la conserverait pas (l'encodage repartira sur la prochaine frame).
+    const readyObservations = observations.filter(
+      (capture) => !compressingIdsRef.current[capture.id],
+    )
+    if (readyObservations.length === 0) {
+      // Tout est encore en compression : aucune capture « enregistrée » à écrire.
+      // On neutralise la copie en attente pour qu'un minuteur déjà lancé ne grave
+      // pas un instantané périmé (captures retirées ou pas encore prêtes).
+      pendingSnapshotRef.current = null
+      return
+    }
     pendingSnapshotRef.current = {
       version: 1,
       projectId,
       owner,
       savedAt: new Date().toISOString(),
       activeTab: activeKey,
-      observations,
+      observations: readyObservations,
       // Le jeton de session et l'état de synchronisation accompagnent le brouillon :
       // une reprise repart du bon `runId` et sait quelles captures restent à envoyer.
       runId,
@@ -1555,8 +1749,12 @@ export default function VideoAnnotator({
       syncStatesRef.current,
       observationsRef.current,
     ).length
-    if (counts.pending === 0 && counts.failed === 0 && pendingDeletes === 0) return
-    void enqueuePump(counts.failed > 0 || pendingDeletes > 0)
+    // Seuls les échecs RE-tentables (réseau, transitoire) sont re-tentés au retour en
+    // ligne ; un échec définitif (stockage non configuré / permission / dossier) n'est
+    // JAMAIS rejoué en boucle — il attend l'action manuelle « Réessayer ».
+    const retryableFailed = hasRetryableFailure(syncStatesRef.current, observationsRef.current)
+    if (counts.pending === 0 && !retryableFailed && pendingDeletes === 0) return
+    void enqueuePump(retryableFailed || pendingDeletes > 0)
   }, [
     draftReady,
     enqueuePump,
@@ -2552,39 +2750,71 @@ export default function VideoAnnotator({
                   </select>
                 </label>
               ) : null}
-              {/* État de synchronisation de la capture (enregistrement immédiat). */}
-              {syncStates[activeCapture.id] ? (
+              {/* État de la capture : compression → enregistrement → confirmé (✓) / échec (motif + nouvel essai) */}
+              {compressingIds[activeCapture.id] || syncStates[activeCapture.id] ? (
                 <span
-                  className={`inline-flex items-center gap-1.5 text-xs ${
+                  className={`inline-flex items-start gap-1.5 text-xs ${
                     syncStates[activeCapture.id]?.status === 'failed'
                       ? 'text-clay-600 dark:text-clay-300'
                       : 'text-zinc-500 dark:text-zinc-400'
                   }`}
                 >
-                  {syncStates[activeCapture.id]?.status === 'syncing' ? (
+                  {compressingIds[activeCapture.id] ? (
                     <Loader2
                       aria-hidden="true"
-                      className="h-3.5 w-3.5 animate-spin text-gold-600 dark:text-gold-400"
+                      className="mt-px h-3.5 w-3.5 animate-spin text-gold-600 dark:text-gold-400"
+                    />
+                  ) : syncStates[activeCapture.id]?.status === 'syncing' ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="mt-px h-3.5 w-3.5 animate-spin text-gold-600 dark:text-gold-400"
                     />
                   ) : syncStates[activeCapture.id]?.status === 'synced' ? (
                     <CheckCircle
                       aria-hidden="true"
-                      className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400"
+                      className="mt-px h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400"
                     />
                   ) : syncStates[activeCapture.id]?.status === 'failed' ? (
-                    <CloudOff aria-hidden="true" className="h-3.5 w-3.5" />
+                    <CloudOff aria-hidden="true" className="mt-px h-3.5 w-3.5" />
                   ) : (
-                    <span className="h-3.5 w-3.5 rounded-full border border-zinc-300 dark:border-zinc-600" />
+                    <span className="mt-px h-3.5 w-3.5 rounded-full border border-zinc-300 dark:border-zinc-600" />
                   )}
-                  <span className="min-w-0">
-                    {syncStates[activeCapture.id]?.status === 'pending'
-                      ? t.annotator.savePending
-                      : syncStates[activeCapture.id]?.status === 'syncing'
-                        ? t.annotator.saveInProgress
-                        : syncStates[activeCapture.id]?.status === 'synced'
-                          ? t.annotator.saveDone
+                  {compressingIds[activeCapture.id] ? (
+                    <span className="min-w-0">{t.annotator.compressing}</span>
+                  ) : syncStates[activeCapture.id]?.status === 'pending' ? (
+                    <span className="min-w-0">{t.annotator.savePending}</span>
+                  ) : syncStates[activeCapture.id]?.status === 'syncing' ? (
+                    <span className="min-w-0">{t.annotator.saveInProgress}</span>
+                  ) : syncStates[activeCapture.id]?.status === 'synced' ? (
+                    <span className="min-w-0">{t.annotator.saveDone}</span>
+                  ) : syncStates[activeCapture.id] ? (
+                    <span className="flex min-w-0 max-w-[15rem] flex-col gap-0.5 text-left">
+                      <span className="font-medium">
+                        {syncStates[activeCapture.id]?.failure?.retryable === false
+                          ? t.annotator.saveFailedPermanent
                           : t.annotator.saveFailed}
-                  </span>
+                      </span>
+                      {syncStates[activeCapture.id]?.failure?.message ? (
+                        <span className="text-[11px] leading-snug text-clay-500 dark:text-clay-300">
+                          {syncStates[activeCapture.id]?.failure?.message}
+                        </span>
+                      ) : null}
+                      {syncStates[activeCapture.id]?.failure?.retryable === false ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Nouvel essai MANUEL après correction (partage/configuration) :
+                            // repasse la capture en attente puis déclenche un passage.
+                            updateSyncMap((prev) => markPending(prev, activeCapture.id))
+                            if (isBrowserOnline()) void enqueuePump(true)
+                          }}
+                          className="inline-flex w-fit items-center rounded-md border border-clay-300 px-2 py-0.5 text-[11px] font-semibold text-clay-700 transition-colors hover:bg-clay-50 dark:border-clay-700 dark:text-clay-300 dark:hover:bg-clay-500/10"
+                        >
+                          {t.annotator.saveRetry}
+                        </button>
+                      ) : null}
+                    </span>
+                  ) : null}
                 </span>
               ) : null}
             </div>
