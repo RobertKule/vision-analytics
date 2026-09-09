@@ -3,6 +3,7 @@ import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { buildObserverWorkbookBuffer, observerKeyName } from '@/lib/serverExport'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -67,6 +68,14 @@ export async function GET(_request: Request, ctx: DataContext): Promise<NextResp
   }
 
   const firstUser = rows[0].user
+
+  await recordAudit({
+    userId: session.uid,
+    action: AUDIT_ACTIONS.exportExcel,
+    entityType: 'export',
+    entityId: project.id,
+    metadata: { title: project.title, observerId, observations: rows.length, format: 'xlsx' },
+  })
 
   const buffer = await buildObserverWorkbookBuffer(
     rows.map((row) => ({
