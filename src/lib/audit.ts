@@ -62,7 +62,8 @@ export const AUDIT_ACTIONS = {
   // Observations
   observationSubmitted: 'OBSERVATION_SUBMITTED',
   sessionFinalized: 'SESSION_FINALIZED',
-  captureDeleted: 'CAPTURE_DELETED',
+  imageUploaded: 'IMAGE_UPLOADED',
+  imageDeleted: 'IMAGE_DELETED',
   // Exports
   exportGlobal: 'EXPORT_GLOBAL',
   exportExcel: 'EXPORT_EXCEL',
@@ -70,6 +71,7 @@ export const AUDIT_ACTIONS = {
   exportCaptures: 'EXPORT_CAPTURES',
   exportChart: 'EXPORT_CHART',
   exportPdf: 'EXPORT_PDF',
+  exportObserver: 'EXPORT_OBSERVER',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]
