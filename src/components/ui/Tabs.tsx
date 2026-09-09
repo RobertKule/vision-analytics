@@ -23,7 +23,7 @@ type TabsProps = {
  * Barre d'onglets sans rechargement de page.
  *
  * Composant contrôlé : la valeur active et le changement sont gérés par le parent.
- * Style « soulignement rouge » cohérent avec la charte Vision Analytics.
+ * Style « soulignement rouge » cohérent avec la charte ONA Field.
  */
 export default function Tabs({
   items,
