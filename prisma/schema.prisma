@@ -131,10 +131,14 @@ model Observation {
   pointId        String?       // Auto-assigné si dans [trameDebut, trameFin]
   point          ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
   timestampTotal Int           // Horodatage saisi en secondes
-  imageUrl       String        // URL Cloudinary de la capture annotée
-  /// Identifiant Cloudinary (public_id) de l'image, conservé pour permettre la
-  /// suppression ciblée de l'asset (jamais exposé à l'observateur, usage interne).
+  imageUrl       String        // URL publique d'accès à la capture annotée (CDN/Drive)
+  /// Identifiant Cloudinary (public_id) historique — lignes antérieures à la migration
+  /// Google Drive. Conservé en lecture seule ; les nouvelles captures utilisent `driveFileId`.
   imagePublicId  String?
+  /// Identifiant Google Drive (fileId) de la capture annotée (stockage des nouvelles
+  /// captures). Jamais exposé à l'observateur : usage serveur interne (suppression ciblée,
+  /// lecture pour les exports serveur).
+  driveFileId    String?
   observationType String?      // Type d'observation choisi par l'observateur (issu de Project.observationTypes)
   isGhostPoint   Boolean       @default(false) // Indique si hors-trame / fausse alerte
   /// Vrai ⇒ capture « certifiée » (session finalisée), seule donnée comptée dans les
