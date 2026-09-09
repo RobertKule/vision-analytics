@@ -2109,23 +2109,23 @@ export default function VideoAnnotator({
               ) : null}
               {lockedType ? (
                 <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                  <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
+                  <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-800 dark:text-gold-300">
                     {t.annotator.obsTypeLabel}
                   </span>
-                  <span className="min-w-0 max-w-[10rem] truncate rounded-md border border-gold-500/30 bg-gold-500/5 px-1.5 py-0.5 font-semibold text-zinc-900 dark:border-gold-400/20 dark:text-gold-200">
+                  <span className="min-w-0 max-w-[10rem] truncate rounded-md border border-gold-500/40 bg-gold-500/10 px-1.5 py-0.5 font-semibold text-gold-900 dark:border-gold-300/40 dark:bg-gold-400/15 dark:text-gold-100">
                     {lockedType}
                   </span>
                 </span>
               ) : typeRequired ? (
                 <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                  <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-700 dark:text-gold-400">
+                  <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-gold-800 dark:text-gold-300">
                     {t.annotator.obsTypeLabel}
                   </span>
                   <select
                     value={activeCapture.observationType ?? ''}
                     onChange={(event) => setCaptureType(activeCapture.id, event.target.value)}
                     aria-label={t.annotator.obsTypeLabel}
-                    className="min-w-0 cursor-pointer rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-xs font-semibold text-zinc-900 outline-none focus:border-gold-500 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-100"
+                    className="min-w-0 cursor-pointer rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-xs font-semibold text-zinc-900 outline-none focus:border-gold-500 [&>option]:bg-white [&>option]:text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-50"
                   >
                     <option value="">{t.annotator.obsTypePlaceholder}</option>
                     {typeOptions.map((option) => (
