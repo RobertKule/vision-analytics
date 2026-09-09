@@ -77,6 +77,10 @@ export type UserAdminDto = {
   createdAt: string
   observationCount: number
   ownedProjectsCount: number
+  /** Nombre de sessions d'observation distinctes (jetons `sessionRunId` non nuls). */
+  sessionsCount: number
+  /** Dernière activité d'observation (horodatage de la dernière capture), sinon null. */
+  lastActivityAt: string | null
 }
 
 /** Synthèse d'un historique d'observateur, groupée par projet. */
@@ -331,3 +335,57 @@ export type AdminProjectDetailDto = {
   /** Relevé complet des observations, plus récentes d'abord. */
   rows: ProjectObservationRowDto[]
 }
+
+// ——— Statistiques réelles du tableau de bord par rôle (sections 20–21) ———
+
+/**
+ * Compteurs ADMIN — vue globale sur tout le système. Tous les chiffres sont
+ * calculés depuis la base (jamais de valeurs statiques).
+ */
+export type AdminDashboardStats = {
+  activeProjects: number
+  archivedProjects: number
+  observers: number
+  analysts: number
+  videos: number
+  sessions: number
+  validObservations: number
+  ghostObservations: number
+  /** total = observations valides + fausses alertes. */
+  observations: number
+  /** % d'observations tombées dans une fenêtre de validation (0–100, 1 décimale). */
+  validationRate: number
+}
+
+/**
+ * Compteurs ANALYST — restreints aux projets qu'il possède ou qui lui sont
+ * partagés (aucune donnée hors de son périmètre).
+ */
+export type AnalystDashboardStats = {
+  activeProjects: number
+  archivedProjects: number
+  observers: number
+  sessions: number
+  validObservations: number
+  ghostObservations: number
+  observations: number
+  validationRate: number
+}
+
+/** Compteurs OBSERVER — uniquement sa propre activité d'observation. */
+export type ObserverDashboardStats = {
+  /** Nombre de projets/études distincts où il a déposé des observations. */
+  projectsParticipated: number
+  sessions: number
+  observations: number
+  validObservations: number
+  ghostObservations: number
+  validationRate: number
+}
+
+/** Statistiques du tableau de bord, discriminées par le rôle de la session. */
+export type DashboardStats =
+  | ({ role: 'ADMIN' } & AdminDashboardStats)
+  | ({ role: 'ANALYST' } & AnalystDashboardStats)
+  | ({ role: 'OBSERVER' } & ObserverDashboardStats)
+
