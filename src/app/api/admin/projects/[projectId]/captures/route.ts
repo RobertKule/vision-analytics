@@ -6,13 +6,13 @@ import { prisma } from '@/lib/prisma'
 import { sanitizeBaseName } from '@/lib/exportHelpers'
 import {
   buildObserverWorkbookBuffer,
-  fetchImage,
+  fetchStoredImage,
   formatClock,
   mapLimited,
   MAX_CONCURRENCY,
   mmssFileToken,
   observerKeyName,
-  type CloudinaryImage,
+  type FetchedImage,
 } from '@/lib/serverExport'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
@@ -27,7 +27,8 @@ type CapturesContext = {
  *
  * Le chemin `/api/*` n'étant pas couvert par la garde du proxy, ce gestionnaire
  * s'autorise lui-même : session requise + accès de gestion (owner / partagé / admin).
- * Les images Cloudinary sont récupérées côté serveur (impossible en lecture canvas cross-origin).
+ * Les images sont récupérées côté serveur (impossible en lecture canvas cross-origin) :
+ * Google Drive via l'API `alt=media` authentifiée, URL historique (Cloudinary) en lecture directe.
  */
 export async function GET(_request: Request, ctx: CapturesContext): Promise<NextResponse> {
   const session = await getCurrentSession()
@@ -89,8 +90,10 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
   const zipFilename = `${zipBasename}.zip`
 
   // ——— Récupération serveur des images (concurrence limitée) ———
-  const downloaded = await mapLimited(rows, MAX_CONCURRENCY, (row) => fetchImage(row.imageUrl))
-  const successes: Array<{ image: CloudinaryImage; index: number }> = []
+  const downloaded = await mapLimited(rows, MAX_CONCURRENCY, (row) =>
+    fetchStoredImage({ driveFileId: row.driveFileId, imageUrl: row.imageUrl }),
+  )
+  const successes: Array<{ image: FetchedImage; index: number }> = []
   let failedCount = 0
   downloaded.forEach((image, index) => {
     if (image) successes.push({ image, index })

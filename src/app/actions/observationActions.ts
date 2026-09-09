@@ -3,7 +3,9 @@
 import { revalidatePath, unstable_cache, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
-import { deleteCloudinaryAsset, uploadAnnotationImage } from '@/lib/cloudinary'
+import { deleteDriveFile, uploadCaptureImage } from '@/lib/drive'
+import { driveFileIdFromReference } from '@/lib/driveRef'
+import { classifySaveError, saveErrorMessage, type SaveErrorCode } from '@/lib/saveErrors'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
@@ -21,7 +23,7 @@ const BLIND_PROJECTS_TAG = 'blind-projects'
 const LEGACY_GENERIC_VIDEO_ID = ''
 
 /**
- * Concurrence maximale des téléversements Cloudinary au sein d'un lot de
+ * Concurrence maximale des téléversements Google Drive au sein d'un lot de
  * soumission. Bornée pour limiter la mémoire et la pression sur l'API, mais assez
  * élevée pour ne pas sérialiser les transferts (soumission « terrain » plus rapide).
  */
@@ -234,7 +236,7 @@ async function resolveObserverUser(identifier: string) {
 
 /**
  * Server Action pour valider et persister un lot d'observations.
- * 1. Téléversement Cloudinary sécurisé des images Base64 côté serveur.
+ * 1. Téléversement Google Drive sécurisé des images Base64 côté serveur (jamais exposé au client).
  * 2. Récupération des fenêtres scientifiques confidentielles en BDD.
  * 3. Validation temporelle automatique : attribution de `pointId` et détection de point fantôme (`isGhostPoint`).
  * 4. Persistance dans PostgreSQL (Neon).
@@ -377,7 +379,7 @@ export async function submitObservations(
       return trimmed === '' || trimmed === LEGACY_GENERIC_VIDEO_ID ? null : trimmed
     }
 
-    // Validation des types AVANT tout téléversement Cloudinary (échec rapide).
+    // Validation des types AVANT tout téléversement Google Drive (échec rapide).
     for (let i = 0; i < observations.length; i++) {
       const rawType = observations[i]?.observationType
       const type = typeof rawType === 'string' ? rawType.trim() : ''
@@ -451,7 +453,7 @@ export async function submitObservations(
     type UploadedCaptureRecord = {
       timestampTotal: number
       imageUrl: string
-      imagePublicId: string | null
+      driveFileId: string | null
       pointId: string | null
       isGhostPoint: boolean
       observationType: string | null
@@ -459,15 +461,15 @@ export async function submitObservations(
       clientKey: string | null
     }
 
-    // Téléversement des images vers Cloudinary, en parallèle borné (au plus
+    // Téléversement des images vers Google Drive, en parallèle borné (au plus
     // SUBMISSION_UPLOAD_CONCURRENCY simultanés) : un lot de 5 n'attend plus
     // 5 allers-retours séquentiels, mais ~2 vagues. L'ordre des résultats est
     // conservé par index (clientKey stable pour l'idempotence serveur).
     const buildRecord = async (index: number): Promise<UploadedCaptureRecord | null> => {
       const obs = observations[index]
       if (isDuplicate(index)) return null // déjà persisté : ni re-téléversé ni recréé
-      const uploaded = await uploadAnnotationImage(obs.imageDataUrl)
-      const imageUrl = uploaded.secureUrl
+      const uploaded = await uploadCaptureImage(obs.imageDataUrl)
+      const imageUrl = uploaded.imageUrl
       const timestampTotal = Math.round(obs.timestamp)
       const observationType =
         configuredTypes.length > 0 && typeof obs.observationType === 'string'
@@ -490,7 +492,7 @@ export async function submitObservations(
       return {
         timestampTotal,
         imageUrl,
-        imagePublicId: uploaded.publicId,
+        driveFileId: uploaded.driveFileId,
         pointId: matchedPoint ? matchedPoint.id : null,
         isGhostPoint: !matchedPoint, // Si aucune fenêtre ne correspond => Point Fantôme (fausse alerte)
         observationType,
@@ -519,7 +521,7 @@ export async function submitObservations(
           pointId: record.pointId,
           timestampTotal: record.timestampTotal,
           imageUrl: record.imageUrl,
-          imagePublicId: record.imagePublicId,
+          driveFileId: record.driveFileId,
           observationType: record.observationType,
           isGhostPoint: record.isGhostPoint,
           isVerified: true,
@@ -557,13 +559,10 @@ export async function submitObservations(
     console.error('Erreur lors de la soumission des observations :', error)
     return {
       ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : msg(
-              'An unexpected error occurred while submitting. Please retry.',
-              'Une erreur inattendue est survenue lors de la soumission. Réessayez.',
-            ),
+      error: msg(
+        'An unexpected error occurred while submitting. Please retry.',
+        'Une erreur inattendue est survenue lors de la soumission. Réessayez.',
+      ),
     }
   }
 }
@@ -579,8 +578,8 @@ export async function submitObservations(
 //   fin de session    → `finalizeObservationSession` : matching des fenêtres confidentielles
 //                       + passage `isVerified=true` des lignes de la session. Opération
 //                       légère en base, AUCUN re-téléversement d'image.
-//   suppression       → `deleteSavedObservation` : suppression de l'asset Cloudinary PUIS
-//                       de la ligne (aucune référence supprimée en silence si Cloudinary échoue).
+//   suppression       → `deleteSavedObservation` : suppression du fichier Google Drive PUIS
+//                       de la ligne (aucune référence supprimée en silence si Drive échoue).
 // ————————————————————————————————————————————————————————————
 
 function isPrismaUniqueViolation(error: unknown): boolean {
@@ -642,18 +641,39 @@ export type SaveObservationCaptureInput = {
 
 export type SaveObservationCaptureResult =
   | { ok: true; status: 'saved' | 'already-saved'; observationId: string }
-  | { ok: false; error: string }
+  | {
+      ok: false
+      /** Message final localisé à afficher (vocabulaire fixe — jamais un détail interne). */
+      error: string
+      /** Code machine pour distinguer réseau / stockage / base (pas de détection par texte). */
+      code: SaveErrorCode
+      /** Vrai = re-tentable (réseau, transitoire) ; faux = définitif (config, permission, dossier). */
+      retryable: boolean
+    }
 
 /**
  * Enregistre IMMÉDIATEMENT une capture confirmée : une image téléversée, une ligne
  * persistée. L'idempotence (projet + `clientKey`) garantit qu'un double envoi (retry,
  * reprise) ne crée jamais deux lignes et ne re-téléverse jamais l'image.
+ *
+ * ORDRE + AUCUN ORPHELIN : le fichier Google Drive n'est créé qu'après toutes les
+ * validations ; s'il est créé mais que la ligne base ne peut pas l'être (échec,
+ * course d'idempotence), le fichier de CET appel est supprimé best-effort — jamais
+ * de fichier Drive sans ligne PostgreSQL. L'état `synced` n'est atteint que lorsque
+ * les deux opérations ont abouti.
  */
 export async function saveObservationCapture(
   input: SaveObservationCaptureInput,
 ): Promise<SaveObservationCaptureResult> {
   const locale: Locale = input?.locale === 'en' ? 'en' : defaultLocale
   const msg = (en: string, fr: string) => (locale === 'en' ? en : fr)
+  /** Échec de validation métier — spécifique mais sûr, jamais re-tenté seul. */
+  const failValidation = (error: string): SaveObservationCaptureResult => ({
+    ok: false,
+    code: 'VALIDATION',
+    retryable: false,
+    error,
+  })
 
   try {
     const projectId = (input?.projectId ?? '').trim()
@@ -672,23 +692,23 @@ export async function saveObservationCapture(
     const imageDataUrl = input?.imageDataUrl
 
     if (!projectId) {
-      return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
+      return failValidation(msg('Missing project identifier.', 'Identifiant de projet manquant.'))
     }
     if (!runId) {
-      return { ok: false, error: msg('Missing session token.', 'Jeton de session manquant.') }
+      return failValidation(msg('Missing session token.', 'Jeton de session manquant.'))
     }
     if (!clientKey) {
-      return { ok: false, error: msg('Missing capture key.', 'Clé de capture manquante.') }
+      return failValidation(msg('Missing capture key.', 'Clé de capture manquante.'))
     }
     if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp < 0) {
-      return { ok: false, error: msg('Invalid timestamp.', 'Horodatage invalide.') }
+      return failValidation(msg('Invalid timestamp.', 'Horodatage invalide.'))
     }
     if (!isValidBase64Image(imageDataUrl)) {
-      return { ok: false, error: msg('Invalid image format.', 'Format d’image invalide.') }
+      return failValidation(msg('Invalid image format.', 'Format d’image invalide.'))
     }
 
     const identity = await resolveObserverIdentity(input?.observerIdentifier ?? '', msg)
-    if ('error' in identity) return { ok: false, error: identity.error }
+    if ('error' in identity) return failValidation(identity.error)
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
@@ -700,16 +720,15 @@ export async function saveObservationCapture(
       },
     })
     if (!project) {
-      return { ok: false, error: msg('Project not found.', 'Projet introuvable.') }
+      return failValidation(msg('Project not found.', 'Projet introuvable.'))
     }
     if (project.isArchived) {
-      return {
-        ok: false,
-        error: msg(
+      return failValidation(
+        msg(
           'This project is archived. Submissions are closed.',
           'Ce projet est archivé. Les soumissions sont clôturées.',
         ),
-      }
+      )
     }
 
     // Idempotence immédiate : jamais de re-téléversement si la capture existe déjà.
@@ -729,36 +748,53 @@ export async function saveObservationCapture(
       : null
     if (typedLabel) {
       if (!observationType || observationType.toLowerCase() !== typedLabel.toLowerCase()) {
-        return {
-          ok: false,
-          error: msg(
+        return failValidation(
+          msg(
             `This capture must be typed "${typedLabel}".`,
             `Cette capture doit être typée « ${typedLabel} ».`,
           ),
-        }
+        )
       }
     } else if (configuredTypes.length > 0) {
       if (!observationType) {
-        return {
-          ok: false,
-          error: msg(
+        return failValidation(
+          msg(
             'Select an observation type for this capture.',
             'Sélectionnez un type d’observation pour cette capture.',
           ),
-        }
+        )
       }
       if (!configuredTypeSet.has(observationType)) {
-        return {
-          ok: false,
-          error: msg(
+        return failValidation(
+          msg(
             `Observation type "${observationType}" is not offered for this project.`,
             `Le type d’observation « ${observationType} » n’est pas proposé pour ce projet.`,
           ),
-        }
+        )
       }
     }
 
-    const uploaded = await uploadAnnotationImage(imageDataUrl)
+    // ——— Stockage Google Drive ———
+    // Le fichier n'est créé qu'après TOUTES les validations : tout échec antérieur ne
+    // laisse aucun orphelin. Un échec ici est classé (permission/dossier/transitoire…)
+    // et traduit en message fixe — la capture reste locale côté client.
+    const fileName = `${projectId.slice(0, 8)}-${String(Math.round(timestamp))}`
+    let uploaded
+    try {
+      uploaded = await uploadCaptureImage(imageDataUrl, { fileName })
+    } catch (error) {
+      const { code, retryable } = classifySaveError(error)
+      console.error(`[CaptureSync] UPLOAD_GOOGLE_DRIVE_ERROR code=${code} retryable=${retryable}`)
+      return {
+        ok: false,
+        code,
+        retryable,
+        error: saveErrorMessage(code, locale),
+      }
+    }
+
+    // ——— Persistance PostgreSQL ———
+    console.log('[CaptureSync] DATABASE_SAVE_START')
     try {
       const created = await prisma.observation.create({
         data: {
@@ -767,8 +803,8 @@ export async function saveObservationCapture(
           videoId,
           pointId: null, // rattachement fenêtre + fantôme calculés à la finalisation
           timestampTotal: Math.round(timestamp),
-          imageUrl: uploaded.secureUrl,
-          imagePublicId: uploaded.publicId,
+          imageUrl: uploaded.imageUrl,
+          driveFileId: uploaded.driveFileId,
           observationType: observationType || null,
           isGhostPoint: false,
           isVerified: false, // capture « enregistrée » mais session non finalisée
@@ -777,32 +813,53 @@ export async function saveObservationCapture(
         },
         select: { id: true },
       })
+      console.log('[CaptureSync] DATABASE_SAVE_SUCCESS')
+      await recordAudit({
+        userId: identity.user.id,
+        action: AUDIT_ACTIONS.imageUploaded,
+        entityType: 'observation',
+        entityId: created.id,
+        metadata: { projectId, runId, clientKey },
+      })
+      console.log(`[CaptureSync] CAPTURE_SYNC_SUCCESS observationId=${created.id}`)
       return { ok: true, status: 'saved', observationId: created.id }
     } catch (error) {
-      if (isPrismaUniqueViolation(error)) {
-        // Course d'idempotence : une ligne identique vient d'être créée. On nettoie
-        // l'asset tout juste uploadé (pas d'orphelin) puis on renvoie la ligne existante.
-        try {
-          await deleteCloudinaryAsset(uploaded.publicId)
-        } catch (cleanupError) {
-          console.error('[saveObservationCapture] Nettoyage Cloudinary impossible :', cleanupError)
-        }
+      // Échec base APRÈS un upload réussi : le fichier de CET appel ne doit pas survivre
+      // sans ligne (aucun orphelin Google Drive). Nettoyage best-effort, puis classement.
+      const isUnique = isPrismaUniqueViolation(error)
+      try {
+        await deleteDriveFile(uploaded.driveFileId)
+      } catch (cleanupError) {
+        console.error('[CaptureSync] CLEANUP_FAILED — fichier sans ligne base non supprimé :', cleanupError)
+      }
+      if (isUnique) {
+        // Course d'idempotence : la ligne concurrente existe déjà (son fichier à elle est
+        // conservé) — on renvoie la ligne existante, la capture est bien enregistrée.
         const raced = await prisma.observation.findFirst({
           where: { projectId, clientKey },
           select: { id: true },
         })
         if (raced) return { ok: true, status: 'already-saved', observationId: raced.id }
       }
-      throw error
+      const { code, retryable } = classifySaveError(error)
+      console.error(`[CaptureSync] DATABASE_ERROR code=${code} retryable=${retryable}`)
+      return {
+        ok: false,
+        code,
+        retryable,
+        error: saveErrorMessage(code, locale),
+      }
     }
   } catch (error) {
-    console.error('Erreur lors de l’enregistrement de la capture :', error)
+    // Erreur serveur imprévue (connexion à la base, etc.) — classée puis traduite, jamais
+    // le message interne.
+    const { code, retryable } = classifySaveError(error)
+    console.error(`[CaptureSync] SERVER_ERROR code=${code} retryable=${retryable}`)
     return {
       ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Une erreur inattendue est survenue lors de l’enregistrement. Réessayez.',
+      code,
+      retryable,
+      error: saveErrorMessage(code, locale),
     }
   }
 }
@@ -820,9 +877,12 @@ export type DeleteSavedObservationResult =
 
 /**
  * Supprime une capture déjà enregistrée (session non finalisée uniquement).
- * Ordre sécurisé : l'asset Cloudinary est supprimé AVANT la ligne en base — si
- * Cloudinary échoue transitoirement, la référence est conservée (pas d'orphelin,
- * pas de suppression silencieuse) et l'appelant peut réessayer.
+ * Ordre sécurisé : le fichier Google Drive est supprimé AVANT la ligne en base — si
+ * Drive échoue transitoirement, la référence est conservée (pas d'orphelin, pas de
+ * suppression silencieuse) et l'appelant peut réessayer. Une capture de l'ancien
+ * stockage (Cloudinary, `driveFileId` null) ne peut plus être purgée côté stockage
+ * (SDK retiré) : la ligne est supprimée en base avec une trace explicite (rare capture
+ * non finalisée antérieure au déploiement).
  */
 export async function deleteSavedObservation(
   input: DeleteSavedObservationInput,
@@ -848,7 +908,7 @@ export async function deleteSavedObservation(
       select: {
         id: true,
         isVerified: true,
-        imagePublicId: true,
+        driveFileId: true,
         imageUrl: true,
       },
     })
@@ -864,26 +924,38 @@ export async function deleteSavedObservation(
       }
     }
 
-    const deletion = await deleteCloudinaryAsset(row.imagePublicId || row.imageUrl)
-    if (!deletion.ok) return { ok: false, error: deletion.error }
+    // Suppression du stockage AVANT la ligne. `driveFileId` est la référence Drive fiable ;
+    // on retombe sur l'URL publique si besoin (les deux dérivent du même `fileId`).
+    const driveFileId =
+      driveFileIdFromReference(row.driveFileId) ?? driveFileIdFromReference(row.imageUrl)
+    const legacyStorage = !driveFileId
+    if (driveFileId) {
+      const deletion = await deleteDriveFile(driveFileId)
+      if (!deletion.ok) return { ok: false, error: deletion.error }
+    } else {
+      console.warn(
+        `[deleteSavedObservation] Capture de l'ancien stockage (Cloudinary) sans fichier Drive : ` +
+          `l'asset historique ne peut plus être purgé (SDK retiré). Ligne ${row.id} supprimée en base.`,
+      )
+    }
 
     await prisma.observation.delete({ where: { id: row.id } })
     await recordAudit({
       userId: identity.user.id,
-      action: AUDIT_ACTIONS.captureDeleted,
+      action: AUDIT_ACTIONS.imageDeleted,
       entityType: 'observation',
       entityId: row.id,
-      metadata: { projectId, clientKey },
+      metadata: { projectId, clientKey, ...(legacyStorage ? { legacyStorage: true } : {}) },
     })
     return { ok: true, deleted: true }
   } catch (error) {
     console.error('Erreur lors de la suppression de la capture :', error)
     return {
       ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Une erreur inattendue est survenue lors de la suppression. Réessayez.',
+      error: msg(
+        'The capture could not be deleted right now. Please retry.',
+        'La capture n’a pas pu être supprimée pour le moment. Réessayez.',
+      ),
     }
   }
 }
@@ -1021,10 +1093,10 @@ export async function finalizeObservationSession(
     console.error('Erreur lors de la finalisation de la session :', error)
     return {
       ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : 'Une erreur inattendue est survenue lors de la finalisation. Réessayez.',
+      error: msg(
+        'The session could not be finalized right now. Please retry.',
+        'La session n’a pas pu être finalisée pour le moment. Réessayez.',
+      ),
     }
   }
 }
