@@ -1214,8 +1214,11 @@ export async function finalizeObservationSession(
 //
 // Quand le jeton d'un observateur est COMPLETED, le lien rouvre son projet en
 // lecture seule : l'observateur revoit SES captures certifiées (jamais celles des
-// autres, jamais les fenêtres de validation). La garde `resolveObserverGate`
-// garantit qu'on ne lit que ce que le porteur du cookie est autorisé à lire.
+// autres, JAMAIS la vérité de validation). L'aveugle porte sur les fenêtres valides
+// pendant TOUTE la vie de la session — y compris à l'issue : aucun nom de point,
+// aucun statut « détecté / fausse alerte », aucun compteur valide/fantôme ne doit
+// sortir du serveur vers un observateur. La garde `resolveObserverGate` garantit
+// qu'on ne lit que ce que le porteur du cookie est autorisé à lire.
 // ————————————————————————————————————————————————————————————
 
 export type ObserverSessionRecapRow = {
@@ -1223,8 +1226,6 @@ export type ObserverSessionRecapRow = {
   imageUrl: string
   timestampTotal: number
   observationType: string | null
-  isGhostPoint: boolean
-  pointName: string | null
   createdAt: string
 }
 
@@ -1233,8 +1234,6 @@ export type ObserverSessionRecapResult =
       ok: true
       completed: boolean
       rows: ObserverSessionRecapRow[]
-      validCount: number
-      ghostCount: number
     }
   | { ok: false }
 
@@ -1244,6 +1243,9 @@ export async function getObserverSessionRecap(
   const gate = await resolveObserverGate(projectId)
   if (!gate.ok) return { ok: false }
 
+  // Sélection VOLONTAIREMENT limitée : ni `isGhostPoint`, ni relation `point`. Ces
+  // champs encodent la vérité de validation et ne doivent jamais transiter côté
+  // observateur (l'écran de lecture seule n'affiche que ce qu'il a fait).
   const captures = await prisma.observation.findMany({
     where: { projectId, userId: gate.userId, isVerified: true },
     select: {
@@ -1251,9 +1253,7 @@ export async function getObserverSessionRecap(
       imageUrl: true,
       timestampTotal: true,
       observationType: true,
-      isGhostPoint: true,
       createdAt: true,
-      point: { select: { pointName: true } },
     },
     orderBy: { timestampTotal: 'asc' },
   })
@@ -1263,8 +1263,6 @@ export async function getObserverSessionRecap(
     imageUrl: capture.imageUrl,
     timestampTotal: capture.timestampTotal,
     observationType: capture.observationType,
-    isGhostPoint: capture.isGhostPoint,
-    pointName: capture.point?.pointName ?? null,
     createdAt: capture.createdAt.toISOString(),
   }))
 
@@ -1272,7 +1270,5 @@ export async function getObserverSessionRecap(
     ok: true,
     completed: gate.completed,
     rows,
-    validCount: rows.filter((row) => !row.isGhostPoint).length,
-    ghostCount: rows.length - rows.filter((row) => !row.isGhostPoint).length,
   }
 }

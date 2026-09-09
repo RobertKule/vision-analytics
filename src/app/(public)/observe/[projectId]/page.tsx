@@ -170,12 +170,9 @@ function ReadOnlySession({
   shareText,
 }: {
   project: { id: string; title: string; description?: string | null }
-  recap: { completed: boolean; rows: NonNullable<ObserverSessionRecapResult & { ok: true }>['rows']; validCount: number; ghostCount: number } | null
+  recap: (NonNullable<ObserverSessionRecapResult & { ok: true }>) | null
   shareText: ShareText
 }) {
-  const validCount = recap?.validCount ?? 0
-  const ghostCount = recap?.ghostCount ?? 0
-
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
       <header className="mb-6">
@@ -198,27 +195,24 @@ function ReadOnlySession({
         <p className="text-sm text-zinc-500 dark:text-zinc-400">{shareText.emptyCaption}</p>
       ) : (
         <>
-          {/* Compteurs de la session */}
-          <div className="mb-8 flex flex-wrap gap-3">
-            <div className="inline-flex min-w-[11rem] items-center gap-3 rounded-xl border border-gold-500/25 bg-white p-4 dark:border-gold-500/20 dark:bg-[#161b22]">
-              <CheckCircle2 aria-hidden="true" className="h-5 w-5 text-gold-700 dark:text-gold-400" />
-              <div>
-                <p className="font-mono text-2xl font-black tabular-nums text-zinc-900 dark:text-zinc-50">
-                  {validCount}
-                </p>
-                <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{shareText.statValid}</p>
+          {/* Seul le décompte NEUTRE des captures de l'observateur s'affiche — ni
+              « fenêtres de validation détectées », ni « fausses alertes » : la vérité
+              de validation reste aveugle pour l'observateur, y compris après sa session. */}
+          {recap.rows.length > 0 ? (
+            <div className="mb-8 flex flex-wrap gap-3">
+              <div className="inline-flex min-w-[11rem] items-center gap-3 rounded-xl border border-gold-500/25 bg-white p-4 dark:border-gold-500/20 dark:bg-[#161b22]">
+                <CheckCircle2 aria-hidden="true" className="h-5 w-5 text-gold-700 dark:text-gold-400" />
+                <div>
+                  <p className="font-mono text-2xl font-black tabular-nums text-zinc-900 dark:text-zinc-50">
+                    {recap.rows.length}
+                  </p>
+                  <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                    {shareText.statCaptures}
+                  </p>
+                </div>
               </div>
             </div>
-            <div className="inline-flex min-w-[11rem] items-center gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-[#161b22]">
-              <Hourglass aria-hidden="true" className="h-5 w-5 text-zinc-400 dark:text-zinc-500" />
-              <div>
-                <p className="font-mono text-2xl font-black tabular-nums text-zinc-900 dark:text-zinc-50">
-                  {ghostCount}
-                </p>
-                <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{shareText.statGhost}</p>
-              </div>
-            </div>
-          </div>
+          ) : null}
 
           {recap.rows.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-zinc-300 bg-white p-8 text-center dark:border-white/10 dark:bg-[#161b22]">
@@ -245,22 +239,11 @@ function ReadOnlySession({
                     <span className="font-mono text-xs font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
                       T+ {secondsToTimecode(row.timestampTotal)}
                     </span>
-                    <span className="flex min-w-0 items-center gap-2">
-                      {row.observationType && (
-                        <span className="truncate rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
-                          {row.observationType}
-                        </span>
-                      )}
-                      {row.isGhostPoint ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded bg-zinc-200/70 px-1.5 py-0.5 text-[11px] font-semibold text-zinc-600 dark:bg-white/10 dark:text-zinc-400">
-                          {shareText.ghostTag}
-                        </span>
-                      ) : (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded bg-gold-500/15 px-1.5 py-0.5 text-[11px] font-semibold text-gold-800 dark:bg-gold-400/10 dark:text-gold-200">
-                          {row.pointName ?? shareText.validTag}
-                        </span>
-                      )}
-                    </span>
+                    {row.observationType && (
+                      <span className="truncate rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+                        {row.observationType}
+                      </span>
+                    )}
                   </div>
                 </li>
               ))}

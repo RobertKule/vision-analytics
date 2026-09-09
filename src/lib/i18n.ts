@@ -260,6 +260,8 @@ const en = {
     saveFailedServer:
       'The server could not save the capture. It has been kept locally.',
     captureBlockedByDraft: 'Resume or discard your saved session before capturing.',
+    // — Garde anti-doublon : capture déjà acceptée pour ce temps vidéo —
+    captureDuplicateTime: 'You have just recorded a capture for this time.',
     zones: {
       topLeft: 'top-left',
       topCenter: 'top-center',
@@ -756,12 +758,9 @@ const en = {
     readonlyTitle: 'Session finished',
     readonlyBody:
       'You have already completed this observation session. Your captures have been recorded — the project is now available in read-only mode.',
-    statValid: 'Validation windows detected',
-    statGhost: 'False alerts',
+    statCaptures: 'Captures recorded',
     captureChip: 'Capture {{t}}',
     emptyCaption: 'No capture recorded for this session.',
-    validTag: 'Detected',
-    ghostTag: 'False alert',
   },
 }
 
@@ -1005,6 +1004,8 @@ const fr: typeof en = {
     saveFailedServer:
       'Le serveur n’a pas pu enregistrer la capture. Elle a été conservée localement.',
     captureBlockedByDraft: 'Reprenez ou supprimez la session enregistrée avant de capturer.',
+    // — Garde anti-doublon : capture déjà acceptée pour ce temps vidéo —
+    captureDuplicateTime: 'Vous venez juste d’enregistrer la capture pour ce temps.',
     zones: {
       topLeft: 'haut-gauche',
       topCenter: 'haut-centre',
@@ -1503,12 +1504,9 @@ const fr: typeof en = {
     readonlyTitle: 'Session terminée',
     readonlyBody:
       'Vous avez déjà terminé cette session d’observation. Vos captures ont été enregistrées — le projet est désormais consultable en lecture seule.',
-    statValid: 'Fenêtres de validation détectées',
-    statGhost: 'Fausses alertes',
+    statCaptures: 'Captures enregistrées',
     captureChip: 'Capture {{t}}',
     emptyCaption: 'Aucune capture enregistrée pour cette session.',
-    validTag: 'Détecté',
-    ghostTag: 'Fausse alerte',
   },
 }
 
