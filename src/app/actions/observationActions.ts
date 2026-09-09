@@ -3,8 +3,9 @@
 import { revalidatePath, unstable_cache, updateTag } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
-import { deleteDriveFile, uploadCaptureImage } from '@/lib/drive'
+import { deleteDriveFile, resolveCaptureTargetFolder, uploadCaptureImage } from '@/lib/drive'
 import { driveFileIdFromReference } from '@/lib/driveRef'
+import { buildCaptureFileBaseName, observerDisplayLabel } from '@/lib/driveLayout'
 import { classifySaveError, saveErrorMessage, type SaveErrorCode } from '@/lib/saveErrors'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
@@ -296,6 +297,7 @@ export async function submitObservations(
       where: { id: projectId },
       select: {
         id: true,
+        title: true,
         isArchived: true,
         observationTypes: true,
         videos: { select: { id: true, typeLabel: true } },
@@ -349,6 +351,7 @@ export async function submitObservations(
 
     // Récupération de l'observateur (User)
     const user = await resolveObserverUser(identifier)
+    const observerLabel = observerDisplayLabel(user)
 
     // Récupération sécurisée des fenêtres de validation définies par l'administrateur.
     // Chaque fenêtre est rattachée à une passe vidéo (`videoId`, null = passe générique).
@@ -468,14 +471,27 @@ export async function submitObservations(
     const buildRecord = async (index: number): Promise<UploadedCaptureRecord | null> => {
       const obs = observations[index]
       if (isDuplicate(index)) return null // déjà persisté : ni re-téléversé ni recréé
-      const uploaded = await uploadCaptureImage(obs.imageDataUrl)
-      const imageUrl = uploaded.imageUrl
       const timestampTotal = Math.round(obs.timestamp)
       const observationType =
         configuredTypes.length > 0 && typeof obs.observationType === 'string'
           ? obs.observationType.trim()
           : null
       const videoId = normalizeVideoId(obs.videoId)
+
+      // Dépôt en sous-dossiers {Projet}/{Type} (cohérent avec le flux par capture) : le
+      // type retenu pour le dossier est le type imposé par la passe vidéo (le cas échéant)
+      // sinon le type sélectionné. Seule la DESTINATION Google Drive change — ni le modèle
+      // PostgreSQL, ni l'idempotence (`clientKey`), ni la structure du lot ne sont touchés.
+      const typedLabel = videoId ? (videoTypeById.get(videoId) ?? null) : null
+      const typeNameForFolder = typedLabel || observationType || null
+      const uploaded = await uploadCaptureImage(obs.imageDataUrl, {
+        fileName: buildCaptureFileBaseName(observerLabel, timestampTotal),
+        parentFolderId: await resolveCaptureTargetFolder({
+          projectTitle: project.title,
+          typeName: typeNameForFolder,
+        }),
+      })
+      const imageUrl = uploaded.imageUrl
 
       // Une capture n'est évaluée que contre les fenêtres de SA passe vidéo (ou contre
       // les fenêtres génériques pour la passe héritée) — jamais contre celles d'une autre vidéo.
@@ -594,7 +610,10 @@ function isPrismaUniqueViolation(error: unknown): boolean {
 async function resolveObserverIdentity(
   identifier: string,
   getMessage: (en: string, fr: string) => string,
-): Promise<{ user: { id: string } } | { error: string }> {
+): Promise<
+  | { user: { id: string }; observerLabel: string }
+  | { error: string }
+> {
   let cleanId = (identifier ?? '').trim()
   if (!cleanId) {
     return {
@@ -622,7 +641,7 @@ async function resolveObserverIdentity(
     }
   }
   const user = await resolveObserverUser(cleanId)
-  return { user: { id: user.id } }
+  return { user: { id: user.id }, observerLabel: observerDisplayLabel(user) }
 }
 
 export type SaveObservationCaptureInput = {
@@ -714,6 +733,7 @@ export async function saveObservationCapture(
       where: { id: projectId },
       select: {
         id: true,
+        title: true,
         isArchived: true,
         observationTypes: true,
         videos: { select: { id: true, typeLabel: true } },
@@ -778,10 +798,19 @@ export async function saveObservationCapture(
     // Le fichier n'est créé qu'après TOUTES les validations : tout échec antérieur ne
     // laisse aucun orphelin. Un échec ici est classé (permission/dossier/transitoire…)
     // et traduit en message fixe — la capture reste locale côté client.
-    const fileName = `${projectId.slice(0, 8)}-${String(Math.round(timestamp))}`
+    //
+    // Organisation en sous-dossiers : {Projet}/{Type} (nouvelle capture). Le dossier est
+    // résolu (recherche puis création idempotente) avant l'upload ; un échec transitoire
+    // ici est re-tentable, un échec définitif est signalé sans fichier créé.
+    const typeNameForFolder = observationType || typedLabel || null
+    const fileName = buildCaptureFileBaseName(identity.observerLabel, timestamp)
     let uploaded
     try {
-      uploaded = await uploadCaptureImage(imageDataUrl, { fileName })
+      const parentFolderId = await resolveCaptureTargetFolder({
+        projectTitle: project.title,
+        typeName: typeNameForFolder,
+      })
+      uploaded = await uploadCaptureImage(imageDataUrl, { fileName, parentFolderId })
     } catch (error) {
       const { code, retryable } = classifySaveError(error)
       console.error(`[CaptureSync] UPLOAD_GOOGLE_DRIVE_ERROR code=${code} retryable=${retryable}`)

@@ -26,6 +26,7 @@ import {
   driveViewUrl,
   isDriveFileId,
 } from '@/lib/driveRef'
+import { createCaptureFolderResolver, DRIVE_FOLDER_MIME_TYPE } from '@/lib/driveLayout'
 
 const DRIVE_API_ROOT = 'https://www.googleapis.com'
 
@@ -176,21 +177,27 @@ function captureFileBaseName(): string {
  */
 export async function uploadCaptureImage(
   dataUrl: string,
-  options?: { fileName?: string },
+  options?: {
+    fileName?: string
+    /** Dossier cible (parent) de l'upload. Par défaut : la racine configurée. */
+    parentFolderId?: string | null
+  },
 ): Promise<DriveUploadResult> {
   const { mimeType, buffer } = decodeDataUrl(dataUrl)
   const context = await ensureDriveContext()
   const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.split('/')[1]
   const name = `${options?.fileName?.trim() || captureFileBaseName()}.${extension}`
+  const parentFolderId =
+    options && options.parentFolderId !== undefined ? options.parentFolderId : context.config.folderId
 
   let createdId: string | null = null
   try {
     const metadata: Record<string, unknown> = { name, mimeType }
-    if (context.config.folderId) metadata.parents = [context.config.folderId]
+    if (parentFolderId) metadata.parents = [parentFolderId]
 
     // supportsAllDrives=true : accès aux dossiers situés dans un Google Shared Drive
     // (sans effet sur My Drive, requis sinon pour les fichiers de Shared Drives).
-    console.log(`[DriveSync] UPLOAD_GOOGLE_DRIVE_START name="${name}" bytes=${buffer.byteLength} folder=${context.config.folderId ? 'yes' : 'no'}`)
+    console.log(`[DriveSync] UPLOAD_GOOGLE_DRIVE_START name="${name}" bytes=${buffer.byteLength} folder=${parentFolderId ? 'yes' : 'no'}`)
     const createResponse = await driveRequest(
       context,
       '/drive/v3/files?fields=id&supportsAllDrives=true',
@@ -234,6 +241,82 @@ export async function uploadCaptureImage(
     }
     throw error
   }
+}
+
+// ————————————————————————————————————————————————————————————
+// Organisation des captures en sous-dossiers `Projet` / `Type`
+// (Mission « dossiers Google Drive »). Le dossier racine configuré
+// (`GOOGLE_DRIVE_FOLDER_ID`) reste inchangé ; on ne fait que résoudre
+// d'éventuels dossiers enfants pour déposer la capture.
+// ————————————————————————————————————————————————————————————
+
+/**
+ * Échappe une valeur de nom pour une requête `q` Google Drive (littéral entre
+ * apostrophes, antislash et apostrophe protégés).
+ */
+function escapeDriveQueryValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+/** Recherche l'id du dossier enfant `name` sous `parentId` (null s'il n'existe pas). */
+async function findDriveChildFolderId(parentId: string, name: string): Promise<string | null> {
+  const context = await ensureDriveContext()
+  const query = `'${escapeDriveQueryValue(parentId)}' in parents and name = '${escapeDriveQueryValue(name)}' and mimeType = '${DRIVE_FOLDER_MIME_TYPE}' and trashed = false`
+  const response = await driveRequest(
+    context,
+    `/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=10&spaces=drive&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+  )
+  const payload = (await assertOk(response, 'recherche de dossier')) as {
+    files?: Array<{ id?: string }>
+  }
+  const first = payload.files?.[0]
+  return first?.id ?? null
+}
+
+/** Crée un dossier `name` sous `parentId` et renvoie son id Drive. */
+async function createDriveChildFolder(parentId: string, name: string): Promise<string> {
+  const context = await ensureDriveContext()
+  const metadata = { name, mimeType: DRIVE_FOLDER_MIME_TYPE, parents: [parentId] }
+  console.log(`[DriveSync] FOLDER_CREATE name="${name}" parent=${parentId}`)
+  const response = await driveRequest(context, '/drive/v3/files?fields=id&supportsAllDrives=true', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata),
+  })
+  const created = (await assertOk(response, 'création de dossier')) as { id?: string }
+  if (!created.id) throw new Error('Réponse Google Drive sans identifiant de dossier.')
+  return created.id
+}
+
+/** I/O Drive réelle branchée sur le résolveur pur (dé-duplication + recherche avant création). */
+const captureFolderResolver = createCaptureFolderResolver({
+  findChildFolderId: findDriveChildFolderId,
+  createChildFolder: createDriveChildFolder,
+})
+
+export type ResolveCaptureTargetInput = {
+  projectTitle: string
+  /** Nom du type d'observation ; vide ⇒ dépôt direct dans le dossier projet. */
+  typeName?: string | null
+}
+
+/**
+ * Résout le dossier de dépôt d'une nouvelle capture : `{Projet}` sous la racine puis,
+ * si un type est fourni, `{Projet}/{Type}`. Renvoie l'id du dossier final (à passer à
+ * `uploadCaptureImage` via `parentFolderId`), ou null si aucun dossier racine n'est
+ * configuré (aucun sous-dossier : comportement hérité inchangé).
+ */
+export async function resolveCaptureTargetFolder(
+  input: ResolveCaptureTargetInput,
+): Promise<string | null> {
+  const config = resolveDriveConfig()
+  if (!config || !config.folderId) return null
+  const target = await captureFolderResolver.resolveCaptureFolder({
+    rootFolderId: config.folderId,
+    projectTitle: input.projectTitle,
+    typeName: input.typeName ?? null,
+  })
+  return target?.finalFolderId ?? null
 }
 
 export type DriveDeleteResult =
