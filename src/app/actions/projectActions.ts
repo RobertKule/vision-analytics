@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
 import type {
   ActionResult,
   AdminProjectDetailDto,
@@ -46,6 +47,12 @@ type UpdateProjectInput = {
 type VideoPayload = { videoId: string; source?: string; typeLabel?: string | null; name?: string | null }
 
 const VIDEO_BENCHMARK_MAX_SECONDS = 7 * 3600 // garde-fou serveur (durée vidéo non persistée)
+
+/** Trace une action d'audit dont l'acteur est l'admin courant (best effort). */
+async function adminAudit(input: Omit<AuditLogInput, 'userId'>): Promise<void> {
+  const admin = await getCurrentAdmin()
+  await recordAudit({ ...input, userId: admin?.uid ?? null })
+}
 
 /** Revalide les chemins affectés par toute mutation d'un projet. */
 function revalidateProject(projectId: string) {
@@ -327,6 +334,12 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
       return created
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectCreated,
+      entityType: 'project',
+      entityId: project.id,
+      metadata: { title },
+    })
     revalidateProject(project.id)
     return { ok: true, id: project.id }
   } catch (error) {
@@ -384,6 +397,12 @@ export async function updateProject(input: UpdateProjectInput): Promise<ActionRe
       }
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'project',
+      entityId: projectId,
+      metadata: { fields: Object.keys(patch).join(',') },
+    })
     revalidateProject(projectId)
     return { ok: true }
   } catch (error) {
@@ -456,6 +475,12 @@ export async function updateProjectObservationTypes(
       await normalizeVideoTypeLabels(tx, id, cleaned)
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'project',
+      entityId: id,
+      metadata: { fields: 'observationTypes', types: cleaned.join(',') },
+    })
     revalidateProject(id)
     return { ok: true }
   } catch (error) {
@@ -491,6 +516,11 @@ export async function archiveProject(projectId: string): Promise<ActionResult> {
       data: { isArchived: true },
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectArchived,
+      entityType: 'project',
+      entityId: projectId,
+    })
     revalidateProject(projectId)
     return { ok: true }
   } catch (error) {
@@ -525,6 +555,11 @@ export async function restoreProject(projectId: string): Promise<ActionResult> {
       data: { isArchived: false },
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectRestored,
+      entityType: 'project',
+      entityId: projectId,
+    })
     revalidateProject(projectId)
     return { ok: true }
   } catch (error) {
@@ -571,6 +606,11 @@ export async function deleteProject(projectId: string): Promise<ActionResult> {
       await tx.project.delete({ where: { id: projectId } })
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectDeleted,
+      entityType: 'project',
+      entityId: projectId,
+    })
     revalidateProject(projectId)
     return { ok: true }
   } catch (error) {
@@ -633,6 +673,12 @@ export async function addProjectVideo(input: {
       select: { id: true },
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.videoAdded,
+      entityType: 'video',
+      entityId: created.id,
+      metadata: { projectId, typeLabel },
+    })
     revalidateProject(projectId)
     return { ok: true, id: created.id }
   } catch (error) {
@@ -682,6 +728,12 @@ export async function updateProjectVideo(input: VideoPayload): Promise<ActionRes
 
     await prisma.video.update({ where: { id: videoId }, data: patch })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.videoUpdated,
+      entityType: 'video',
+      entityId: videoId,
+      metadata: { projectId: video.project.id, fields: Object.keys(patch).join(',') },
+    })
     revalidateProject(video.project.id)
     return { ok: true }
   } catch (error) {
@@ -738,6 +790,12 @@ export async function deleteProjectVideo(videoId: string): Promise<ActionResult>
       await tx.video.delete({ where: { id: videoId } })
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.videoRemoved,
+      entityType: 'video',
+      entityId: videoId,
+      metadata: { projectId: video.project.id },
+    })
     revalidateProject(video.project.id)
     return { ok: true }
   } catch (error) {
@@ -790,6 +848,12 @@ export async function setProjectVideoBenchmark(input: {
       data: { benchmarkSeconds: seconds },
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.videoUpdated,
+      entityType: 'video',
+      entityId: videoId,
+      metadata: { projectId: video.project.id, fields: 'benchmarkSeconds' },
+    })
     revalidateProject(video.project.id)
     return { ok: true }
   } catch (error) {
@@ -861,10 +925,17 @@ export async function addProjectPoint(input: AddProjectPointInput): Promise<Acti
       return { ok: false, error: 'Cette fenêtre chevauche un point déjà défini pour cette vidéo.' }
     }
 
-    await prisma.projectPoint.create({
+    const created = await prisma.projectPoint.create({
       data: { projectId, videoId, pointName, trameDebut, trameFin },
+      select: { id: true },
     })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'project',
+      entityId: projectId,
+      metadata: { windowAdded: created.id, pointName, videoId },
+    })
     revalidateProject(projectId)
     return { ok: true }
   } catch (error) {
@@ -883,8 +954,22 @@ export async function deleteProjectPoint(pointId: string): Promise<ActionResult>
       return { ok: false, error: 'Identifiant de point invalide.' }
     }
 
+    const point = await prisma.projectPoint.findUnique({
+      where: { id: pointId },
+      select: { projectId: true, pointName: true },
+    })
+    if (!point) {
+      return { ok: false, error: 'Point introuvable ou déjà supprimé.' }
+    }
+
     await prisma.projectPoint.delete({ where: { id: pointId } })
 
+    await adminAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'project',
+      entityId: point.projectId,
+      metadata: { windowRemoved: pointId, pointName: point.pointName },
+    })
     revalidatePath('/admin/projects')
     revalidatePath('/observe')
     revalidatePath('/experience')
