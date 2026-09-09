@@ -19,12 +19,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   if (!detail) {
     return {
-      title: 'Projet introuvable — Vision Analytics',
+      title: 'Projet introuvable — ONA Field',
     }
   }
 
   return {
-    title: `${detail.project.title} — Vision Analytics`,
+    title: `${detail.project.title} — ONA Field`,
     description: `Administration du projet « ${detail.project.title} » : fenêtres de validation, relevé des observations et exports.`,
   }
 }

@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
 import { uploadAnnotationToCloudinary } from '@/lib/cloudinary'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 import { Role } from '@prisma/client'
@@ -18,6 +19,34 @@ const BLIND_PROJECTS_TAG = 'blind-projects'
 
 /** Identifiant de passe « vide » renvoyé pour la vidéo générique héritée (project.videoUrl). */
 const LEGACY_GENERIC_VIDEO_ID = ''
+
+/**
+ * Concurrence maximale des téléversements Cloudinary au sein d'un lot de
+ * soumission. Bornée pour limiter la mémoire et la pression sur l'API, mais assez
+ * élevée pour ne pas sérialiser les transferts (soumission « terrain » plus rapide).
+ */
+const SUBMISSION_UPLOAD_CONCURRENCY = 3
+
+/** Exécute `worker(i)` pour i ∈ [0, count) avec au plus `limit` appels simultanés. */
+async function mapIndexedWithConcurrency<T>(
+  count: number,
+  limit: number,
+  worker: (index: number) => Promise<T>,
+): Promise<T[]> {
+  const results = new Array<T>(count)
+  let next = 0
+  async function runSlot(): Promise<void> {
+    while (true) {
+      const index = next++
+      if (index >= count) return
+      results[index] = await worker(index)
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(limit, count)) }, () => runSlot()),
+  )
+  return results
+}
 
 const blindVideoSelect = {
   id: true,
@@ -419,8 +448,7 @@ export async function submitObservations(
       return key !== null && persistedKeys.has(key)
     }
 
-    // Téléversement asynchrone des images vers Cloudinary
-    const uploadedRecords: Array<{
+    type UploadedCaptureRecord = {
       timestampTotal: number
       imageUrl: string
       pointId: string | null
@@ -428,11 +456,15 @@ export async function submitObservations(
       observationType: string | null
       videoId: string | null
       clientKey: string | null
-    }> = []
+    }
 
-    for (let index = 0; index < observations.length; index++) {
+    // Téléversement des images vers Cloudinary, en parallèle borné (au plus
+    // SUBMISSION_UPLOAD_CONCURRENCY simultanés) : un lot de 5 n'attend plus
+    // 5 allers-retours séquentiels, mais ~2 vagues. L'ordre des résultats est
+    // conservé par index (clientKey stable pour l'idempotence serveur).
+    const buildRecord = async (index: number): Promise<UploadedCaptureRecord | null> => {
       const obs = observations[index]
-      if (isDuplicate(index)) continue
+      if (isDuplicate(index)) return null // déjà persisté : ni re-téléversé ni recréé
       const imageUrl = await uploadAnnotationToCloudinary(obs.imageDataUrl)
       const timestampTotal = Math.round(obs.timestamp)
       const observationType =
@@ -453,7 +485,7 @@ export async function submitObservations(
         (point) => timestampTotal >= point.trameDebut && timestampTotal <= point.trameFin,
       )
 
-      uploadedRecords.push({
+      return {
         timestampTotal,
         imageUrl,
         pointId: matchedPoint ? matchedPoint.id : null,
@@ -461,8 +493,17 @@ export async function submitObservations(
         observationType,
         videoId,
         clientKey: clientKeys[index],
-      })
+      }
     }
+
+    const builtRecords = await mapIndexedWithConcurrency(
+      observations.length,
+      SUBMISSION_UPLOAD_CONCURRENCY,
+      buildRecord,
+    )
+    const uploadedRecords: UploadedCaptureRecord[] = builtRecords.filter(
+      (record): record is UploadedCaptureRecord => record !== null,
+    )
 
     // Insertion en masse dans Neon PostgreSQL. `skipDuplicates` protège l'idempotence si
     // deux lots concurrents portaient la même clé client (jamais d'erreur de contrainte).
@@ -484,6 +525,15 @@ export async function submitObservations(
         skipDuplicates: true,
       })
     }
+
+    const submittedCount = uploadedRecords.length
+    await recordAudit({
+      userId: user.id,
+      action: AUDIT_ACTIONS.observationSubmitted,
+      entityType: 'observation',
+      ...(runId ? { entityId: runId } : {}),
+      metadata: { projectId, submittedCount },
+    })
 
     updateTag(BLIND_PROJECTS_TAG)
     revalidatePath(`/observe/${projectId}`)

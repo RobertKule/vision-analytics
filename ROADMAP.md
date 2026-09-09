@@ -1,4 +1,4 @@
-# 📑 Spécifications Techniques & Feuille de Route - Vision Analytics
+# 📑 Spécifications Techniques & Feuille de Route - ONA Field
 
 ## 🎯 Objectif du Projet
 Développer une application web scientifique d'analyse de vidéo-observation en aveugle (Blind Testing).

@@ -3,7 +3,7 @@ import { getDictionary } from '@/lib/i18n'
 
 /**
  * Bandeau monochrome « antigravité » partagé par toutes les routes publiques.
- * Typographie plein-bord VISIONANALYTICS — sans retour à la ligne, débordement
+ * Typographie plein-bord ONAFIELD — sans retour à la ligne, débordement
  * masqué pour éviter tout scroll horizontal.
  */
 export default async function PublicBrand() {
@@ -17,6 +17,7 @@ export default async function PublicBrand() {
     >
       <h2 className="pointer-events-none whitespace-nowrap text-center text-[11vw] font-black uppercase leading-none tracking-tighter text-[#121417] sm:text-[12vw] dark:text-[#FBF9F5]">
         {t.brandLead}
+        <span className="inline-block w-[0.18em]" aria-hidden="true" />
         <span className="text-[#8C8275] dark:text-zinc-500">{t.brandAccent}</span>
       </h2>
     </section>

@@ -40,7 +40,7 @@ export default async function PublicHeader() {
             />
           </span>
           <span className="flex min-w-0 items-center gap-2 text-base font-bold tracking-tight text-[#121417] dark:text-[#FBF9F5]">
-            <span className="truncate">Vision Analytics</span>
+            <span className="truncate">ONA Field</span>
             <span className="hidden rounded border border-[#121417]/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#4A4E57] sm:inline dark:border-white/15 dark:text-zinc-400">
               LAB
             </span>
@@ -55,6 +55,9 @@ export default async function PublicHeader() {
           <Link href="/observe" className={`${navLink} inline-flex items-center gap-1.5`}>
             <span className="h-2 w-2 rounded-full bg-[#121417] dark:bg-[#FBF9F5]" aria-hidden="true" />
             {t.navExperiments}
+          </Link>
+          <Link href="/docs" className={`${navLink} underline decoration-[#121417]/25 decoration-1 underline-offset-4 hover:decoration-[#121417] dark:decoration-white/25 dark:hover:decoration-[#FBF9F5]`}>
+            {t.navDocs}
           </Link>
         </nav>
 

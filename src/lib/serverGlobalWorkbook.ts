@@ -104,7 +104,7 @@ function writeSummarySheet(
   }
 
   // ——— Bandeau titre ———
-  const titleRow = sheet.addRow(['Vision Analytics — Export Global du Projet', ''])
+  const titleRow = sheet.addRow(['ONA Field — Export Global du Projet', ''])
   titleRow.getCell(1).font = { bold: true, size: 14, color: { argb: MILK } }
   titleRow.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
   titleRow.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } }
@@ -492,7 +492,7 @@ function shortToken(value: string, fallback: string, max = 22): string {
  */
 export async function generateExcelWorkbook(source: GlobalExportSource): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'Vision Analytics'
+  workbook.creator = 'ONA Field'
   workbook.created = new Date()
 
   const summary = buildProjectSummary(source)

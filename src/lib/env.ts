@@ -30,7 +30,7 @@ function validateEnv(): EnvSchema {
 
   if (missing.length > 0) {
     throw new Error(
-      `[Vision Analytics] Variables d'environnement manquantes ou vides :\n` +
+      `[ONA Field] Variables d'environnement manquantes ou vides :\n` +
         missing.map((k) => `  • ${k}`).join('\n') +
         `\n\nVérifiez votre fichier .env (développement) ou les variables d'environnement de votre hébergeur (production).`,
     )

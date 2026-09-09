@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
+  ScrollText,
   Settings,
   Users,
 } from 'lucide-react'
@@ -94,11 +95,27 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
       visible: role === 'OBSERVER',
     },
     {
+      // §27 — « Mon activité » : journal d'audit personnel (chacun ne voit que ses logs).
+      key: 'activity',
+      label: t.activity,
+      href: '/dashboard/activity',
+      icon: ScrollText,
+      visible: role === 'OBSERVER' || role === 'ANALYST',
+    },
+    {
       key: 'projects',
       label: t.projects,
       href: role === 'ADMIN' ? '/admin/projects' : '/analyst/projects',
       icon: FolderKanban,
       visible: role === 'ANALYST' || role === 'ADMIN',
+    },
+    {
+      // §25 — « Historique » ADMIN : journal d'activité global filtrable.
+      key: 'historyAdmin',
+      label: t.history,
+      href: '/admin/history',
+      icon: ScrollText,
+      visible: role === 'ADMIN',
     },
     {
       key: 'users',
@@ -146,7 +163,7 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
             <Link
               href="/"
               className="inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-milk shadow-sm ring-1 ring-gold-500/30"
-              aria-label="Vision Analytics"
+              aria-label="ONA Field"
             >
               <Image
                 src="/Parc National des Virunga.png"
@@ -157,7 +174,7 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
               />
             </Link>
             <span className="min-w-0 flex-1 truncate text-sm font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-              Vision Analytics
+              ONA Field
             </span>
             <button
               type="button"

@@ -10,6 +10,14 @@ function formatSeconds(seconds: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
+/** Marque ONA Field — préfixe des documents téléchargés (identifiés en sortie). */
+export const EXPORT_BRAND_PREFIX = 'ONA_Field'
+
+/** Préfixe un nom de fichier téléchargé avec la marque (sans doublon si déjà préfixé). */
+export function brandFileName(base: string): string {
+  return base.startsWith(`${EXPORT_BRAND_PREFIX}_`) ? base : `${EXPORT_BRAND_PREFIX}_${base}`
+}
+
 /**
  * Génère un fichier CSV scientifique complet avec métadonnées, cibles validées et points fantômes.
  * Formaté en UTF-8 avec BOM pour une compatibilité directe avec Excel et Numbers.
@@ -20,7 +28,7 @@ export function generateScientificCsv(analytics: ProjectAnalyticsDto): string {
   const lines: string[] = []
 
   // Métadonnées du projet
-  lines.push('# RAPPORT SCIENTIFIQUE D’ANALYSE — VALIDATION CROISÉE — VISION ANALYTICS')
+  lines.push('# RAPPORT SCIENTIFIQUE D’ANALYSE — VALIDATION CROISÉE — ONA FIELD')
   lines.push(`# Projet: ${project.title}`)
   lines.push(`# Date d’export: ${new Date().toISOString()}`)
   lines.push(`# Observateurs participants: ${summary.totalObservers}`)
@@ -168,11 +176,12 @@ export function triggerCsvDownload(filename: string, csvContent: string): void {
  * Télécharge un contenu texte (CSV, JSON…) dans le navigateur de l'utilisateur.
  */
 export function triggerFileDownload(filename: string, content: BlobPart, mime: string): void {
+  const branded = brandFileName(filename)
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.setAttribute('href', url)
-  link.setAttribute('download', filename)
+  link.setAttribute('download', branded)
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)

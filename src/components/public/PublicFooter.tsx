@@ -26,7 +26,7 @@ export default async function PublicFooter() {
             />
           </span>
           <span className="text-base font-bold tracking-tight text-[#121417] dark:text-[#FBF9F5]">
-            Vision Analytics
+            ONA Field
           </span>
           <span className="text-xs text-[#8C8275] dark:text-zinc-500">| {t.protocolLabel}</span>
         </div>
@@ -34,6 +34,9 @@ export default async function PublicFooter() {
         <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs font-medium text-[#4A4E57] dark:text-zinc-400">
           <Link href="/observe" className="transition-colors hover:text-[#121417] dark:hover:text-[#FBF9F5]">
             {t.footerExperiments}
+          </Link>
+          <Link href="/docs" className="transition-colors hover:text-[#121417] dark:hover:text-[#FBF9F5]">
+            {t.navDocs}
           </Link>
           <Link href="/login" className="transition-colors hover:text-[#121417] dark:hover:text-[#FBF9F5]">
             {t.footerSignIn}

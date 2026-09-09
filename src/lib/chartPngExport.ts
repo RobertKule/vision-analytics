@@ -1,3 +1,5 @@
+import { brandFileName } from '@/lib/exportHelpers'
+
 /**
  * Export PNG des graphiques Recharts par sérialisation SVG + canevas.
  *
@@ -93,9 +95,10 @@ function fitLabel(context: CanvasRenderingContext2D, text: string, maxWidth: num
 }
 
 function triggerPngDownload(dataUrl: string, fileName: string): void {
+  const brandedName = brandFileName(fileName)
   const anchor = document.createElement('a')
   anchor.href = dataUrl
-  anchor.download = fileName.endsWith('.png') ? fileName : `${fileName}.png`
+  anchor.download = brandedName.endsWith('.png') ? brandedName : `${brandedName}.png`
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()
@@ -103,10 +106,11 @@ function triggerPngDownload(dataUrl: string, fileName: string): void {
 
 /** Télécharge un Blob sous un nom de fichier donné. */
 export function downloadBlob(blob: Blob, fileName: string): void {
+  const brandedName = brandFileName(fileName)
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = fileName
+  anchor.download = brandedName
   document.body.appendChild(anchor)
   anchor.click()
   anchor.remove()

@@ -121,7 +121,7 @@ export default function ExecutiveReportModal({
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-bold uppercase tracking-widest text-gold-700">
-                  Vision Analytics · Procédure d’Observation Indépendante
+                  ONA Field · Procédure d’Observation Indépendante
                 </p>
                 <h1 className="mt-1 text-2xl font-black tracking-tight text-zinc-950 sm:text-3xl">
                   Rapport Exécutif de Concordance
@@ -509,7 +509,7 @@ export default function ExecutiveReportModal({
               </div>
             </div>
             <p className="mt-6 text-center text-[10px] leading-relaxed text-zinc-400">
-              Rapport généré par le moteur analytique Vision Analytics · Conforme aux exigences de
+              Rapport généré par le moteur analytique ONA Field · Conforme aux exigences de
               la procédure d’observation indépendante à validation scientifique croisée. Les
               coordonnées spatiales (X/Y), l’espèce et la durée vidéo ne sont pas enregistrées par
               le protocole.

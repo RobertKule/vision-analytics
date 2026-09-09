@@ -1,13 +1,19 @@
 import Link from 'next/link'
 import {
   Activity,
+  Archive,
   ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Clapperboard,
   Eye,
   FolderKanban,
   Ghost,
   LayoutDashboard,
+  Percent,
   ShieldCheck,
   Sparkles,
+  UserCog,
   Users,
 } from 'lucide-react'
 import { redirect } from 'next/navigation'
@@ -16,7 +22,7 @@ import { getCurrentSession } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
 import { getObserverHistory } from '@/app/actions/historyActions'
-import { listAnalystProjects } from '@/app/actions/analystActions'
+import { getDashboardStats } from '@/app/actions/dashboardStatsActions'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,24 +43,19 @@ export default async function DashboardPage() {
   const s = d.shell
 
   const history = session.role === 'OBSERVER' ? await getObserverHistory() : []
-  const analystProjects = session.role === 'ANALYST' ? await listAnalystProjects() : []
-  const ownedCount =
-    session.role === 'ANALYST'
-      ? analystProjects.filter((project) => project.isOwner).length
-      : 0
-  const sharedCount =
-    session.role === 'ANALYST' ? analystProjects.filter((project) => project.isShared).length : 0
+  // Compteurs réels, calculés depuis la base et limités au périmètre du rôle.
+  const stats = await getDashboardStats()
 
   const displayName = session.username || session.email
 
-  const statCard = (label: string, value: number, Icon: typeof Activity, accent: string) => (
+  const statCard = (label: string, value: number | string, Icon: typeof Activity) => (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           {label}
         </p>
-        <span className={`inline-flex h-7 w-7 items-center justify-center rounded-lg ${accent}`}>
-          <Icon aria-hidden="true" className="h-4 w-4 text-milk dark:text-ink" />
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-ink text-milk dark:bg-milk dark:text-ink">
+          <Icon aria-hidden="true" className="h-4 w-4" />
         </span>
       </div>
       <p className="mt-1.5 text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -172,13 +173,46 @@ export default async function DashboardPage() {
           </div>
         </section>
 
-        {/* ——— Compteurs par rôle ——— */}
-        {session.role === 'ANALYST' ? (
-          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {statCard(t.statProjects, ownedCount, FolderKanban, 'bg-ink dark:bg-milk')}
-            {statCard(t.statShared, sharedCount, Users, 'bg-ink dark:bg-milk')}
-          </section>
-        ) : null}
+        {/* ——— Statistiques réelles, calculées depuis la base et limitées au rôle ——— */}
+        <section aria-labelledby="glance-title" className="flex flex-col gap-4">
+          <div className="flex items-center gap-2">
+            <BarChart3 aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
+            <h2 id="glance-title" className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+              {t.statsGlance}
+            </h2>
+          </div>
+
+          {stats.role === 'ADMIN' ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {statCard(t.statActive, stats.activeProjects, FolderKanban)}
+              {statCard(t.statArchived, stats.archivedProjects, Archive)}
+              {statCard(t.statObservers, stats.observers, Users)}
+              {statCard(t.statAnalysts, stats.analysts, UserCog)}
+              {statCard(t.statVideos, stats.videos, Clapperboard)}
+              {statCard(t.statSessions, stats.sessions, Activity)}
+              {statCard(t.statObservations, stats.observations, Eye)}
+              {statCard(t.statValidation, `${Math.round(stats.validationRate)}%`, Percent)}
+            </div>
+          ) : stats.role === 'ANALYST' ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {statCard(t.statActive, stats.activeProjects, FolderKanban)}
+              {statCard(t.statArchived, stats.archivedProjects, Archive)}
+              {statCard(t.statObservations, stats.observations, Eye)}
+              {statCard(t.statValid, stats.validObservations, CheckCircle2)}
+              {statCard(t.statGhost, stats.ghostObservations, Ghost)}
+              {statCard(t.statValidation, `${Math.round(stats.validationRate)}%`, Percent)}
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {statCard(t.statProjectsParticipated, stats.projectsParticipated, FolderKanban)}
+              {statCard(t.statSessions, stats.sessions, Activity)}
+              {statCard(t.statObservations, stats.observations, Eye)}
+              {statCard(t.statValid, stats.validObservations, CheckCircle2)}
+              {statCard(t.statGhost, stats.ghostObservations, Ghost)}
+              {statCard(t.statValidation, `${Math.round(stats.validationRate)}%`, Percent)}
+            </div>
+          )}
+        </section>
 
         {/* ——— Historique récent (observateur) ——— */}
         {session.role === 'OBSERVER' ? (

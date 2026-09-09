@@ -14,6 +14,7 @@ import {
   observerKeyName,
   type CloudinaryImage,
 } from '@/lib/serverExport'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -180,6 +181,19 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
       2,
     ),
   )
+
+  await recordAudit({
+    userId: session.uid,
+    action: AUDIT_ACTIONS.exportCaptures,
+    entityType: 'export',
+    entityId: project.id,
+    metadata: {
+      title: project.title,
+      frames: frames.length,
+      failedImages: failedCount,
+      ...(observerId ? { observerId } : {}),
+    },
+  })
 
   const nodeBuffer = await zip.generateAsync({ type: 'nodebuffer' })
 

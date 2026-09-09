@@ -36,7 +36,7 @@ function getSecret(): string {
   if (process.env.NODE_ENV !== 'production') {
     return 'va-dev-secret-do-not-use-in-production'
   }
-  throw new Error('[Vision Analytics] AUTH_SECRET est obligatoire en production.')
+  throw new Error('[ONA Field] AUTH_SECRET est obligatoire en production.')
 }
 
 // ——— Encodage base64url (UTF-8 sûr, sans Buffer) ———

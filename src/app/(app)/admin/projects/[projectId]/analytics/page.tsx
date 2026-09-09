@@ -14,12 +14,12 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   if (!analytics) {
     return {
-      title: 'Projet introuvable — Vision Analytics',
+      title: 'Projet introuvable — ONA Field',
     }
   }
 
   return {
-    title: `Statistiques & Concordance : ${analytics.project.title} — Vision Analytics`,
+    title: `Statistiques & Concordance : ${analytics.project.title} — ONA Field`,
     description: `Analyse scientifique inter-observateurs et taux de concordance pour le projet « ${analytics.project.title} ».`,
   }
 }

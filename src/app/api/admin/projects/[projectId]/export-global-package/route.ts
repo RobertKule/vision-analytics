@@ -3,9 +3,10 @@ import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
-import { sanitizeBaseName } from '@/lib/exportHelpers'
+import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import type { GlobalExportRow, GlobalExportSource } from '@/lib/globalExportModel'
 import { generateExcelWorkbook } from '@/lib/serverGlobalWorkbook'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -205,6 +206,20 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     chartBuffers.set(id, image)
   }
 
+  await recordAudit({
+    userId: session.uid,
+    action: AUDIT_ACTIONS.exportPackage,
+    entityType: 'export',
+    entityId: project.id,
+    metadata: {
+      title: project.title,
+      observations: rows.length,
+      charts: chartBuffers.size,
+      ...(observationType ? { observationType } : {}),
+      ...(videoIdRaw ? { videoId: videoIdRaw } : {}),
+    },
+  })
+
   // ——— Assemblage de l'archive ———
   const zip = new JSZip()
   const rootFolder = `${sanitizeBaseName(project.title)}_Export_Global_Graphiques`
@@ -252,7 +267,7 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
   )
 
   const nodeBuffer = await zip.generateAsync({ type: 'nodebuffer' })
-  const filename = `${rootFolder}.zip`
+  const filename = `${brandFileName(rootFolder)}.zip`
 
   const headers = new Headers({
     'Content-Type': 'application/zip',

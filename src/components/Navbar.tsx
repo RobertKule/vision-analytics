@@ -42,7 +42,7 @@ export default async function Navbar() {
             />
           </span>
           <span className="hidden text-sm font-bold tracking-tight text-zinc-900 sm:inline dark:text-zinc-50">
-            Vision Analytics
+            ONA Field
           </span>
         </Link>
 

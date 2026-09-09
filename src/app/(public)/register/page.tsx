@@ -9,8 +9,8 @@ export async function generateMetadata(): Promise<Metadata> {
     title: locale === 'en' ? 'Create an account' : 'Créer un compte',
     description:
       locale === 'en'
-        ? 'Register as an observer or an analyst on Vision Analytics.'
-        : 'Inscrivez-vous comme observateur ou analyste sur Vision Analytics.',
+        ? 'Register as an observer or an analyst on ONA Field.'
+        : 'Inscrivez-vous comme observateur ou analyste sur ONA Field.',
   }
 }
 

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import type { AdminProjectDetailDto, ProjectAnalyticsDto } from '@/lib/types'
 import {
+  brandFileName,
   buildObservationJson,
   sanitizeBaseName,
   triggerFileDownload,
@@ -51,9 +52,10 @@ export default function ProjectDetailWorkspace({
   const fileBase = sanitizeBaseName(project.title)
 
   const exportJson = () => {
-    triggerFileDownload(`${fileBase}_observations.json`, buildObservationJson(detail), 'application/json;charset=utf-8')
+    const jsonFile = brandFileName(`${fileBase}_observations.json`)
+    triggerFileDownload(jsonFile, buildObservationJson(detail), 'application/json;charset=utf-8')
     toast.success('Export JSON téléchargé', {
-      description: `${fileBase}_observations.json — hiérarchique (projectMetadata · observersSummary · observations).`,
+      description: `${jsonFile} — hiérarchique (projectMetadata · observersSummary · observations).`,
     })
   }
 

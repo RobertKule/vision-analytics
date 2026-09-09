@@ -5,6 +5,7 @@ import { Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
 import { hashPassword } from '@/lib/passwords'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import type { ActionResult, UserAdminDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 
@@ -27,7 +28,15 @@ async function requireAdmin(locale: Locale): Promise<ActionResult | null> {
   return null
 }
 
-/** Liste tous les comptes (avec compteurs d'activité). */
+/**
+ * Liste tous les comptes (avec compteurs d'activité).
+ *
+ * Pour chaque compte, une « session d'observation » est un jeton `sessionRunId`
+ * distinct émis par un passage du stepper (une session d'observation indépendante).
+ * Les observations héritées sans jeton (sessionRunId null) comptent pour une
+ * session minimale afin de ne jamais sous-représenter une activité réelle.
+ * « Dernière activité » = date de la capture la plus récente (null si aucun dépôt).
+ */
 export async function listUsers(): Promise<UserAdminDto[]> {
   const session = await getCurrentSession()
   if (!session || session.role !== 'ADMIN') return []
@@ -44,17 +53,47 @@ export async function listUsers(): Promise<UserAdminDto[]> {
     },
     orderBy: { createdAt: 'desc' },
   })
+  if (users.length === 0) return []
 
-  return users.map((user) => ({
-    id: user.id,
-    email: user.email,
-    username: user.username,
-    role: user.role,
-    isActive: user.isActive,
-    createdAt: user.createdAt.toISOString(),
-    observationCount: user._count.observations,
-    ownedProjectsCount: user._count.ownedProjects,
-  }))
+  const ids = users.map((user) => user.id)
+
+  // Sessions distinctes par utilisateur : une ligne de regroupement (userId, sessionRunId).
+  const sessionGroups = await prisma.observation.groupBy({
+    by: ['userId', 'sessionRunId'],
+    where: { userId: { in: ids }, sessionRunId: { not: null } },
+  })
+  const sessionsByUser = new Map<string, number>()
+  for (const group of sessionGroups) {
+    sessionsByUser.set(group.userId, (sessionsByUser.get(group.userId) ?? 0) + 1)
+  }
+
+  // Dernière activité par utilisateur (toutes observations confondues, jetons inclus).
+  const lastActivityGroups = await prisma.observation.groupBy({
+    by: ['userId'],
+    where: { userId: { in: ids } },
+    _max: { createdAt: true },
+  })
+  const lastActivityByUser = new Map<string, string | null>()
+  for (const group of lastActivityGroups) {
+    lastActivityByUser.set(group.userId, group._max.createdAt?.toISOString() ?? null)
+  }
+
+  return users.map((user) => {
+    const observationCount = user._count.observations
+    return {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      role: user.role,
+      isActive: user.isActive,
+      createdAt: user.createdAt.toISOString(),
+      observationCount,
+      ownedProjectsCount: user._count.ownedProjects,
+      // Aucune session dénombrée mais des observations existent → héritage sans jeton.
+      sessionsCount: observationCount > 0 ? (sessionsByUser.get(user.id) ?? 1) : 0,
+      lastActivityAt: lastActivityByUser.get(user.id) ?? null,
+    }
+  })
 }
 
 /** Crée un compte (ADMIN / ANALYST / OBSERVER) avec mot de passe temporaire. */
@@ -99,14 +138,22 @@ export async function createUserByAdmin(input: {
   })
   if (usernameOwner) return { ok: false, error: msg(locale, 'This username is already taken.', 'Ce nom d’utilisateur est déjà pris.') }
 
+  const admin = await getCurrentSession()
   try {
-    await prisma.user.create({
+    const created = await prisma.user.create({
       data: {
         email,
         username,
         password: await hashPassword(password),
         role: role as Role,
       },
+    })
+    await recordAudit({
+      userId: admin?.uid ?? null,
+      action: AUDIT_ACTIONS.userCreated,
+      entityType: 'user',
+      entityId: created.id,
+      metadata: { email, username, role },
     })
     revalidatePath('/admin/users')
     return { ok: true }
@@ -130,6 +177,13 @@ export async function setUserActive(input: { userId: string; active: boolean; lo
     await prisma.user.update({
       where: { id: input.userId },
       data: { isActive: Boolean(input.active) },
+    })
+    await recordAudit({
+      userId: session?.uid ?? null,
+      action: input.active ? AUDIT_ACTIONS.userReactivated : AUDIT_ACTIONS.userDeactivated,
+      entityType: 'user',
+      entityId: input.userId,
+      metadata: { active: Boolean(input.active) },
     })
     revalidatePath('/admin/users')
     return { ok: true }
@@ -155,6 +209,13 @@ export async function setUserRole(input: { userId: string; role: UserAdminRole; 
   }
   try {
     await prisma.user.update({ where: { id: input.userId }, data: { role: role as Role } })
+    await recordAudit({
+      userId: session?.uid ?? null,
+      action: AUDIT_ACTIONS.userRoleChanged,
+      entityType: 'user',
+      entityId: input.userId,
+      metadata: { role },
+    })
     revalidatePath('/admin/users')
     return { ok: true }
   } catch (error) {
@@ -190,6 +251,12 @@ export async function deleteUserByAdmin(input: { userId: string; locale?: Locale
       }
     }
     await prisma.user.delete({ where: { id: input.userId } })
+    await recordAudit({
+      userId: session?.uid ?? null,
+      action: AUDIT_ACTIONS.userDeleted,
+      entityType: 'user',
+      entityId: input.userId,
+    })
     revalidatePath('/admin/users')
     return { ok: true }
   } catch (error) {

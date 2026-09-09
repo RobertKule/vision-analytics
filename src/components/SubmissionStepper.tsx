@@ -66,6 +66,50 @@ function pluralLabel(unit: { one: string; many: string }, count: number): string
  */
 const SUBMIT_BATCH_SIZE = 5
 
+/**
+ * Tentatives automatiques d'un lot en cas d'échec de TRANSPORT (réseau coupé,
+ * proxy, serveur momentanément injoignable) — pas sur un refus de validation
+ * serveur. Chaque nouvelle tentative est idempotente (clientKey) : aucun doublon.
+ */
+const MAX_TRANSPORT_ATTEMPTS = 3
+/** Backoff de base (ms) entre deux tentatives : ~800, ~1600. */
+const TRANSPORT_BACKOFF_BASE_MS = 800
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+/** Attend que `navigator.onLine` redevienne vrai — au plus `maxMs`, sinon passe. */
+async function waitUntilOnline(maxMs: number): Promise<void> {
+  const start = Date.now()
+  while (
+    typeof navigator !== 'undefined' &&
+    navigator.onLine === false &&
+    Date.now() - start < maxMs
+  ) {
+    await wait(400)
+  }
+  // Laisse respirer le réseau entre deux tentatives même si l'état est « en ligne ».
+  await wait(120)
+}
+
+type SubmitPayload = Parameters<typeof submitObservations>[0]
+
+/** Soumet un lot en réessayant automatiquement sur erreur de transport. */
+async function submitBatchWithRetry(payload: SubmitPayload): Promise<SubmissionResultDto> {
+  for (let attempt = 1; attempt <= MAX_TRANSPORT_ATTEMPTS; attempt++) {
+    try {
+      return await submitObservations(payload)
+    } catch (error) {
+      if (attempt >= MAX_TRANSPORT_ATTEMPTS) throw error
+      const delayMs = TRANSPORT_BACKOFF_BASE_MS * 2 ** (attempt - 1)
+      await waitUntilOnline(delayMs)
+    }
+  }
+  // Inatteignable — les tentatives renvoient ou relancent dans la boucle.
+  throw new Error('Submission transport error')
+}
+
 export default function SubmissionStepper(props: SubmissionStepperProps) {
   if (!props.isOpen) return null
   return <SubmissionStepperModal {...props} />
@@ -183,7 +227,7 @@ function SubmissionStepperModal({
             continue
           }
           setSendProgress({ done: batch + 1, total: totalBatches })
-          const result: SubmissionResultDto = await submitObservations({
+          const result: SubmissionResultDto = await submitBatchWithRetry({
             projectId,
             observerIdentifier: effectiveIdentifier,
             locale,

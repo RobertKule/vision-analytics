@@ -125,7 +125,7 @@ export async function buildObserverWorkbookBuffer(
   rows: ObserverWorkbookRow[],
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
-  workbook.creator = 'Vision Analytics'
+  workbook.creator = 'ONA Field'
   workbook.created = new Date()
 
   const sheet = workbook.addWorksheet('Données')

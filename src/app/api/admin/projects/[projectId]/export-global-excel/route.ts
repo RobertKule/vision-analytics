@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
-import { sanitizeBaseName } from '@/lib/exportHelpers'
+import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import type { GlobalExportRow, GlobalExportSource } from '@/lib/globalExportModel'
 import { generateExcelWorkbook } from '@/lib/serverGlobalWorkbook'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -96,8 +97,16 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
     rows,
   }
 
+  await recordAudit({
+    userId: session.uid,
+    action: AUDIT_ACTIONS.exportExcel,
+    entityType: 'export',
+    entityId: project.id,
+    metadata: { title: project.title, observations: observations.length, format: 'xlsx' },
+  })
+
   const buffer = await generateExcelWorkbook(source)
-  const filename = `${sanitizeBaseName(project.title)}_Export_Global.xlsx`
+  const filename = `${brandFileName(`${sanitizeBaseName(project.title)}_Export_Global`)}.xlsx`
 
   const headers = new Headers({
     'Content-Type':

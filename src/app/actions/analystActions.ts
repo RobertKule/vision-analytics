@@ -5,10 +5,17 @@ import { Prisma, Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
 import type { ActionResult, AnalystProjectDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 
 const msg = (locale: Locale, en: string, fr: string) => (locale === 'fr' ? fr : en)
+
+/** Trace une action d'audit dont l'acteur est la session courante (best effort). */
+async function actorAudit(input: Omit<AuditLogInput, 'userId'>): Promise<void> {
+  const session = await getCurrentSession()
+  await recordAudit({ ...input, userId: session?.uid ?? null })
+}
 
 /** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
 const BLIND_PROJECTS_TAG = 'blind-projects'
@@ -100,6 +107,12 @@ export async function createOwnedProject(input: {
       },
       select: { id: true },
     })
+    await actorAudit({
+      action: AUDIT_ACTIONS.projectCreated,
+      entityType: 'project',
+      entityId: project.id,
+      metadata: { title },
+    })
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
     revalidatePath('/observe')
@@ -126,6 +139,11 @@ export async function archiveOwnedProject(input: { projectId: string; locale?: L
     if (!project) return { ok: false, error: msg(locale, 'Project not found.', 'Projet introuvable.') }
     if (!project.isArchived) {
       await prisma.project.update({ where: { id: input.projectId }, data: { isArchived: true } })
+      await actorAudit({
+        action: AUDIT_ACTIONS.projectArchived,
+        entityType: 'project',
+        entityId: input.projectId,
+      })
     }
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
@@ -187,7 +205,16 @@ export async function addWindowToProject(input: {
     if (overlaps) {
       return { ok: false, error: msg(locale, 'This window overlaps an existing one.', 'Cette fenêtre chevauche une fenêtre existante.') }
     }
-    await prisma.projectPoint.create({ data: { projectId, pointName, trameDebut, trameFin } })
+    const created = await prisma.projectPoint.create({
+      data: { projectId, pointName, trameDebut, trameFin },
+      select: { id: true },
+    })
+    await actorAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'project',
+      entityId: projectId,
+      metadata: { windowAdded: created.id, pointName },
+    })
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
     return { ok: true }
@@ -209,6 +236,12 @@ export async function deleteWindowFromProject(input: { pointId: string; locale?:
     const level = await getCurrentProjectAccess(point.projectId)
     if (!canManage(level)) return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
     await prisma.projectPoint.delete({ where: { id: input.pointId } })
+    await actorAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'project',
+      entityId: point.projectId,
+      metadata: { windowRemoved: input.pointId },
+    })
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
     return { ok: true }
@@ -259,6 +292,12 @@ export async function shareProjectWithUser(input: {
       update: {},
     })
 
+    await actorAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'share',
+      entityId: colleague.id,
+      metadata: { projectId, sharedWith: colleague.email },
+    })
     revalidatePath('/analyst/projects')
     return { ok: true }
   } catch (error) {
@@ -282,6 +321,12 @@ export async function unshareProjectFromUser(input: {
   try {
     await prisma.projectAccess.deleteMany({
       where: { projectId, userId: input.userId },
+    })
+    await actorAudit({
+      action: AUDIT_ACTIONS.projectUpdated,
+      entityType: 'share',
+      entityId: input.userId,
+      metadata: { projectId, unsharedWith: input.userId },
     })
     revalidatePath('/analyst/projects')
     return { ok: true }

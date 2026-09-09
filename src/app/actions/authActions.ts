@@ -9,6 +9,7 @@ import {
 } from '@/lib/auth'
 import type { SessionRole } from '@/lib/session'
 import type { Locale } from '@/lib/i18n'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export type AuthResult =
   | { ok: true; email: string; username: string | null; role: SessionRole }
@@ -54,8 +55,21 @@ export async function login(input: {
 
   const result = await authenticateUser({ identifier: input.identifier, password: input.password })
   if (!result.ok) {
+    await recordAudit({
+      userId: null,
+      action: AUDIT_ACTIONS.loginFailure,
+      entityType: 'auth',
+      metadata: { identifier: input.identifier.trim(), code: result.code, method: 'standard' },
+    })
     return { ok: false, error: loginMessages(locale, result.code) }
   }
+  await recordAudit({
+    userId: result.session.uid,
+    action: AUDIT_ACTIONS.loginSuccess,
+    entityType: 'auth',
+    entityId: result.session.uid,
+    metadata: { role: result.session.role, method: 'standard' },
+  })
   return {
     ok: true,
     email: result.session.email,
@@ -81,6 +95,13 @@ export async function register(input: {
   })
 
   if (result.ok) {
+    await recordAudit({
+      userId: result.session.uid,
+      action: AUDIT_ACTIONS.userCreated,
+      entityType: 'user',
+      entityId: result.session.uid,
+      metadata: { role: result.session.role, source: 'self-registration' },
+    })
     return {
       ok: true,
       email: result.session.email,
@@ -133,6 +154,12 @@ export async function loginAdmin(input: { email: string; password: string }): Pr
   }
   const result = await authenticateUser({ identifier: email, password: input.password })
   if (!result.ok) {
+    await recordAudit({
+      userId: null,
+      action: AUDIT_ACTIONS.loginFailure,
+      entityType: 'auth',
+      metadata: { identifier: email, code: result.code, method: 'admin' },
+    })
     return {
       ok: false,
       error:
@@ -143,8 +170,22 @@ export async function loginAdmin(input: { email: string; password: string }): Pr
   }
   if (result.session.role !== 'ADMIN') {
     await closeSession()
+    await recordAudit({
+      userId: result.session.uid,
+      action: AUDIT_ACTIONS.loginFailure,
+      entityType: 'auth',
+      entityId: result.session.uid,
+      metadata: { identifier: email, code: 'not_admin', method: 'admin' },
+    })
     return { ok: false, error: 'Accès réservé aux administrateurs.' }
   }
+  await recordAudit({
+    userId: result.session.uid,
+    action: AUDIT_ACTIONS.loginSuccess,
+    entityType: 'auth',
+    entityId: result.session.uid,
+    metadata: { role: result.session.role, method: 'admin' },
+  })
   return {
     ok: true,
     email: result.session.email,
@@ -153,8 +194,15 @@ export async function loginAdmin(input: { email: string; password: string }): Pr
   }
 }
 
-/** Déconnexion : supprime le cookie de session. */
+/** Déconnexion : journalise puis supprime le cookie de session. */
 export async function logout(): Promise<{ ok: true }> {
+  const session = await getCurrentSession()
+  await recordAudit({
+    userId: session?.uid ?? null,
+    action: AUDIT_ACTIONS.logout,
+    entityType: 'auth',
+    ...(session ? { entityId: session.uid } : {}),
+  })
   await closeSession()
   return { ok: true }
 }
