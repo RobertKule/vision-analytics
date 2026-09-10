@@ -113,8 +113,13 @@ export default function ExecutiveReportModal({
         }
       }
 
+      // La version analytique affichée est transmise au serveur : le PDF porte
+      // EXACTEMENT les mêmes chiffres que le tableau de bord et l'Excel.
+      const versionQuery = analytics.version?.versionId
+        ? `?versionId=${encodeURIComponent(analytics.version.versionId)}`
+        : ''
       const response = await fetch(
-        `/api/admin/projects/${encodeURIComponent(project.id)}/export-report-pdf`,
+        `/api/admin/projects/${encodeURIComponent(project.id)}/export-report-pdf${versionQuery}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
