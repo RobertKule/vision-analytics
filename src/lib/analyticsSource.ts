@@ -168,6 +168,7 @@ export async function loadAnalyticsRows(
     imageUrl: row.imageUrl,
     driveFileId: row.driveFileId,
     videoName: row.video ? videoDisplayName(row.video) : null,
+    videoId: row.videoId,
     createdAt: row.createdAt.toISOString(),
   }))
 }

@@ -32,6 +32,7 @@ import {
   buildAnalyticsSnapshot,
   computeAnalyticsMetrics,
   perimeterFingerprint,
+  rematchRowsToWindows,
   sameAnalyticState,
   selectVersionAsOfDate,
   type AnalyticsObservationRow,
@@ -150,7 +151,11 @@ export async function captureAnalyticsSnapshot(
   const rows = await loadAnalyticsRows(projectId, { cutoffAt: at })
   return buildAnalyticsSnapshot({
     config,
-    rows: restrictRowsToConfig(rows, config),
+    // RECALCUL DYNAMIQUE : les captures RAW sont réévaluées contre les fenêtres de
+    // CETTE configuration (avant/après), jamais sur le `pointId`/`isGhostPoint`
+    // persisté. L'instantané « avant » et « après » reflète donc exactement l'état
+    // analytique au moment de la modification.
+    rows: rematchRowsToWindows(rows, config),
     dataCutoffAt: at.toISOString(),
   })
 }
@@ -408,7 +413,11 @@ export async function resolveAnalyticsView(
 
   if (!version) {
     const config = narrowPerimeterConfig(currentConfig, appliedFilter)
-    const rows = restrictRowsToConfig(
+    // ——— ANALYSE COURANTE : recalcul DYNAMIQUE ———
+    // Chaque capture RAW est réévaluée contre les fenêtres COURANTES (horodatage +
+    // passe vidéo) : le `pointId`/`isGhostPoint` persisté n'est PAS utilisé. Une
+    // capture ancienne devient donc une détection valide dès qu'une fenêtre la couvre.
+    const rows = rematchRowsToWindows(
       await loadAnalyticsRows(projectId, { filter: appliedFilter }),
       config,
     )
