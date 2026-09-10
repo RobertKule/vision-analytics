@@ -101,29 +101,55 @@ export async function createSessionToken(session: {
 
 /** Vérifie la signature et la validité temporelle d'un jeton. Retourne la session ou null. */
 export async function parseSessionToken(token: string | undefined | null): Promise<Session | null> {
-  if (!token) return null
+  const inspected = await inspectSessionToken(token)
+  return inspected.state === 'active' ? inspected.session : null
+}
+
+/**
+ * Diagnostic d'un jeton de session — distingue explicitement l'ABSENCE de session
+ * d'une session EXPIRÉE (messages différents côté produit, cf. « vérification de
+ * session »). Un jeton mal signé ou illisible est traité comme absent : on ne
+ * révèle jamais pourquoi il est invalide.
+ */
+export type SessionInspection =
+  | { state: 'active'; session: Session; expiresAt: number }
+  | { state: 'missing' }
+  | { state: 'expired'; expiresAt: number }
+
+export async function inspectSessionToken(
+  token: string | undefined | null,
+): Promise<SessionInspection> {
+  if (!token) return { state: 'missing' }
   const dotIndex = token.indexOf('.')
-  if (dotIndex <= 0) return null
+  if (dotIndex <= 0) return { state: 'missing' }
 
   const data = token.slice(0, dotIndex)
   const signature = token.slice(dotIndex + 1)
 
   try {
     const expected = bytesToBase64Url(await hmacSign(new TextEncoder().encode(data), getSecret()))
-    if (!constantTimeEqual(base64UrlToBytes(signature), base64UrlToBytes(expected))) return null
+    if (!constantTimeEqual(base64UrlToBytes(signature), base64UrlToBytes(expected))) {
+      return { state: 'missing' }
+    }
 
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(data))) as SessionPayload
     const now = Math.floor(Date.now() / 1000)
     const isKnownRole = payload.role === 'ADMIN' || payload.role === 'ANALYST' || payload.role === 'OBSERVER'
-    if (!payload.uid || !payload.exp || payload.exp <= now || !isKnownRole) return null
+    if (!payload.uid || !payload.exp || !isKnownRole) return { state: 'missing' }
+    // Signature valide mais durée dépassée : la session a EXPIRÉ (état distinct).
+    if (payload.exp <= now) return { state: 'expired', expiresAt: payload.exp }
 
     return {
-      uid: payload.uid,
-      email: payload.email,
-      username: typeof payload.username === 'string' ? payload.username : null,
-      role: payload.role,
+      state: 'active',
+      expiresAt: payload.exp,
+      session: {
+        uid: payload.uid,
+        email: payload.email,
+        username: typeof payload.username === 'string' ? payload.username : null,
+        role: payload.role,
+      },
     }
   } catch {
-    return null
+    return { state: 'missing' }
   }
 }
