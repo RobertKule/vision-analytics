@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { sanitizeBaseName } from '@/lib/exportHelpers'
 import {
@@ -46,8 +46,9 @@ export async function GET(_request: Request, ctx: CapturesContext): Promise<Next
     return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
   }
 
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  // RBAC : ADMIN, propriétaire, ou analyste invité (l'export suit la consultation).
+  const permissions = await getCurrentProjectPermissions(projectId)
+  if (!permissions.canExport) {
     return NextResponse.json(
       { error: 'Accès de gestion requis sur ce projet.' },
       { status: 403 },
