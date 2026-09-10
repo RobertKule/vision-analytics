@@ -1,5 +1,7 @@
 import Link from 'next/link'
 import { BookOpen, House, Lock } from 'lucide-react'
+import ReactivationRequestButton from '@/components/observer/ReactivationRequestButton'
+import type { Locale } from '@/lib/i18n'
 
 export type AccessGateText = {
   title: string
@@ -9,6 +11,21 @@ export type AccessGateText = {
   ctaDocs: string
 }
 
+export type AccessGateReactivation = {
+  projectId: string
+  locale: Locale
+  initiallyPending: boolean
+  text: {
+    inactiveTitle: string
+    inactiveHint: string
+    cta: string
+    alreadyPending: string
+    sent: string
+    sentHint: string
+    error: string
+  }
+}
+
 /**
  * Panneau « accès par invitation » des pages d'observation publiques.
  *
@@ -16,8 +33,18 @@ export type AccessGateText = {
  * personnel (`/share/<JETON>`). Quiconque atteint `/observe` ou `/observe/[id]`
  * sans jeton valide (aucun cookie de portée, jeton révoqué/expiré, autre projet)
  * voit ce panneau — aucune liste publique, aucun contournement.
+ *
+ * Lorsqu'un lien d'accès EST présent mais terminé/désactivé, on propose une
+ * DEMANDE DE RÉACTIVATION (l'observateur demande, l'ADMIN décide) au lieu d'un
+ * simple refus définitif.
  */
-export default function AccessGate({ text }: { text: AccessGateText }) {
+export default function AccessGate({
+  text,
+  reactivation,
+}: {
+  text: AccessGateText
+  reactivation?: AccessGateReactivation
+}) {
   return (
     <div className="mx-auto flex w-full max-w-xl flex-1 flex-col items-center justify-center px-4 py-16 text-center sm:px-6">
       <span className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gold-500/10 text-gold-700 ring-1 ring-gold-500/20 dark:bg-gold-400/10 dark:text-gold-300 dark:ring-gold-500/20">
@@ -28,9 +55,21 @@ export default function AccessGate({ text }: { text: AccessGateText }) {
         {text.title}
       </h1>
       <p className="mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">{text.body}</p>
-      <p className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-gold-700 dark:text-gold-400">
-        {text.contactHint}
-      </p>
+
+      {reactivation ? (
+        <div className="mt-6 w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 text-left dark:border-white/10 dark:bg-[#161b22]">
+          <ReactivationRequestButton
+            projectId={reactivation.projectId}
+            locale={reactivation.locale}
+            initiallyPending={reactivation.initiallyPending}
+            text={reactivation.text}
+          />
+        </div>
+      ) : (
+        <p className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-gold-700 dark:text-gold-400">
+          {text.contactHint}
+        </p>
+      )}
 
       <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
         <Link
