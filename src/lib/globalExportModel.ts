@@ -88,6 +88,12 @@ export type GlobalExportPoint = {
 
 /** Ligne d'observation brute (champs réellement persistés uniquement). */
 export type GlobalExportRow = {
+  /**
+   * Identifiant de la ligne d'observation. Optionnel (les tests et certains appelants
+   * historiques n'en ont pas besoin) ; renseigné par la source analytique serveur, il
+   * permet l'affichage sécurisé de l'image via `/api/captures/<id>/image`.
+   */
+  id?: string
   userId: string
   username: string | null
   email: string | null
