@@ -4,6 +4,7 @@ import { CheckCircle2, EyeOff, Film, Hourglass, ShieldCheck } from 'lucide-react
 import {
   getBlindProject,
   getObserverPartStates,
+  getObserverSessionCaptures,
   getObserverSessionRecap,
   type ObserverSessionRecapResult,
 } from '@/app/actions/observationActions'
@@ -146,6 +147,10 @@ export default async function ObserveProjectPage({ params }: PageProps) {
   const submittedPartKeys = partStates.ok
     ? partStates.parts.filter((part) => part.submitted).map((part) => part.key)
     : []
+  // Captures déjà persistées de la session (reprise / réactivation) : l'observateur
+  // retrouve exactement où il s'était arrêté au lieu de repartir de zéro.
+  const sessionCaptures = await getObserverSessionCaptures(projectId)
+  const initialSessionCaptures = sessionCaptures.ok ? sessionCaptures.captures : []
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
       <header className="mb-6">
@@ -204,6 +209,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         initialRunId={gate.runId}
         singleShot
         submittedPartKeys={submittedPartKeys}
+        initialSessionCaptures={initialSessionCaptures}
         backHref={`/observe/${project.id}`}
         t={{
           annotator: d.annotator,

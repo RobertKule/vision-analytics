@@ -90,6 +90,11 @@ import {
   saveStoredDraft,
   type StoredObservationDraft,
 } from '@/lib/draftStore'
+import {
+  buildRestoredSyncStates,
+  mapPersistedCaptureToRecord,
+  type PersistedSessionCapture,
+} from '@/lib/sessionRestore'
 
 /**
  * Marqueur (cercle d'intérêt) dessiné sur l'image.
@@ -150,6 +155,12 @@ type VideoAnnotatorProps = {
    * parties restent ouvertes. (Source : `getObserverPartStates` côté serveur.)
    */
   submittedPartKeys?: string[]
+  /**
+   * Captures déjà persistées de la session (reprise / réactivation). L'observateur
+   * retrouve exactement où il s'était arrêté au lieu de repartir de zéro.
+   * (Source : `getObserverSessionCaptures` côté serveur.)
+   */
+  initialSessionCaptures?: PersistedSessionCapture[]
 }
 
 /**
@@ -336,6 +347,7 @@ export default function VideoAnnotator({
   initialRunId,
   singleShot,
   submittedPartKeys,
+  initialSessionCaptures,
 }: VideoAnnotatorProps) {
   const { resolvedTheme } = useTheme()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -440,7 +452,13 @@ export default function VideoAnnotator({
   const [isPlaying, setIsPlaying] = useState(false)
   const [annotations, setAnnotations] = useState<AnnotationCircle[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [observations, setObservations] = useState<CaptureRecord[]>([])
+  // ——— Restauration de session (reprise / réactivation) ———
+  // Les captures déjà persistées côté serveur sont rechargées au montage : elles
+  // réapparaissent dans le carrousel, marquées « déjà synchronisées » (jamais
+  // re-téléversées). L'observateur reprend exactement où il s'était arrêté.
+  const [observations, setObservations] = useState<CaptureRecord[]>(() =>
+    (initialSessionCaptures ?? []).map(mapPersistedCaptureToRecord),
+  )
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   /**
@@ -455,7 +473,9 @@ export default function VideoAnnotator({
   /** Jeton de session logique, stable pour toute la durée du brouillon (reprises incluses). */
   const [runId, setRunId] = useState<string>(() => initialRunId?.trim() || newSessionToken())
   /** État de synchronisation par capture (pending → syncing → synced | failed). */
-  const [syncStates, setSyncStates] = useState<CaptureSyncMap>({})
+  const [syncStates, setSyncStates] = useState<CaptureSyncMap>(() =>
+    buildRestoredSyncStates(initialSessionCaptures ?? []),
+  )
   /** Identifiants des captures dont le condensé WebP est encore en cours de compression. */
   const [compressingIds, setCompressingIds] = useState<Record<string, true>>({})
 
@@ -531,8 +551,8 @@ export default function VideoAnnotator({
   // dépendre du cycle de rendu React (les `await` séparent une mise à jour d'état de
   // son commit). La file est sérialisée par une chaîne de promesses : un seul passage
   // (envoi d'une capture puis vidage des suppressions serveur) tourne à la fois.
-  const syncStatesRef = useRef<CaptureSyncMap>({})
-  const observationsRef = useRef<CaptureRecord[]>([])
+  const syncStatesRef = useRef<CaptureSyncMap>(buildRestoredSyncStates(initialSessionCaptures ?? []))
+  const observationsRef = useRef<CaptureRecord[]>((initialSessionCaptures ?? []).map(mapPersistedCaptureToRecord))
   const runIdRef = useRef<string>(runId)
   const observerIdentifierRef = useRef<string>(observerIdentifier)
   const resumeDraftRef = useRef<StoredObservationDraft | null>(null)
