@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
 import { deleteDriveFile, resolveCaptureTargetFolder, uploadCaptureImage } from '@/lib/drive'
 import { driveFileIdFromReference } from '@/lib/driveRef'
+import { captureImageEndpoint } from '@/lib/captureImageAccess'
 import { buildCaptureFileBaseName, observerDisplayLabel } from '@/lib/driveLayout'
 import { classifySaveError, saveErrorMessage, type SaveErrorCode } from '@/lib/saveErrors'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
@@ -13,6 +14,18 @@ import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import type { BlindProjectDto, BlindVideoDto, SubmitObservationsInput, SubmissionResultDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 import { completeObserverToken, resolveObserverGate } from '@/lib/observerAccess'
+import { inspectCurrentSession } from '@/lib/sessionGuard'
+import { sessionCheckError } from '@/lib/sessionCheck'
+import { videoDisplayName } from '@/lib/exportHelpers'
+import { computeTypeCompletion } from '@/lib/captureCompletion'
+import {
+  GENERIC_PART_KEY,
+  computePartSummaries,
+  computeRequiredTypes,
+  partKeyOf,
+  type PartDescriptor,
+  type PartSummary,
+} from '@/lib/observerPart'
 
 /**
  * Tag de cache partagé pour les lectures « observer » (liste + détail des
@@ -230,6 +243,7 @@ type ObserverWriteAccess =
 async function resolveObserverWriteAccess(
   projectId: string,
   getMessage: (en: string, fr: string) => string,
+  locale: Locale = defaultLocale,
 ): Promise<ObserverWriteAccess> {
   // Session observateur par lien (/share) : la portée signée `va_observer` est recoupée
   // contre la base par `resolveObserverGate`. ACTIVE → écriture (`completed=false`) ;
@@ -278,12 +292,20 @@ async function resolveObserverWriteAccess(
     }
   }
 
+  // ——— VÉRIFICATION DE SESSION (Partie D) ———
+  // Aucune portée observateur ni compte connecté utilisable : on distingue
+  // explicitement une session EXPIRÉE d'une session ABSENTE, avec le vocabulaire
+  // produit imposé. Aucun détail technique (jeton, cookie, cause interne).
+  const inspected = await inspectCurrentSession()
+  if (inspected.state === 'expired') {
+    return {
+      ok: false,
+      error: sessionCheckError('expired', locale),
+    }
+  }
   return {
     ok: false,
-    error: getMessage(
-      'A valid observer access link is required to record observations on this project. Contact the project administrator.',
-      'Un lien d’accès observateur valide est requis pour enregistrer des observations sur ce projet. Contactez l’administrateur du projet.',
-    ),
+    error: sessionCheckError('missing', locale),
   }
 }
 
@@ -380,7 +402,7 @@ export async function submitObservations(
     // jeton non révoqué ni expiré), soit un profil est connecté (espace /experience).
     // Sans l'un des deux, aucune soumission n'est acceptée — un identifiant client
     // arbitraire ne peut ni attribuer d'observations à autrui, ni contourner le lien.
-    const access = await resolveObserverWriteAccess(projectId, msg)
+    const access = await resolveObserverWriteAccess(projectId, msg, locale)
     if (!access.ok) {
       return { ok: false, error: access.error }
     }
@@ -750,13 +772,25 @@ export async function saveObservationCapture(
       return failValidation(msg('Invalid image format.', 'Format d’image invalide.'))
     }
 
-    const access = await resolveObserverWriteAccess(projectId, msg)
+    const access = await resolveObserverWriteAccess(projectId, msg, locale)
     if (!access.ok) return failValidation(access.error)
     if (access.kind === 'token' && access.completed) {
       return failValidation(readonlySessionMessage(msg))
     }
     const identity = { user: access.user, observerLabel: access.observerLabel }
     if (access.kind === 'token') runId = access.runId
+
+    // ——— VERROUILLAGE D'UNE PARTIE ENVOYÉE ———
+    // Une partie SUBMITTED refuse toute NOUVELLE capture (Partie 6 : verrouillage
+    // serveur, pas seulement interface). Les autres parties restent ouvertes.
+    if (access.kind === 'token' && (await isPartLocked(access.tokenId, videoId))) {
+      return failValidation(
+        msg(
+          'This part has already been submitted and is read-only.',
+          'Cette partie a déjà été envoyée et est en lecture seule.',
+        ),
+      )
+    }
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
@@ -977,7 +1011,7 @@ export async function deleteSavedObservation(
       return { ok: false, error: msg('Missing capture key.', 'Clé de capture manquante.') }
     }
 
-    const access = await resolveObserverWriteAccess(projectId, msg)
+    const access = await resolveObserverWriteAccess(projectId, msg, locale)
     if (!access.ok) return { ok: false, error: access.error }
     if (access.kind === 'token' && access.completed) {
       return { ok: false, error: readonlySessionMessage(msg) }
@@ -1041,6 +1075,443 @@ export async function deleteSavedObservation(
   }
 }
 
+export type ReplaceObservationCaptureInput = {
+  projectId: string
+  observerIdentifier: string
+  /** Clé client de la capture modifiée — INCHANGÉE (même annotation, même ligne). */
+  clientKey: string
+  /** Nouvelle image annotée (mêmes frame et contexte, cercle repositionné). */
+  imageDataUrl: string
+  locale?: Locale
+}
+
+export type ReplaceObservationCaptureResult =
+  | { ok: true; observationId: string }
+  | { ok: false; error: string }
+
+/**
+ * MODE « MODIFIER » (Partie F) — remplace l'IMAGE d'une capture déjà enregistrée
+ * sans jamais créer une nouvelle annotation.
+ *
+ * L'identité analytique est intégralement conservée : même ligne, même `id`, même
+ * `clientKey`, même horodatage, même type d'observation, même passe vidéo, même
+ * session. SEULES les coordonnées du cercle changent — donc uniquement l'image.
+ * Les statistiques ne bougent pas d'un iota : aucune détection n'est créée ni perdue.
+ *
+ * ORDRE SÛR : la nouvelle image est téléversée, la ligne est mise à jour, PUIS
+ * l'ancien fichier Drive est supprimé (best effort). Un échec de suppression ne
+ * casse jamais la modification — il ne laisse qu'un fichier orphelin signalé.
+ * Une capture déjà CERTIFIÉE (session finalisée) est refusée : l'historique
+ * scientifique n'est jamais réécrit.
+ */
+export async function replaceObservationCaptureImage(
+  input: ReplaceObservationCaptureInput,
+): Promise<ReplaceObservationCaptureResult> {
+  const locale: Locale = input?.locale === 'en' ? 'en' : defaultLocale
+  const msg = (en: string, fr: string) => (locale === 'en' ? en : fr)
+
+  try {
+    const projectId = (input?.projectId ?? '').trim()
+    const clientKey = (input?.clientKey ?? '').trim().slice(0, 200)
+    const imageDataUrl = input?.imageDataUrl
+    if (!projectId) {
+      return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
+    }
+    if (!clientKey) {
+      return { ok: false, error: msg('Missing capture key.', 'Clé de capture manquante.') }
+    }
+    if (!isValidBase64Image(imageDataUrl)) {
+      return { ok: false, error: msg('Invalid image format.', 'Format d’image invalide.') }
+    }
+
+    // Vérification de session AVANT toute modification (Partie D).
+    const access = await resolveObserverWriteAccess(projectId, msg, locale)
+    if (!access.ok) return { ok: false, error: access.error }
+    if (access.kind === 'token' && access.completed) {
+      return { ok: false, error: readonlySessionMessage(msg) }
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, title: true, isArchived: true },
+    })
+    if (!project) {
+      return { ok: false, error: msg('Project not found.', 'Projet introuvable.') }
+    }
+    if (project.isArchived) {
+      return {
+        ok: false,
+        error: msg(
+          'This project is archived. Submissions are closed.',
+          'Ce projet est archivé. Les soumissions sont clôturées.',
+        ),
+      }
+    }
+
+    const row = await prisma.observation.findFirst({
+      where: { projectId, clientKey, userId: access.user.id },
+      select: {
+        id: true,
+        isVerified: true,
+        driveFileId: true,
+        imageUrl: true,
+        observationType: true,
+        timestampTotal: true,
+      },
+    })
+    if (!row) {
+      return { ok: false, error: msg('Capture not found.', 'Capture introuvable.') }
+    }
+    if (row.isVerified) {
+      return {
+        ok: false,
+        error: msg(
+          'This capture is already part of a finalized session and cannot be modified.',
+          'Cette capture fait déjà partie d’une session finalisée ; elle ne peut plus être modifiée.',
+        ),
+      }
+    }
+
+    // Nouveau fichier déposé au même endroit (dossier {Projet}/{Type} inchangé).
+    let uploaded
+    try {
+      const parentFolderId = await resolveCaptureTargetFolder({
+        projectTitle: project.title,
+        typeName: row.observationType,
+      })
+      uploaded = await uploadCaptureImage(imageDataUrl, {
+        fileName: buildCaptureFileBaseName(access.observerLabel, row.timestampTotal),
+        parentFolderId,
+      })
+    } catch (error) {
+      const { code } = classifySaveError(error)
+      console.error(`[CaptureEdit] UPLOAD_GOOGLE_DRIVE_ERROR code=${code}`)
+      return { ok: false, error: saveErrorMessage(code, locale) }
+    }
+
+    const previousFileId =
+      driveFileIdFromReference(row.driveFileId) ?? driveFileIdFromReference(row.imageUrl)
+
+    try {
+      await prisma.observation.update({
+        where: { id: row.id },
+        data: { imageUrl: uploaded.imageUrl, driveFileId: uploaded.driveFileId },
+      })
+    } catch (error) {
+      // La ligne n'a pas bougé : on retire le fichier fraîchement créé (aucun orphelin).
+      try {
+        await deleteDriveFile(uploaded.driveFileId)
+      } catch (cleanupError) {
+        console.error('[CaptureEdit] CLEANUP_FAILED — nouveau fichier non supprimé :', cleanupError)
+      }
+      const { code } = classifySaveError(error)
+      console.error(`[CaptureEdit] DATABASE_ERROR code=${code}`)
+      return { ok: false, error: saveErrorMessage(code, locale) }
+    }
+
+    // L'ancien fichier n'est plus référencé : suppression best effort.
+    if (previousFileId && previousFileId !== uploaded.driveFileId) {
+      try {
+        await deleteDriveFile(previousFileId)
+      } catch (error) {
+        console.error('[CaptureEdit] Ancien fichier Drive non supprimé (orphelin signalé) :', error)
+      }
+    }
+
+    await recordAudit({
+      userId: access.user.id,
+      action: AUDIT_ACTIONS.imageUploaded,
+      entityType: 'observation',
+      entityId: row.id,
+      metadata: { projectId, clientKey, reason: 'edited-position' },
+    })
+
+    return { ok: true, observationId: row.id }
+  } catch (error) {
+    console.error('Erreur lors de la modification de la capture :', error)
+    return {
+      ok: false,
+      error: msg(
+        'The capture could not be updated right now. Please retry.',
+        'La capture n’a pas pu être modifiée pour le moment. Réessayez.',
+      ),
+    }
+  }
+}
+
+// ————————————————————————————————————————————————————————————
+// ENVOI PAR PARTIE (Partie 1–8) — « Envoyer cette partie » ≠ « terminer la session ».
+// ————————————————————————————————————————————————————————————
+
+/**
+ * Certifie un ensemble de captures ENREGISTRÉES mais non finalisées : rattache
+ * chaque horodatage à sa fenêtre de validation confidentielle (point réel / point
+ * fantôme) puis passe `isVerified=true`. Aucune image n'est re-téléversée, aucune
+ * capture recréée — opération légère et idempotente par id.
+ */
+async function certifyPendingObservations(
+  projectId: string,
+  rows: Array<{ id: string; videoId: string | null; timestampTotal: number }>,
+): Promise<number> {
+  const validationPoints = await prisma.projectPoint.findMany({
+    where: { projectId },
+    select: { id: true, videoId: true, trameDebut: true, trameFin: true },
+  })
+
+  const groups = new Map<
+    string,
+    { pointId: string | null; isGhostPoint: boolean; ids: string[] }
+  >()
+  for (const row of rows) {
+    const scopedPoints =
+      row.videoId === null
+        ? validationPoints.filter((point) => point.videoId === null)
+        : validationPoints.filter((point) => point.videoId === row.videoId)
+    const matchedPoint = scopedPoints.find(
+      (point) => row.timestampTotal >= point.trameDebut && row.timestampTotal <= point.trameFin,
+    )
+    const pointId = matchedPoint ? matchedPoint.id : null
+    const isGhostPoint = !matchedPoint
+    const key = `${pointId ?? '__none__'}|${isGhostPoint ? 'g' : 'v'}`
+    const group = groups.get(key) ?? { pointId, isGhostPoint, ids: [] }
+    group.ids.push(row.id)
+    groups.set(key, group)
+  }
+
+  for (const group of groups.values()) {
+    await prisma.observation.updateMany({
+      where: { id: { in: group.ids } },
+      data: {
+        pointId: group.pointId,
+        isGhostPoint: group.isGhostPoint,
+        isVerified: true,
+      },
+    })
+  }
+  return rows.length
+}
+
+/**
+ * Marque une partie SUBMITTED (upsert). La clé d'unicité est (tokenId, videoId) ;
+ * la passe générique héritée est représentée par `videoId = null`. Appliqué sans
+ * contrainte SQL unique (NULL n'est pas distinct en index) : un findFirst + create
+ * ou update garantit l'unicité dans la transaction d'appel.
+ */
+async function upsertPartSubmitted(tokenId: string, videoId: string | null): Promise<void> {
+  const existing = await prisma.observerPartSubmission.findFirst({
+    where: { tokenId, videoId },
+    select: { id: true },
+  })
+  const data = { status: 'SUBMITTED' as const, submittedAt: new Date() }
+  if (existing) {
+    await prisma.observerPartSubmission.update({ where: { id: existing.id }, data })
+  } else {
+    await prisma.observerPartSubmission.create({
+      data: { tokenId, videoId, ...data },
+    })
+  }
+}
+
+/** Vrai si la partie (token, videoId) est déjà envoyée → verrouillée. */
+async function isPartLocked(tokenId: string, videoId: string | null): Promise<boolean> {
+  const part = await prisma.observerPartSubmission.findFirst({
+    where: { tokenId, videoId },
+    select: { status: true },
+  })
+  return part?.status === 'SUBMITTED'
+}
+
+export type SubmitObserverPartInput = {
+  projectId: string
+  /** Passe vidéo cible ; null / '' = passe générique héritée. */
+  videoId?: string | null
+  locale?: Locale
+}
+
+export type SubmitObserverPartResult =
+  | { ok: true; certifiedCount: number; alreadySubmitted: boolean }
+  | { ok: false; error: string }
+
+/**
+ * « ENVOYER CETTE PARTIE » — finalise UNIQUEMENT la partie visée SANS clôturer la
+ * session globale.
+ *
+ *  - vérifie la session observateur (jeton ACTIVE) et le projet (section 9) ;
+ *  - certifie les captures ENREGISTRÉES de CETTE partie (matching fenêtres) ;
+ *  - marque la partie SUBMITTED (verrouillée) — le jeton reste ACTIVE ;
+ *  - les autres parties restent ouvertes et modifiables.
+ *
+ * Une partie déjà envoyée est idempotente (elle re-certifie les captures en attente
+ * restantes de la partie, sans jamais toucher aux données déjà certifiées).
+ */
+export async function submitObserverPart(
+  input: SubmitObserverPartInput,
+): Promise<SubmitObserverPartResult> {
+  const locale: Locale = input?.locale === 'en' ? 'en' : defaultLocale
+  const msg = (en: string, fr: string) => (locale === 'en' ? en : fr)
+
+  try {
+    const projectId = (input?.projectId ?? '').trim()
+    if (!projectId) {
+      return { ok: false, error: msg('Missing project identifier.', 'Identifiant de projet manquant.') }
+    }
+    const rawVideoId =
+      typeof input?.videoId === 'string' && input.videoId.trim() !== '' ? input.videoId.trim() : null
+
+    // ——— Vérification de session + projet (section 9) ———
+    const gate = await resolveObserverGate(projectId)
+    if (!gate.ok) {
+      return { ok: false, error: sessionCheckError('missing', locale) }
+    }
+    if (gate.completed) {
+      return { ok: false, error: readonlySessionMessage(msg) }
+    }
+
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { id: true, isArchived: true },
+    })
+    if (!project) {
+      return { ok: false, error: msg('Project not found.', 'Projet introuvable.') }
+    }
+    if (project.isArchived) {
+      return {
+        ok: false,
+        error: msg(
+          'This project is archived. Submissions are closed.',
+          'Ce projet est archivé. Les soumissions sont clôturées.',
+        ),
+      }
+    }
+
+    // La passe cible doit appartenir à CE projet (anti-tampering par URL).
+    if (rawVideoId) {
+      const video = await prisma.video.findUnique({
+        where: { id: rawVideoId },
+        select: { projectId: true },
+      })
+      if (!video || video.projectId !== projectId) {
+        return { ok: false, error: msg('Unknown video pass.', 'Passe vidéo inconnue.') }
+      }
+    }
+
+    // Déjà envoyée ? Idempotence : re-certifie seulement ce qui resterait en attente.
+    const alreadySubmitted = await isPartLocked(gate.tokenId, rawVideoId)
+
+    const pending = await prisma.observation.findMany({
+      where: {
+        projectId,
+        userId: gate.userId,
+        sessionRunId: gate.runId,
+        videoId: rawVideoId,
+        isVerified: false,
+      },
+      select: { id: true, videoId: true, timestampTotal: true },
+    })
+
+    const certifiedCount = pending.length > 0 ? await certifyPendingObservations(projectId, pending) : 0
+
+    await upsertPartSubmitted(gate.tokenId, rawVideoId)
+
+    await recordAudit({
+      userId: gate.userId,
+      action: AUDIT_ACTIONS.observerPartSubmitted,
+      entityType: 'share',
+      entityId: gate.tokenId,
+      metadata: {
+        projectId,
+        videoId: rawVideoId ?? null,
+        certifiedCount,
+        alreadySubmitted,
+      },
+    })
+
+    updateTag(BLIND_PROJECTS_TAG)
+    revalidatePath(`/observe/${projectId}`)
+    revalidatePath('/admin/projects')
+
+    return { ok: true, certifiedCount, alreadySubmitted }
+  } catch (error) {
+    console.error('Erreur lors de l’envoi de la partie :', error)
+    return {
+      ok: false,
+      error: msg(
+        'This part could not be sent right now. Please retry.',
+        'Impossible d’envoyer cette partie. Veuillez réessayer.',
+      ),
+    }
+  }
+}
+
+/** Clés des parties d'un projet, ordre stable (passe générique en dernier recours). */
+function projectPartDescriptors(project: {
+  videos: Array<{ id: string; name: string | null; typeLabel: string | null; orderIndex: number; source: string }>
+}): PartDescriptor[] {
+  if (project.videos.length > 0) {
+    return project.videos.map((video) => ({
+      key: video.id,
+      label: videoDisplayName(video),
+    }))
+  }
+  return [{ key: GENERIC_PART_KEY, label: 'Passe générique' }]
+}
+
+export type ObserverPartStatesResult =
+  | { ok: true; completed: boolean; parts: PartSummary[] }
+  | { ok: false }
+
+/**
+ * État PAR PARTIE de la session courante (reprise). Lecture pure : n'écrit rien.
+ * Le jeton ACTIVE reste résumable ; une partie SUBMITTED est verrouillée, les autres
+ * ouvertes ; une session COMPLETED renvoie `completed=true` (lecture seule).
+ */
+export async function getObserverPartStates(
+  projectId: string,
+): Promise<ObserverPartStatesResult> {
+  const gate = await resolveObserverGate(projectId)
+  if (!gate.ok) return { ok: false }
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: {
+      id: true,
+      observationTypes: true,
+      videos: {
+        orderBy: { orderIndex: 'asc' },
+        select: { id: true, name: true, typeLabel: true, orderIndex: true, source: true },
+      },
+    },
+  })
+  if (!project) return { ok: false }
+
+  const [submissions, observations] = await Promise.all([
+    prisma.observerPartSubmission.findMany({
+      where: { tokenId: gate.tokenId },
+      select: { videoId: true, status: true },
+    }),
+    prisma.observation.groupBy({
+      by: ['videoId'],
+      where: { projectId, userId: gate.userId, sessionRunId: gate.runId },
+      _count: { _all: true },
+    }),
+  ])
+
+  const submittedKeys = new Set<string>()
+  for (const submission of submissions) {
+    if (submission.status === 'SUBMITTED') submittedKeys.add(partKeyOf(submission.videoId))
+  }
+
+  const capturesByKey: Record<string, number> = {}
+  for (const group of observations) {
+    capturesByKey[partKeyOf(group.videoId)] = group._count._all
+  }
+
+  const passes = projectPartDescriptors(project)
+  const parts = computePartSummaries({ passes, submittedKeys, capturesByKey })
+
+  return { ok: true, completed: gate.completed, parts }
+}
+
 export type FinalizeObservationSessionInput = {
   projectId: string
   observerIdentifier: string
@@ -1070,7 +1541,7 @@ export async function finalizeObservationSession(
     }
 
     // Identité autorisée : session observateur (lien /share) ou profil connecté.
-    const access = await resolveObserverWriteAccess(projectId, msg)
+    const access = await resolveObserverWriteAccess(projectId, msg, locale)
     if (!access.ok) return { ok: false, error: access.error }
     const identity = { user: access.user }
     // La session logique d'un observateur à jeton est IMPOSÉE par le serveur
@@ -1101,7 +1572,15 @@ export async function finalizeObservationSession(
 
     const project = await prisma.project.findUnique({
       where: { id: projectId },
-      select: { id: true, isArchived: true },
+      select: {
+        id: true,
+        isArchived: true,
+        observationTypes: true,
+        videos: {
+          orderBy: { orderIndex: 'asc' },
+          select: { id: true, name: true, typeLabel: true, orderIndex: true, source: true },
+        },
+      },
     })
     if (!project) {
       return { ok: false, error: msg('Project not found.', 'Projet introuvable.') }
@@ -1142,43 +1621,47 @@ export async function finalizeObservationSession(
       }
     }
 
-    // Fenêtres de validation confidentielles (jamais transmises à l'observateur).
-    const validationPoints = await prisma.projectPoint.findMany({
-      where: { projectId },
-      select: { id: true, videoId: true, trameDebut: true, trameFin: true },
-    })
-
-    // Regroupe les écritures par cible (pointId + statut fantôme) pour limiter le
-    // nombre de requêtes : opération légère, même pour une session chargée.
-    const groups = new Map<
-      string,
-      { pointId: string | null; isGhostPoint: boolean; ids: string[] }
-    >()
-    for (const row of pending) {
-      const scopedPoints =
-        row.videoId === null
-          ? validationPoints.filter((point) => point.videoId === null)
-          : validationPoints.filter((point) => point.videoId === row.videoId)
-      const matchedPoint = scopedPoints.find(
-        (point) => row.timestampTotal >= point.trameDebut && row.timestampTotal <= point.trameFin,
+    // ——— « Envoyer tout » (session observateur à jeton) : refus si incomplet ———
+    // Avant de clôturer, on vérifie que toutes les TYPES requis sont couverts par
+    // les observations de la session (certifiées + en attente). Sinon la session
+    // reste ACTIVE et on indique ce qui manque (Partie 5).
+    if (access.kind === 'token') {
+      const allSessionObservations = await prisma.observation.findMany({
+        where: { projectId, userId: identity.user.id, sessionRunId: runId },
+        select: { observationType: true },
+      })
+      const requiredTypes = computeRequiredTypes({
+        passes: project.videos.map((video) => ({ typeLabel: video.typeLabel })),
+        observationTypes: project.observationTypes,
+      })
+      const coverage = computeTypeCompletion(
+        requiredTypes,
+        allSessionObservations.map((observation) => ({
+          observationType: observation.observationType,
+        })),
       )
-      const pointId = matchedPoint ? matchedPoint.id : null
-      const isGhostPoint = !matchedPoint
-      const key = `${pointId ?? '__none__'}|${isGhostPoint ? 'g' : 'v'}`
-      const group = groups.get(key) ?? { pointId, isGhostPoint, ids: [] }
-      group.ids.push(row.id)
-      groups.set(key, group)
+      if (!coverage.allRequiredCovered) {
+        const remaining = coverage.pendingTypes.join(', ')
+        return {
+          ok: false,
+          error: msg(
+            `Some observations are still incomplete. ${coverage.pendingCount} type(s) remain before the session can be submitted: ${remaining}.`,
+            `Certaines observations sont encore incomplètes. Il reste ${coverage.pendingCount} type(s) à terminer avant de pouvoir envoyer l'ensemble : ${remaining}.`,
+          ),
+        }
+      }
     }
 
-    for (const group of groups.values()) {
-      await prisma.observation.updateMany({
-        where: { id: { in: group.ids } },
-        data: {
-          pointId: group.pointId,
-          isGhostPoint: group.isGhostPoint,
-          isVerified: true,
-        },
-      })
+    // Certification légère (fenêtres confidentielles + isVerified), sans re-téléversement.
+    await certifyPendingObservations(projectId, pending)
+
+    // « Envoyer tout » : toutes les parties du projet deviennent SUBMITTED, puis la
+    // session est clôturée (jeton COMPLETED → lecture seule).
+    if (access.kind === 'token') {
+      for (const descriptor of projectPartDescriptors(project)) {
+        const videoId = descriptor.key === GENERIC_PART_KEY ? null : descriptor.key
+        await upsertPartSubmitted(access.tokenId, videoId)
+      }
     }
 
     await recordAudit({
@@ -1223,7 +1706,12 @@ export async function finalizeObservationSession(
 
 export type ObserverSessionRecapRow = {
   id: string
-  imageUrl: string
+  /**
+   * Adresse d'affichage SÉCURISÉE de la capture (`/api/captures/<id>/image`).
+   * L'observateur ne reçoit jamais de lien Google Drive : les fichiers restent
+   * privés et l'endpoint re-vérifie sa portée d'accès à chaque requête.
+   */
+  imageEndpoint: string
   timestampTotal: number
   observationType: string | null
   createdAt: string
@@ -1250,7 +1738,6 @@ export async function getObserverSessionRecap(
     where: { projectId, userId: gate.userId, isVerified: true },
     select: {
       id: true,
-      imageUrl: true,
       timestampTotal: true,
       observationType: true,
       createdAt: true,
@@ -1260,7 +1747,7 @@ export async function getObserverSessionRecap(
 
   const rows: ObserverSessionRecapRow[] = captures.map((capture) => ({
     id: capture.id,
-    imageUrl: capture.imageUrl,
+    imageEndpoint: captureImageEndpoint(capture.id),
     timestampTotal: capture.timestampTotal,
     observationType: capture.observationType,
     createdAt: capture.createdAt.toISOString(),
