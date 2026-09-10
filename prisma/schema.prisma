@@ -76,6 +76,7 @@ model User {
   reactivationDecisions ObserverReactivationRequest[] @relation("ReactivationDecisions")
   auditLogs     AuditLog[]
   notifications Notification[]
+  communications Communication[] @relation("CommunicationAuthor")
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @default(now()) @updatedAt
 }
@@ -98,6 +99,27 @@ model Notification {
 
   @@index([userId, readAt])
   @@index([userId])
+}
+
+/// Historique d'une CAMPAGNE de communication email (espace ADMIN).
+///
+/// Un envoi groupé = N emails INDIVIDUELS (un par destinataire). On ne conserve que
+/// le RÉSUMÉ (auteur, objet, template, compteurs) — jamais le contenu ni les adresses
+/// des destinataires (confidentialité, pas de données sensibles stockées).
+model Communication {
+  id             String   @id @default(uuid())
+  authorId       String?
+  author         User?    @relation("CommunicationAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  subject        String
+  /// Identifiant du template utilisé (`communicationTemplates.ts`) ; null = message libre.
+  templateId     String?
+  recipientCount Int
+  successCount   Int
+  failureCount   Int
+  createdAt      DateTime @default(now())
+
+  @@index([authorId])
+  @@index([createdAt])
 }
 
 /// Journal d'audit (append-only) : trace « qui a fait quoi, sur quelle ressource, quand ».

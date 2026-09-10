@@ -11,6 +11,7 @@ import {
   FolderKanban,
   History,
   LayoutDashboard,
+  Mail,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -122,6 +123,13 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
       label: t.users,
       href: '/admin/users',
       icon: Users,
+      visible: role === 'ADMIN',
+    },
+    {
+      key: 'communication',
+      label: t.communication,
+      href: '/admin/communication',
+      icon: Mail,
       visible: role === 'ADMIN',
     },
     {

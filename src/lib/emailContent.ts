@@ -157,3 +157,32 @@ export function emailHtml(kind: EmailKind, context: EmailContext = {}): string {
     + `<p style="margin-top:24px;color:#4A4E57;font-size:13px;">${signature()}</p>`
     + `</div>`
 }
+
+/** Échappe un texte avant insertion dans un email HTML (neutralise tout balisage). */
+function escapeHtml(value: string): string {
+  return (value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/**
+ * Rend un corps TEXTE libre en email HTML ONA Field : texte échappé, paragraphes
+ * (ligne vide) et retours à la ligne, signature commune. Aucun lien n'est fabriqué
+ * automatiquement — un message de communication ne donne aucun accès.
+ */
+export function renderPlainTextEmailHtml(plainBody: string): string {
+  const escaped = escapeHtml(plainBody)
+  const paragraphs = escaped
+    .split(/\n\s*\n/)
+    .filter((block) => block.trim().length > 0)
+    .map((block) => `<p style="margin:0 0 16px;">${block.replace(/\n/g, '<br/>')}</p>`)
+    .join('')
+
+  return `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px;margin:0 auto;color:#121417;">`
+    + `<p style="font-size:13px;font-weight:700;letter-spacing:0.08em;color:#BD8F2E;">ONA Field</p>`
+    + paragraphs
+    + `<p style="margin-top:24px;color:#4A4E57;font-size:13px;">${signature()}</p>`
+    + `</div>`
+}
