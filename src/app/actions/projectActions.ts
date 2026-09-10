@@ -6,12 +6,18 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
 import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
 import { deleteManyDriveFiles } from '@/lib/drive'
+import { captureImageEndpoint } from '@/lib/captureImageAccess'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import {
   resolveDuplicateName,
   resolveDuplicateTypeLabel,
 } from '@/lib/videoCopy'
 import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
+import { ANALYTICS_TRIGGERS, type AnalyticsTrigger } from '@/lib/analyticsVersioning'
+import {
+  captureAnalyticsSnapshot,
+  recordConfigChangeVersions,
+} from '@/lib/analyticsVersionStore'
 import type {
   ActionResult,
   AdminProjectDetailDto,
@@ -22,6 +28,35 @@ import type {
 
 /** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
 const BLIND_PROJECTS_TAG = 'blind-projects'
+
+/**
+ * VERSIONNAGE DES ANALYSES (Partie A) — encadre une modification de configuration.
+ *
+ * Toute mutation susceptible de changer le NOMBRE DE POSSIBILITÉS D'OBSERVATION
+ * (fenêtres/points, types, passes vidéo) est encadrée par ce helper : l'état
+ * analytique d'AVANT est figé, la mutation s'applique, puis l'état d'APRÈS est figé.
+ * Les observations déjà réalisées ne sont jamais supprimées ni recalculées — seul le
+ * dénominateur suit la nouvelle configuration.
+ *
+ * Les mutations SANS effet analytique (titre, description, benchmark…) n'appellent
+ * pas ce helper ; et si le périmètre s'avère inchangé, aucune version n'est écrite.
+ */
+async function versionedConfigChange<T>(
+  projectId: string,
+  trigger: AnalyticsTrigger,
+  mutate: () => Promise<T>,
+): Promise<T> {
+  const before = await captureAnalyticsSnapshot(projectId)
+  const result = await mutate()
+  const admin = await getCurrentAdmin()
+  await recordConfigChangeVersions({
+    projectId,
+    before,
+    trigger,
+    actorId: admin?.uid ?? null,
+  })
+  return result
+}
 
 type CreateProjectInput = {
   title: string
@@ -253,7 +288,9 @@ export async function getAdminProjectDetail(
     id: obs.id,
     timestampTotal: obs.timestampTotal,
     isGhostPoint: obs.isGhostPoint,
+    // Lien Drive conservé pour les EXPORTS ; l'affichage passe par `imageEndpoint`.
     imageUrl: obs.imageUrl,
+    imageEndpoint: captureImageEndpoint(obs.id),
     createdAt: obs.createdAt.toISOString(),
     observationType: obs.observationType,
     pointId: obs.pointId,
@@ -477,12 +514,16 @@ export async function updateProjectObservationTypes(
 
     const cleaned = sanitizeObservationTypes(observationTypes)
 
-    await prisma.$transaction(async (tx) => {
-      await tx.project.update({
-        where: { id },
-        data: { observationTypes: cleaned },
+    // Les types pilotent le regroupement analytique (probabilités par type/décalage) :
+    // leur modification est versionnée.
+    await versionedConfigChange(id, ANALYTICS_TRIGGERS.typesUpdated, async () => {
+      await prisma.$transaction(async (tx) => {
+        await tx.project.update({
+          where: { id },
+          data: { observationTypes: cleaned },
+        })
+        await normalizeVideoTypeLabels(tx, id, cleaned)
       })
-      await normalizeVideoTypeLabels(tx, id, cleaned)
     })
 
     await adminAudit({
@@ -699,10 +740,14 @@ export async function addProjectVideo(input: {
     const name = (input?.name ?? '').trim() || deriveObservationNameFromVideo(source)
 
     const existing = await prisma.video.count({ where: { projectId } })
-    const created = await prisma.video.create({
-      data: { projectId, source, typeLabel, name, orderIndex: existing },
-      select: { id: true },
-    })
+    // Une passe typée regroupe les fenêtres d'un type : le périmètre analytique
+    // peut changer ⇒ modification versionnée.
+    const created = await versionedConfigChange(projectId, ANALYTICS_TRIGGERS.videoAdded, () =>
+      prisma.video.create({
+        data: { projectId, source, typeLabel, name, orderIndex: existing },
+        select: { id: true },
+      }),
+    )
 
     await adminAudit({
       action: AUDIT_ACTIONS.videoAdded,
@@ -757,7 +802,11 @@ export async function updateProjectVideo(input: VideoPayload): Promise<ActionRes
 
     if (Object.keys(patch).length === 0) return { ok: true }
 
-    await prisma.video.update({ where: { id: videoId }, data: patch })
+    // Ré-associer une passe à un autre type déplace ses fenêtres d'un groupe
+    // analytique à l'autre ⇒ modification versionnée (aucune observation touchée).
+    await versionedConfigChange(video.project.id, ANALYTICS_TRIGGERS.videoUpdated, () =>
+      prisma.video.update({ where: { id: videoId }, data: patch }),
+    )
 
     await adminAudit({
       action: AUDIT_ACTIONS.videoUpdated,
@@ -830,31 +879,38 @@ export async function duplicateProjectVideo(input: DuplicateVideoPayload): Promi
 
     const orderIndex = await prisma.video.count({ where: { projectId: source.project.id } })
 
-    const created = await prisma.$transaction(async (tx) => {
-      const copy = await tx.video.create({
-        data: {
-          projectId: source.project.id,
-          source: source.source,
-          typeLabel,
-          name,
-          orderIndex,
-          benchmarkSeconds: source.benchmarkSeconds,
-        },
-        select: { id: true },
-      })
-      if (source.points.length > 0) {
-        await tx.projectPoint.createMany({
-          data: source.points.map((point) => ({
-            projectId: source.project.id,
-            videoId: copy.id,
-            pointName: point.pointName,
-            trameDebut: point.trameDebut,
-            trameFin: point.trameFin,
-          })),
-        })
-      }
-      return copy
-    })
+    // La copie apporte ses propres fenêtres : le nombre de possibilités
+    // d'observation change ⇒ modification versionnée.
+    const created = await versionedConfigChange(
+      source.project.id,
+      ANALYTICS_TRIGGERS.videoDuplicated,
+      () =>
+        prisma.$transaction(async (tx) => {
+          const copy = await tx.video.create({
+            data: {
+              projectId: source.project.id,
+              source: source.source,
+              typeLabel,
+              name,
+              orderIndex,
+              benchmarkSeconds: source.benchmarkSeconds,
+            },
+            select: { id: true },
+          })
+          if (source.points.length > 0) {
+            await tx.projectPoint.createMany({
+              data: source.points.map((point) => ({
+                projectId: source.project.id,
+                videoId: copy.id,
+                pointName: point.pointName,
+                trameDebut: point.trameDebut,
+                trameFin: point.trameFin,
+              })),
+            })
+          }
+          return copy
+        }),
+    )
 
     await adminAudit({
       action: AUDIT_ACTIONS.videoDuplicated,
@@ -919,9 +975,12 @@ export async function deleteProjectVideo(videoId: string): Promise<ActionResult>
       }
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.video.delete({ where: { id: videoId } })
-    })
+    // La passe (et ses fenêtres en cascade) quitte le périmètre ⇒ versionné.
+    await versionedConfigChange(video.project.id, ANALYTICS_TRIGGERS.videoRemoved, () =>
+      prisma.$transaction(async (tx) => {
+        await tx.video.delete({ where: { id: videoId } })
+      }),
+    )
 
     await adminAudit({
       action: AUDIT_ACTIONS.videoRemoved,
@@ -1058,10 +1117,22 @@ export async function addProjectPoint(input: AddProjectPointInput): Promise<Acti
       return { ok: false, error: 'Cette fenêtre chevauche un point déjà défini pour cette vidéo.' }
     }
 
-    const created = await prisma.projectPoint.create({
-      data: { projectId, videoId, pointName, trameDebut, trameFin },
-      select: { id: true },
-    })
+    // AJOUT D'UNE FENÊTRE — versionné (Partie A4) :
+    //  1. l'état analytique précédent est conservé (instantané `previous`) ;
+    //  2. la nouvelle configuration est appliquée ;
+    //  3. toutes les observations et détections valides existantes sont conservées ;
+    //  4. le nombre d'observations possibles augmente (dénominateur) ;
+    //  5. l'analyse actuelle est recalculée avec TOUTES les données valides ;
+    //  6. la nouvelle version analytique est créée (instantané `current`).
+    const created = await versionedConfigChange(
+      projectId,
+      ANALYTICS_TRIGGERS.windowAdded,
+      () =>
+        prisma.projectPoint.create({
+          data: { projectId, videoId, pointName, trameDebut, trameFin },
+  select: { id: true },
+        }),
+    )
 
     await adminAudit({
       action: AUDIT_ACTIONS.projectUpdated,
@@ -1095,7 +1166,12 @@ export async function deleteProjectPoint(pointId: string): Promise<ActionResult>
       return { ok: false, error: 'Point introuvable ou déjà supprimé.' }
     }
 
-    await prisma.projectPoint.delete({ where: { id: pointId } })
+    // Suppression d'une fenêtre : le périmètre analytique change ⇒ versionné.
+    // Les observations restent en base (aucune donnée supprimée) ; elles ne sont
+    // simplement plus rattachées à une fenêtre du périmètre courant.
+    await versionedConfigChange(point.projectId, ANALYTICS_TRIGGERS.windowRemoved, () =>
+      prisma.projectPoint.delete({ where: { id: pointId } }),
+    )
 
     await adminAudit({
       action: AUDIT_ACTIONS.projectUpdated,
