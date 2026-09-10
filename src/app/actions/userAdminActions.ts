@@ -6,6 +6,7 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
 import { hashPassword } from '@/lib/passwords'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
+import { notify } from '@/lib/notify'
 import type { ActionResult, UserAdminDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 
@@ -178,7 +179,7 @@ export async function approveUserAccount(input: { userId: string; locale?: Local
   const session = await getCurrentSession()
   const target = await prisma.user.findUnique({
     where: { id: input?.userId },
-    select: { accountStatus: true, role: true },
+    select: { accountStatus: true, role: true, email: true, username: true },
   })
   if (!target) return { ok: false, error: msg(locale, 'User not found.', 'Utilisateur introuvable.') }
   if (target.accountStatus !== 'PENDING') {
@@ -208,6 +209,21 @@ export async function approveUserAccount(input: { userId: string; locale?: Local
       entityId: input.userId,
       metadata: { role: target.role },
     })
+    // ——— Notification in-app + email à l'analyste approuvé (Partie S) ———
+    await notify({
+      inApp: {
+        userId: input.userId,
+        type: 'ACCOUNT_APPROVED',
+        title: 'Compte approuvé',
+        message: 'Votre compte analyste a été approuvé. Vous pouvez vous connecter à ONA Field.',
+      },
+      email: {
+        to: target.email,
+        kind: 'ANALYST_APPROVED',
+        context: { recipientName: target.username },
+      },
+      actorId: session?.uid ?? null,
+    })
     revalidatePath('/admin/users')
     return { ok: true }
   } catch (error) {
@@ -227,7 +243,7 @@ export async function rejectUserAccount(input: { userId: string; locale?: Locale
 
   const target = await prisma.user.findUnique({
     where: { id: input?.userId },
-    select: { accountStatus: true },
+    select: { accountStatus: true, email: true, username: true },
   })
   if (!target) return { ok: false, error: msg(locale, 'User not found.', 'Utilisateur introuvable.') }
   if (target.accountStatus !== 'PENDING') {
@@ -257,6 +273,21 @@ export async function rejectUserAccount(input: { userId: string; locale?: Locale
       entityType: 'user',
       entityId: input.userId,
       metadata: { role: 'ANALYST' },
+    })
+    // ——— Notification in-app + email à l'analyste refusé (Partie S) ———
+    await notify({
+      inApp: {
+        userId: input.userId,
+        type: 'ACCOUNT_REJECTED',
+        title: 'Demande refusée',
+        message: 'Votre demande de compte analyste a été refusée.',
+      },
+      email: {
+        to: target.email,
+        kind: 'ANALYST_REJECTED',
+        context: { recipientName: target.username },
+      },
+      actorId: session?.uid ?? null,
     })
     revalidatePath('/admin/users')
     return { ok: true }
