@@ -6,6 +6,7 @@ import {
   buildSignedJwt,
   decodeJwt,
   normalizePrivateKeyPem,
+  DRIVE_SCOPE,
 } from '@/lib/driveAuth'
 
 function testKeyPair(): { privatePem: string; publicPem: string } {
@@ -53,6 +54,13 @@ describe('decodeJwt', () => {
   })
 })
 
+describe('portée Google Drive', () => {
+  it('utilise la portée COMPLÈTE (accès aux Shared Drives), pas drive.file', () => {
+    expect(DRIVE_SCOPE).toBe('https://www.googleapis.com/auth/drive')
+    expect(DRIVE_SCOPE).not.toContain('drive.file')
+  })
+})
+
 describe('buildSignedJwt', () => {
   it('produit un JWT RS256 structuré avec les revendications attendues', () => {
     const { privatePem } = testKeyPair()
@@ -60,7 +68,7 @@ describe('buildSignedJwt', () => {
     const jwt = buildSignedJwt({
       clientEmail: 'captures@ona-field.iam.gserviceaccount.com',
       privateKeyPem: privatePem,
-      scope: 'https://www.googleapis.com/auth/drive.file',
+      scope: DRIVE_SCOPE,
       nowSeconds: now,
     })
 
@@ -76,7 +84,7 @@ describe('buildSignedJwt', () => {
 
     expect(header.alg).toBe('RS256')
     expect(payload.iss).toBe('captures@ona-field.iam.gserviceaccount.com')
-    expect(payload.scope).toBe('https://www.googleapis.com/auth/drive.file')
+    expect(payload.scope).toBe(DRIVE_SCOPE)
     expect(payload.aud).toBe('https://oauth2.googleapis.com/token')
     expect(payload.exp - payload.iat).toBe(3600)
     // Signature non vide (base64url sans padding de 256 octets → 342 caractères).

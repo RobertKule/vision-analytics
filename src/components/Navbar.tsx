@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { LayoutDashboard } from 'lucide-react'
-import { getCurrentAdmin } from '@/lib/auth'
+import { getCurrentSession } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
 import { homeForRole } from '@/lib/navigation'
@@ -15,7 +15,7 @@ import UserActions from '@/components/app/UserActions'
  * conserve son état à travers les navigations SPA entre routes applicatives.
  */
 export default async function Navbar() {
-  const session = await getCurrentAdmin()
+  const session = await getCurrentSession()
   const locale = await getLocale()
   const d = getDictionary(locale)
   const t = d.nav

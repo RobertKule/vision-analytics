@@ -46,8 +46,16 @@ export type DriveServiceAccountCredentials = {
   privateKeyPem: string
 }
 
-/** Portée Google Drive la plus restreinte autorisant nos opérations (fichiers de l'app). */
-export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
+/**
+ * Portée Google Drive du compte de service.
+ *
+ * IMPORTANT : on n'utilise PAS `auth/drive.file` (portée « par fichier ») : celle-ci
+ * ne donne accès qu'aux fichiers CRÉÉS par le compte de service lui-même. Elle rend
+ * invisible (HTTP 404) un dossier de Google Shared Drive créé par un humain puis
+ * partagé avec le compte de service. Pour lire/écrire dans un Shared Drive dont le
+ * compte de service est membre, il faut la portée COMPLÈTE `auth/drive`.
+ */
+export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
 /** Audience OAuth2 du serveur de jeton Google. */
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const OAUTH_TOKEN_AUDIENCE = 'https://oauth2.googleapis.com/token'
@@ -144,7 +152,7 @@ export async function requestDriveAccessToken(
   const assertion = buildSignedJwt({
     clientEmail: credentials.clientEmail,
     privateKeyPem: credentials.privateKeyPem,
-    scope: DRIVE_FILE_SCOPE,
+    scope: DRIVE_SCOPE,
   })
   return exchangeJwtForAccessToken(assertion, fetchImpl)
 }
