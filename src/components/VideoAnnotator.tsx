@@ -40,8 +40,23 @@ import { computeTypeCompletion } from '@/lib/captureCompletion'
 import {
   deleteSavedObservation,
   finalizeObservationSession,
+  replaceObservationCaptureImage,
   saveObservationCapture,
+  submitObserverPart,
 } from '@/app/actions/observationActions'
+import {
+  beginEdit,
+  cancelEdit,
+  commitEdit,
+  placeSelectedAt,
+  type EditSession,
+} from '@/lib/annotatorEdit'
+import {
+  INTERACTIVE_CONTROL_SELECTOR,
+  TEXT_ENTRY_SELECTOR,
+  decideShortcut,
+  shouldPreventDefault,
+} from '@/lib/playbackShortcut'
 import {
   addPendingSync,
   countSyncStates,
@@ -129,6 +144,12 @@ type VideoAnnotatorProps = {
    * toute nouvelle écriture en lecture seule).
    */
   singleShot?: boolean
+  /**
+   * Clés des parties (passes vidéo) DÉJÀ ENVOYÉES au chargement/reprise. Une partie
+   * envoyée est verrouillée : aucune nouvelle capture sur cette passe — les autres
+   * parties restent ouvertes. (Source : `getObserverPartStates` côté serveur.)
+   */
+  submittedPartKeys?: string[]
 }
 
 /**
@@ -314,6 +335,7 @@ export default function VideoAnnotator({
   identityLabel,
   initialRunId,
   singleShot,
+  submittedPartKeys,
 }: VideoAnnotatorProps) {
   const { resolvedTheme } = useTheme()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -368,6 +390,18 @@ export default function VideoAnnotator({
   const activePass: TabPass | null = passes.find((pass) => pass.key === activeKey) ?? passes[0] ?? null
   /** Type verrouillé par l'association vidéo → type de l'onglet actif (null = passe générique). */
   const lockedType = activePass?.typeLabel ?? null
+
+  /**
+   * Parties DÉJÀ ENVOYÉES (verrouillées). Une partie envoyée refuse toute nouvelle
+   * capture, sans verrouiller les autres parties. L'état évolue localement quand
+   * « Envoyer cette partie » réussit (le serveur reste la source de vérité).
+   */
+  const [submittedParts, setSubmittedParts] = useState<ReadonlySet<string>>(
+    () => new Set(submittedPartKeys ?? []),
+  )
+  const [sendingPart, setSendingPart] = useState(false)
+  /** Vrai si la partie ACTIVE est déjà envoyée → verrouillée en capture. */
+  const isActivePartSubmitted = submittedParts.has(activeKey)
 
   /**
    * Sources effectivement chargées par onglet (fichier local ou URL collée), pour
@@ -475,6 +509,22 @@ export default function VideoAnnotator({
   const [controlsVisible, setControlsVisible] = useState(true)
   /** Capture active du carrousel (null → dernière ajoutée, la plus récente). */
   const [activeId, setActiveId] = useState<string | null>(null)
+
+  /**
+   * Session d'ÉDITION en cours (bouton « Modifier »). Non nulle ⇒ l'annotateur est
+   * en mode Modifier : la capture visée reste sélectionnée, son cercle reste
+   * visible, et aucune NOUVELLE annotation n'est créée tant qu'on n'a pas validé
+   * ou annulé. Seules les coordonnées du cercle peuvent changer.
+   */
+  const [editSession, setEditSession] = useState<EditSession | null>(null)
+  /** Miroir synchrone de la session d'édition (lu par les gestionnaires de pointeur). */
+  const editSessionRef = useRef<EditSession | null>(null)
+  /** Vrai pendant l'enregistrement de la modification (bouton « Valider »). */
+  const [savingEdit, setSavingEdit] = useState(false)
+
+  useEffect(() => {
+    editSessionRef.current = editSession
+  }, [editSession])
 
   // ——— File de synchronisation immédiate des captures ———
   // Miroirs pour la file asynchrone : elle lit toujours l'état le plus récent sans
@@ -996,7 +1046,9 @@ export default function VideoAnnotator({
   const expectedSourceName = expectedVideoState.expectedIdentity
   const loadedSourceName = expectedVideoState.loadedIdentity
   const expectedVideoMismatch = expectedVideoState.mismatch
-  const canAnnotate = isReady && !isPlaying && videoUrl !== null && !expectedVideoMismatch
+  // Une partie déjà envoyée est verrouillée : l'annotation/capture y est désactivée.
+  const canAnnotate =
+    isReady && !isPlaying && videoUrl !== null && !expectedVideoMismatch && !isActivePartSubmitted
 
   const selectCircle = useCallback((id: string | null) => {
     selectedIdRef.current = id
@@ -1102,24 +1154,114 @@ export default function VideoAnnotator({
   )
 
   /**
-   * « Modifier » une observation : repositionne le lecteur sur l'horodatage de la
-   * capture pour la re-annoter sur place. La capture précédente est retirée — on
-   * en enregistre une corrigée sur la même frame (même règle de suppression que la
-   * corbeille : une capture déjà enregistrée est supprimée côté serveur).
+   * « MODIFIER » une capture (Partie F).
+   *
+   * La capture reste en place (elle n'est ni supprimée, ni recréée) : on
+   * repositionne le lecteur sur sa frame, on RESTAURE son cercle sur le calque et
+   * on GARDE la sélection active. Aucune logique d'effacement n'est appelée ici —
+   * `selectedAnnotationId`, la position, le contexte et la visibilité du cercle
+   * sont conservés.
    */
   const handleEditCapture = (captureId: string) => {
     const capture = observationsRef.current.find((item) => item.id === captureId)
     if (!capture) return
-    setObservations((prev) => prev.filter((item) => item.id !== captureId))
-    reconcileRemovedCapture(captureId)
-    setActiveId(null)
-    clearDrawing()
+
     const video = videoRef.current
+    if (video && !video.paused) video.pause()
+
+    const container = containerRef.current
+    const rect = container?.getBoundingClientRect()
+    const { session, drawing } = beginEdit({
+      capture: {
+        id: capture.id,
+        timestamp: capture.timestamp,
+        observationType: capture.observationType,
+        videoId: capture.videoId ?? null,
+        circles: capture.circles,
+      },
+      // Si le cercle actuellement à l'écran appartient à cette capture, il RESTE
+      // le cercle sélectionné : entrer en édition ne change jamais la sélection.
+      currentSelectedId: selectedIdRef.current,
+      fallbackRadius: defaultRadius(),
+      layout: { width: rect?.width ?? 0, height: rect?.height ?? 0 },
+    })
+
+    // Restauration du calque : le cercle de la capture est visible immédiatement.
+    circlesRef.current = drawing.circles.map((circle) => ({ ...circle }))
+    draftRef.current = null
+    dragRef.current = null
+    setAnnotations([...circlesRef.current])
+    selectCircle(drawing.selectedId)
+
+    setEditSession(session)
+    editSessionRef.current = session
+    setActiveId(capture.id)
+    setErrorMessage(null)
+
     if (video && Number.isFinite(video.duration)) {
       video.currentTime = capture.timestamp
       setCurrentTime(capture.timestamp)
     }
+    redraw()
   }
+
+  /** « Annuler » : revient à la position précédente, la sélection reste cohérente. */
+  const handleCancelEdit = useCallback(() => {
+    const session = editSessionRef.current
+    if (!session) return
+    const restored = cancelEdit(session)
+    circlesRef.current = restored.circles.map((circle) => ({ ...circle }))
+    draftRef.current = null
+    dragRef.current = null
+    setAnnotations([...circlesRef.current])
+    selectCircle(restored.selectedId)
+    setEditSession(null)
+    editSessionRef.current = null
+    setErrorMessage(null)
+    redraw()
+  }, [redraw, selectCircle])
+
+  /** « Envoyer cette partie » : finalise la passe ACTIVE sans clôturer la session. */
+  const submitActivePart = useCallback(async () => {
+    if (!projectId || sendingPart || isActivePartSubmitted) return
+    if (tabObservations.length === 0) {
+      setErrorMessage(t.annotator.partEmpty)
+      return
+    }
+    setSendingPart(true)
+    setErrorMessage(null)
+    try {
+      const result = await submitObserverPart({
+        projectId,
+        videoId: activeKey === GENERIC_TAB_KEY ? null : activeKey,
+        locale,
+      })
+      if (result.ok) {
+        setSubmittedParts((prev) => new Set(prev).add(activeKey))
+        toast.success(t.annotator.partSent, {
+          id: `part-sent-${activeKey}`,
+          ...(fullscreenRef.current ? { toasterId: CAPTURE_ACK_TOASTER_ID } : {}),
+        })
+      } else {
+        setErrorMessage(result.error)
+      }
+    } catch (error) {
+      console.error('[VideoAnnotator] Envoi de la partie impossible.', error)
+      setErrorMessage(t.annotator.partSendError)
+    } finally {
+      setSendingPart(false)
+    }
+  }, [
+    activeKey,
+    isActivePartSubmitted,
+    locale,
+    projectId,
+    sendingPart,
+    tabObservations.length,
+    t.annotator.partEmpty,
+    t.annotator.partSendError,
+    t.annotator.partSent,
+  ])
 
   /** Ouvre la boîte de confirmation de soumission (Confirmer / Suivre / Annuler). */
   const openSubmitConfirm = () => {
@@ -1245,7 +1387,9 @@ export default function VideoAnnotator({
     if (!video) return
     if (video.paused) {
       // En quittant une frame annotée, on retire les marqueurs liés à cette frame.
-      clearDrawing()
+      // EXCEPTION : pendant une édition, le cercle de l'annotation modifiée reste
+      // visible et sélectionné — lire la vidéo ne doit jamais effacer la sélection.
+      if (!editSessionRef.current) clearDrawing()
       void video.play().catch(() => {
         /* Lecture refusée par le navigateur : rien à faire. */
       })
@@ -1294,6 +1438,31 @@ export default function VideoAnnotator({
           origY: circle.y,
         }
         selectCircle(circle.id)
+        return
+      }
+
+      // ——— Mode « Modifier » : jamais de nouvelle annotation ———
+      // Un clic hors du cercle REMPLACE l'emplacement du cercle sélectionné :
+      // même annotation, même identifiant, même contexte — seules les coordonnées
+      // changent (Partie F3).
+      if (editSessionRef.current) {
+        const moved = placeSelectedAt(
+          { circles: circlesRef.current, selectedId: selectedIdRef.current },
+          point,
+        )
+        circlesRef.current = moved.circles
+        dragRef.current = moved.selectedId
+          ? {
+              id: moved.selectedId,
+              startX: point.x,
+              startY: point.y,
+              origX: point.x,
+              origY: point.y,
+            }
+          : null
+        setAnnotations([...circlesRef.current])
+        selectCircle(moved.selectedId)
+        redraw()
         return
       }
 
@@ -1486,6 +1655,10 @@ export default function VideoAnnotator({
       // Identité de la vidéo réellement observée (validation serveur, Partie Q).
       videoSource: declaredVideoIdentity(fileName, videoUrl),
       centroid,
+      // Géométrie mémorisée LOCALEMENT (brouillon) : elle permet au mode
+      // « Modifier » de restaurer le cercle exact et de garder la sélection.
+      // Jamais transmise au serveur ni persistée en base.
+      circles: circlesRef.current.map((circle) => ({ ...circle })),
     }
     setObservations((previous) => [capture, ...previous])
     // La capture confirmée est compressée (WebP ≈ 0,82, sans réseau) avant d'être
@@ -1525,12 +1698,158 @@ export default function VideoAnnotator({
     const video = videoRef.current
     if (!video) return
     const target = Number(event.target.value)
-    if (circlesRef.current.length > 0 && Math.abs(target - video.currentTime) > 0.001) {
+    // Pendant une édition, le cercle modifié reste affiché : se déplacer dans la
+    // vidéo n'efface jamais la sélection (la validation revient à la frame éditée).
+    if (
+      !editSessionRef.current &&
+      circlesRef.current.length > 0 &&
+      Math.abs(target - video.currentTime) > 0.001
+    ) {
       clearDrawing()
     }
     video.currentTime = target
     setCurrentTime(target)
   }
+
+  /** Ramène le lecteur exactement sur la frame éditée (attend le `seeked` réel). */
+  const seekToEditFrame = useCallback(async (timestamp: number): Promise<void> => {
+    const video = videoRef.current
+    if (!video || !Number.isFinite(video.duration)) return
+    if (Math.abs(video.currentTime - timestamp) <= 0.05) return
+    if (!video.paused) video.pause()
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        video.removeEventListener('seeked', done)
+        window.clearTimeout(timer)
+        resolve()
+      }
+      const timer = window.setTimeout(done, 1500)
+      video.addEventListener('seeked', done)
+      video.currentTime = timestamp
+    })
+    setCurrentTime(timestamp)
+  }, [])
+
+  /**
+   * « Valider » la modification (Partie F3).
+   *
+   * On revient sur la frame éditée, on refige l'image avec le cercle DÉPLACÉ, puis
+   * on remplace l'image de la MÊME capture : même identifiant, même horodatage,
+   * même type, même passe vidéo. Aucune nouvelle annotation n'est créée, et les
+   * statistiques restent identiques — seules les coordonnées ont changé.
+   *
+   * Une capture pas encore enregistrée (file locale) est simplement corrigée sur
+   * place : la file l'enverra avec sa nouvelle image.
+   */
+  const handleCommitEdit = useCallback(async () => {
+    const session = editSessionRef.current
+    if (!session || savingEdit) return
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    const video = videoRef.current
+    if (!canvas || !ctx || !video) return
+
+    setSavingEdit(true)
+    setErrorMessage(null)
+    try {
+      await seekToEditFrame(session.timestamp)
+      if (video.readyState < 2) {
+        setErrorMessage(t.annotator.editFrameUnavailable)
+        return
+      }
+
+      const commit = commitEdit(session, {
+        circles: circlesRef.current,
+        selectedId: selectedIdRef.current,
+      })
+
+      // Refige la frame + les anneaux à leur NOUVELLE position.
+      syncCanvasSize()
+      const dpr = scaleRef.current || 1
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      } catch {
+        setErrorMessage(t.annotator.remoteTaintError)
+        return
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const selected = selectedIdRef.current
+      for (const circle of commit.circles) paintCircle(ctx, circle, circle.id === selected)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+
+      let previewDataUrl: string
+      try {
+        previewDataUrl = canvas.toDataURL('image/png')
+      } catch {
+        setErrorMessage(t.annotator.remoteTaintError)
+        return
+      }
+      const snapshot = document.createElement('canvas')
+      snapshot.width = canvas.width
+      snapshot.height = canvas.height
+      snapshot.getContext('2d')?.drawImage(canvas, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      redraw()
+
+      let artifact = previewDataUrl
+      try {
+        artifact = await compressCaptureToDataUrl(snapshot)
+      } catch (error) {
+        console.error('[VideoAnnotator] Compression de la modification impossible, repli PNG.', error)
+      }
+
+      // Mise à jour LOCALE : même capture, nouvelle image et nouvelle géométrie.
+      setObservations((previous) =>
+        previous.map((capture) =>
+          capture.id === commit.captureId
+            ? { ...capture, imageDataUrl: artifact, circles: commit.circles, circleCount: commit.circles.length }
+            : capture,
+        ),
+      )
+
+      // Si la capture est DÉJÀ enregistrée côté serveur, on remplace son image sur
+      // la même ligne (identité analytique préservée). Sinon, la file l'enverra.
+      const syncState = syncStatesRef.current[commit.captureId]
+      const alreadyPersisted = syncState?.status === 'synced' || syncState?.status === 'syncing'
+      if (projectId && alreadyPersisted) {
+        const result = await replaceObservationCaptureImage({
+          projectId,
+          observerIdentifier: observerIdentifierRef.current,
+          clientKey: commit.captureId,
+          imageDataUrl: artifact,
+          locale,
+        })
+        if (!result.ok) {
+          setErrorMessage(result.error)
+          return
+        }
+      }
+
+      setEditSession(null)
+      editSessionRef.current = null
+      toast.success(t.annotator.editSaved, {
+        id: `capture-edit-${commit.captureId}`,
+        ...(fullscreenRef.current ? { toasterId: CAPTURE_ACK_TOASTER_ID } : {}),
+      })
+    } finally {
+      setSavingEdit(false)
+    }
+  }, [
+    locale,
+    projectId,
+    redraw,
+    savingEdit,
+    seekToEditFrame,
+    syncCanvasSize,
+    t.annotator.editFrameUnavailable,
+    t.annotator.editSaved,
+    t.annotator.remoteTaintError,
+  ])
 
   /**
    * Onglet capable de produire un type : passe verrouillée sur ce type, sinon une
@@ -1614,10 +1933,16 @@ export default function VideoAnnotator({
   ])
 
   /**
-   * Raccourcis clavier (lecture / pause + capture) actifs dès qu'une vidéo est
-   * chargée. Espace : lecture / pause sans faire défiler la page ; C ou Entrée :
-   * capture immédiate. On ne les intercepte jamais quand l'utilisateur saisit du
-   * texte ou qu'un contrôle (bouton, lien) a le focus.
+   * Raccourcis clavier de l'annotateur.
+   *
+   * ESPACE = LECTURE / PAUSE, ET RIEN D'AUTRE (Partie G) : la décision est prise
+   * par le module pur `playbackShortcut` — Espace ne capture pas, ne modifie pas,
+   * ne supprime pas, ne valide pas, ne change ni de type ni de fenêtre. Dans un
+   * champ de saisie (input, textarea, select, contenteditable) il conserve son
+   * comportement naturel, et sur un bouton/lien focalisé il active le contrôle.
+   * Le raccourci fonctionne aussi en plein écran (écoute au niveau du document).
+   *
+   * `C` et `Entrée` restent les raccourcis DISTINCTS de capture immédiate.
    */
   useEffect(() => {
     if (!videoUrl) return
@@ -1625,18 +1950,31 @@ export default function VideoAnnotator({
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (!target) return
-      if (target.closest('input, textarea, select, [contenteditable="true"]')) return
-      const onInteractiveControl = Boolean(target.closest('button, a'))
-      if (event.code === 'Space') {
-        // Un bouton focalisé conserve son comportement natif (Espace = activer).
-        if (onInteractiveControl) return
-        event.preventDefault()
+      const inTextEntry = Boolean(target.closest(TEXT_ENTRY_SELECTOR))
+      const onInteractiveControl = Boolean(target.closest(INTERACTIVE_CONTROL_SELECTOR))
+
+      const decision = decideShortcut({
+        code: event.code,
+        inTextEntry,
+        onInteractiveControl,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+      })
+      if (decision === 'toggle-playback') {
+        if (shouldPreventDefault(decision)) event.preventDefault()
         togglePlayback()
         return
       }
+      if (event.code === 'Space') return // Espace ne déclenche jamais rien d'autre.
+
       if (event.code === 'KeyC' || event.code === 'Enter') {
-        if (onInteractiveControl) return
+        if (inTextEntry || onInteractiveControl) return
         if (event.ctrlKey || event.metaKey || event.altKey) return
+        // Pendant une édition, la capture immédiate est suspendue : on ne crée
+        // jamais une nouvelle annotation tant que la modification n'est pas close.
+        if (editSessionRef.current) return
         event.preventDefault()
         triggerCapture()
       }
@@ -2090,6 +2428,7 @@ export default function VideoAnnotator({
                     (observation.videoId ?? null) ===
                     (pass.key === GENERIC_TAB_KEY ? null : pass.key),
                 ).length
+                const passSubmitted = submittedParts.has(pass.key)
                 const mainLabel = passLabel(pass, t.annotator.passNameFallback)
                 const subLabel = pass.typeLabel ? pass.name : null
                 return (
@@ -2116,16 +2455,20 @@ export default function VideoAnnotator({
                       <span className="min-w-0 truncate">{mainLabel}</span>
                       <span
                         className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-bold ${
-                          passCount > 0
-                            ? 'bg-gold-500/20 text-gold-800 dark:text-gold-200'
-                            : 'bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-400'
+                          passSubmitted
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            : passCount > 0
+                              ? 'bg-gold-500/20 text-gold-800 dark:text-gold-200'
+                              : 'bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-400'
                         }`}
                         title={fill(t.annotator.tabCountLabel, { n: passCount })}
                       >
-                        {passCount > 0 ? (
+                        {passSubmitted ? (
+                          <CheckCircle aria-hidden="true" className="h-3 w-3" />
+                        ) : passCount > 0 ? (
                           <CheckCircle aria-hidden="true" className="h-3 w-3" />
                         ) : null}
-                        {passCount}
+                        {passSubmitted ? t.annotator.partSentBadge : passCount}
                       </span>
                     </span>
                     {subLabel ? (
@@ -2169,6 +2512,27 @@ export default function VideoAnnotator({
                   </button>
                 ) : null}
                 <span className="min-w-2 flex-1" />
+                {/*
+                  ——— « Envoyer cette partie » (≠ « Envoyer tout ») ———
+                  Finalise la passe ACTIVE sans clôturer la session ; les autres
+                  parties restent ouvertes. Masqué si la partie est déjà envoyée.
+                */}
+                {projectId && tabObservations.length > 0 && !isActivePartSubmitted ? (
+                  <button
+                    type="button"
+                    onClick={() => void submitActivePart()}
+                    disabled={sendingPart}
+                    title={t.annotator.submitPartHint}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-gold-600/40 bg-gold-500/10 px-4 text-sm font-semibold text-gold-800 transition-colors hover:bg-gold-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gold-400/30 dark:text-gold-200"
+                  >
+                    {sendingPart ? (
+                      <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <CheckCircle aria-hidden="true" className="h-4 w-4" />
+                    )}
+                    {t.annotator.submitPart}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={openSubmitConfirm}
@@ -2280,6 +2644,71 @@ export default function VideoAnnotator({
           >
             {errorMessage}
           </p>
+        ) : null}
+
+        {/*
+          ——— Partie envoyée (Partie 2/6) ———
+          La partie ACTIVE est verrouillée : aucune nouvelle capture n'y est
+          possible. Les autres parties restent ouvertes (l'observateur bascule
+          d'onglet pour poursuivre).
+        */}
+        {isActivePartSubmitted && !errorMessage ? (
+          <p
+            role="status"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+          >
+            <CheckCircle aria-hidden="true" className="h-4 w-4" />
+            {t.annotator.partAlreadySent}
+          </p>
+        ) : null}
+
+        {/*
+          ——— Mode « Modifier » (Partie F) ———
+          La capture visée reste sélectionnée et son cercle reste visible. On peut
+          le déplacer ou cliquer ailleurs pour le repositionner ; « Valider » écrit
+          la nouvelle position sur la MÊME annotation, « Annuler » restaure la
+          position précédente. Aucune nouvelle annotation n'est créée ici.
+        */}
+        {editSession ? (
+          <div
+            role="status"
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-gold-500/40 bg-gold-500/10 px-3 py-2.5 dark:border-gold-400/30 dark:bg-gold-400/10"
+          >
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-gold-800 dark:text-gold-200">
+              <Edit2 aria-hidden="true" className="h-3.5 w-3.5" />
+              {t.annotator.editing}
+            </span>
+            <span className="font-mono text-xs font-semibold tabular-nums text-zinc-700 dark:text-zinc-200">
+              {formatTime(editSession.timestamp)}
+            </span>
+            <span className="min-w-0 flex-1 basis-full text-[11px] leading-relaxed text-zinc-600 sm:basis-auto dark:text-zinc-300">
+              {t.annotator.editingHint}
+            </span>
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleCommitEdit()}
+                disabled={savingEdit}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-ink px-3 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-50 dark:bg-milk dark:text-ink"
+              >
+                {savingEdit ? (
+                  <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle aria-hidden="true" className="h-3.5 w-3.5" />
+                )}
+                {t.annotator.editConfirm}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                disabled={savingEdit}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-300 px-3 text-xs font-semibold text-zinc-700 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+                {t.annotator.editCancel}
+              </button>
+            </span>
+          </div>
         ) : null}
 
         {/* Scène vidéo + calque d'annotation */}

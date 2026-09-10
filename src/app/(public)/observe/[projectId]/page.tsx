@@ -3,15 +3,18 @@ import { notFound, redirect } from 'next/navigation'
 import { CheckCircle2, EyeOff, Film, Hourglass, ShieldCheck } from 'lucide-react'
 import {
   getBlindProject,
+  getObserverPartStates,
   getObserverSessionRecap,
   type ObserverSessionRecapResult,
 } from '@/app/actions/observationActions'
-import AccessGate from '@/components/observer/AccessGate'
+import { getObserverReactivationState } from '@/app/actions/observerReactivationActions'
+import AccessGate, { type AccessGateReactivation } from '@/components/observer/AccessGate'
+import ReactivationRequestButton from '@/components/observer/ReactivationRequestButton'
 import VideoAnnotator from '@/components/VideoAnnotator'
 import { getCurrentSession } from '@/lib/auth'
 import { getLocale } from '@/lib/i18n-server'
 import { getDictionary } from '@/lib/i18n'
-import { resolveObserverGate } from '@/lib/observerAccess'
+import { readObserverScopeFromCookies, resolveObserverGate } from '@/lib/observerAccess'
 import { secondsToTimecode } from '@/lib/timecode'
 
 type PageProps = {
@@ -67,15 +70,38 @@ export default async function ObserveProjectPage({ params }: PageProps) {
   // ——— Porte d'accès : le cookie de portée doit correspondre à CE projet (base à l'appui).
   const gate = await resolveObserverGate(projectId)
   if (!gate.ok) {
+    // Un lien d'accès EST présent mais révoqué/expiré : on propose la demande de
+    // réactivation au lieu d'un simple refus définitif.
+    const scope = await readObserverScopeFromCookies()
+    const canRequest = scope !== null && scope.projectId === projectId
+    const reactivationState = canRequest ? await getObserverReactivationState(projectId) : { ok: false as const }
+    const reactivation: AccessGateReactivation | undefined =
+      canRequest
+        ? {
+            projectId,
+            locale,
+            initiallyPending: reactivationState.ok ? reactivationState.pending : false,
+            text: {
+              inactiveTitle: share.reactivationTitle,
+              inactiveHint: share.reactivationHint,
+              cta: share.reactivationCta,
+              alreadyPending: share.reactivationAlreadyPending,
+              sent: share.reactivationSent,
+              sentHint: share.reactivationSentHint,
+              error: share.reactivationError,
+            },
+          }
+        : undefined
     return (
       <AccessGate
         text={{
-          title: share.inviteOnlyTitle,
-          body: share.inviteOnlyBody,
+          title: share.inactiveTitle,
+          body: share.inactiveBody,
           contactHint: share.contactHint,
           ctaHome: share.ctaHome,
           ctaDocs: share.ctaDocs,
         }}
+        reactivation={reactivation}
       />
     )
   }
@@ -88,11 +114,38 @@ export default async function ObserveProjectPage({ params }: PageProps) {
   // ——— Jeton clôturé : consultation en lecture seule de la session de l'observateur.
   if (gate.completed) {
     const recap = await getObserverSessionRecap(projectId)
-    return <ReadOnlySession project={project} recap={recap.ok ? recap : null} shareText={share} />
+    const reactivationState = await getObserverReactivationState(projectId)
+    const reactivationText = {
+      inactiveTitle: share.reactivationTitle,
+      inactiveHint: share.reactivationHint,
+      cta: share.reactivationCta,
+      alreadyPending: share.reactivationAlreadyPending,
+      sent: share.reactivationSent,
+      sentHint: share.reactivationSentHint,
+      error: share.reactivationError,
+    }
+    return (
+      <ReadOnlySession
+        project={project}
+        recap={recap.ok ? recap : null}
+        shareText={share}
+        reactivation={{
+          projectId,
+          locale,
+          initiallyPending: reactivationState.ok ? reactivationState.pending : false,
+          text: reactivationText,
+        }}
+      />
+    )
   }
 
   // ——— Session en cours : annotateur plein, `runId` imposé par le serveur.
   const t = d.session
+  // État par partie (parties déjà envoyées → verrouillées) pour la reprise.
+  const partStates = await getObserverPartStates(projectId)
+  const submittedPartKeys = partStates.ok
+    ? partStates.parts.filter((part) => part.submitted).map((part) => part.key)
+    : []
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
       <header className="mb-6">
@@ -150,6 +203,7 @@ export default async function ObserveProjectPage({ params }: PageProps) {
         locale={locale}
         initialRunId={gate.runId}
         singleShot
+        submittedPartKeys={submittedPartKeys}
         backHref={`/observe/${project.id}`}
         t={{
           annotator: d.annotator,
@@ -163,15 +217,32 @@ export default async function ObserveProjectPage({ params }: PageProps) {
 
 type ShareText = ReturnType<typeof getDictionary>['shareAccess']
 
+type ReactivationRequest = {
+  projectId: string
+  locale: 'fr' | 'en'
+  initiallyPending: boolean
+  text: {
+    inactiveTitle: string
+    inactiveHint: string
+    cta: string
+    alreadyPending: string
+    sent: string
+    sentHint: string
+    error: string
+  }
+}
+
 /** Consultation en lecture seule d'une session d'observation terminée. */
 function ReadOnlySession({
   project,
   recap,
   shareText,
+  reactivation,
 }: {
   project: { id: string; title: string; description?: string | null }
   recap: (NonNullable<ObserverSessionRecapResult & { ok: true }>) | null
   shareText: ShareText
+  reactivation?: ReactivationRequest
 }) {
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
@@ -190,6 +261,18 @@ function ReadOnlySession({
           {shareText.readonlyBody}
         </p>
       </header>
+
+      {/* ——— Demande de réactivation (l'observateur demande, l'ADMIN décide) ——— */}
+      {reactivation ? (
+        <div className="mb-8 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-white/10 dark:bg-[#161b22]">
+          <ReactivationRequestButton
+            projectId={reactivation.projectId}
+            locale={reactivation.locale}
+            initiallyPending={reactivation.initiallyPending}
+            text={reactivation.text}
+          />
+        </div>
+      ) : null}
 
       {recap === null ? (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">{shareText.emptyCaption}</p>
@@ -226,10 +309,10 @@ function ReadOnlySession({
                   key={row.id}
                   className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-white/10 dark:bg-[#161b22]"
                 >
-                  <a href={row.imageUrl} target="_blank" rel="noreferrer noopener" className="group block">
+                  <a href={row.imageEndpoint} target="_blank" rel="noreferrer noopener" className="group block">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={row.imageUrl}
+                      src={row.imageEndpoint}
                       alt={`${shareText.captureChip.replace('{{t}}', secondsToTimecode(row.timestampTotal))}`}
                       loading="lazy"
                       className="aspect-video w-full bg-black object-contain transition-transform duration-300 group-hover:scale-[1.02]"
