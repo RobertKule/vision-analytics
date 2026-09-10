@@ -1759,3 +1759,66 @@ export async function getObserverSessionRecap(
     rows,
   }
 }
+
+// ————————————————————————————————————————————————————————————
+// REPRISE / RESTAURATION D'UNE SESSION (réactivation incluse).
+//
+// Quand une session est interrompue puis réactivée, l'observateur doit retrouver
+// ses captures déjà enregistrées (images + horodatages + types + passes) au lieu de
+// repartir de zéro. La base est la source de vérité : on relit TOUTES les captures
+// de la session (envoyées ou non), sans jamais exposer la vérité de validation
+// (ni `isGhostPoint`, ni relation `point`).
+// ————————————————————————————————————————————————————————————
+
+export type ObserverSessionCaptureDto = {
+  /** Identifiant de la ligne d'observation (endpoint d'affichage sécurisé). */
+  id: string
+  /** Clé client d'origine — réutilisée comme identifiant local (idempotence). */
+  clientKey: string | null
+  timestamp: number
+  observationType: string | null
+  videoId: string | null
+  /** Adresse d'affichage SÉCURISÉE (`/api/captures/<id>/image`). */
+  imageEndpoint: string
+}
+
+export type ObserverSessionCapturesResult =
+  | { ok: true; captures: ObserverSessionCaptureDto[]; runId: string }
+  | { ok: false }
+
+/**
+ * Recharge les captures persistées de la session de l'observateur (reprise /
+ * réactivation). Lecture pure : n'écrit rien. Renvoie la liste complète des captures
+ * de la session, ordonnée par horodatage, avec leur endpoint d'affichage sécurisé.
+ */
+export async function getObserverSessionCaptures(
+  projectId: string,
+): Promise<ObserverSessionCapturesResult> {
+  const gate = await resolveObserverGate(projectId)
+  if (!gate.ok) return { ok: false }
+
+  const captures = await prisma.observation.findMany({
+    where: { projectId, userId: gate.userId, sessionRunId: gate.runId },
+    select: {
+      id: true,
+      clientKey: true,
+      timestampTotal: true,
+      observationType: true,
+      videoId: true,
+    },
+    orderBy: { timestampTotal: 'asc' },
+  })
+
+  return {
+    ok: true,
+    runId: gate.runId,
+    captures: captures.map((capture) => ({
+      id: capture.id,
+      clientKey: capture.clientKey,
+      timestamp: capture.timestampTotal,
+      observationType: capture.observationType,
+      videoId: capture.videoId,
+      imageEndpoint: captureImageEndpoint(capture.id),
+    })),
+  }
+}
