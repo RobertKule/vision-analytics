@@ -18,6 +18,7 @@ import {
   captureAnalyticsSnapshot,
   recordConfigChangeVersions,
 } from '@/lib/analyticsVersionStore'
+import { reclassifyGhostsForNewWindow } from '@/lib/observationReclassify'
 import type {
   ActionResult,
   AdminProjectDetailDto,
@@ -1127,11 +1128,18 @@ export async function addProjectPoint(input: AddProjectPointInput): Promise<Acti
     const created = await versionedConfigChange(
       projectId,
       ANALYTICS_TRIGGERS.windowAdded,
-      () =>
-        prisma.projectPoint.create({
+      async () => {
+        const point = await prisma.projectPoint.create({
           data: { projectId, videoId, pointName, trameDebut, trameFin },
-  select: { id: true },
-        }),
+          select: { id: true, videoId: true, trameDebut: true, trameFin: true },
+        })
+        // ——— Ajouter une fenêtre ne supprime pas le passé ———
+        // Les observations déjà certifiées hors-trame qui tombent désormais dans la
+        // nouvelle fenêtre redeviennent des DÉTECTIONS VALIDES (le numérateur
+        // augmente). Fait DANS le callback pour que la version « après » le reflète.
+        await reclassifyGhostsForNewWindow(projectId, point)
+        return point
+      },
     )
 
     await adminAudit({
@@ -1141,6 +1149,8 @@ export async function addProjectPoint(input: AddProjectPointInput): Promise<Acti
       metadata: { windowAdded: created.id, pointName, videoId },
     })
     revalidateProject(projectId)
+    revalidatePath(`/admin/projects/${projectId}/analytics`)
+    revalidatePath(`/analyst/projects/${projectId}/analytics`)
     return { ok: true }
   } catch (error) {
     console.error('Erreur lors de l’ajout du point :', error)
