@@ -11,6 +11,7 @@ import { logout } from '@/app/actions/authActions'
 import { friendlyActionError } from '@/lib/actionError'
 import LanguageToggle from '@/components/LanguageToggle'
 import ThemeToggle from '@/components/ThemeToggle'
+import NotificationBell from '@/components/app/NotificationBell'
 
 type UserActionsProps = {
   session: { username: string | null; email: string; role: SessionRole } | null
@@ -110,6 +111,9 @@ export default function UserActions({
 
   return (
     <div className="flex shrink-0 items-center gap-2">
+      {/* Cloche de notifications (uniquement si connecté) */}
+      {session ? <NotificationBell /> : null}
+
       {/* Bascules (desktop/tablette) — aussi présentes dans le tiroir mobile */}
       <div className="hidden items-center gap-2 sm:flex">
         <ThemeToggle
