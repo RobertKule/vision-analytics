@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { ArrowLeft, Eye, EyeOff, Lock, LogIn, User } from 'lucide-react'
 import { login, type AuthResult } from '@/app/actions/authActions'
 import { friendlyActionError } from '@/lib/actionError'
+import { isLoginSubmitDisabled } from '@/lib/loginForm'
 import type { Locale, AuthText, RolesText } from '@/lib/i18n'
 import { homeForRole, resolvePostLoginRedirect } from '@/lib/navigation'
 
@@ -26,6 +27,12 @@ export default function LoginForm({ locale, t, roleName }: LoginFormProps) {
   const [showPassword, setShowPassword] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+
+  // ——— État DÉTERMINISTE du bouton de soumission ———
+  // Un booléen explicite, calculé à partir des seuls états initiaux déterministes
+  // (`''`, `''`, `false`). Le serveur et le client rendent donc le MÊME `disabled`
+  // au premier rendu — aucune divergence d'hydratation.
+  const submitDisabled = isLoginSubmitDisabled({ identifier, password, isPending })
 
   const applyAuthResult = (result: AuthResult) => {
     if (result.ok) {
@@ -165,7 +172,7 @@ export default function LoginForm({ locale, t, roleName }: LoginFormProps) {
 
         <button
           type="submit"
-          disabled={isPending || !identifier.trim() || !password}
+          disabled={submitDisabled}
           className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#121417] text-sm font-semibold text-[#FBF9F5] shadow-sm transition-colors hover:bg-[#2D3139] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-[#FBF9F5] dark:text-[#121417] dark:hover:bg-white/90"
         >
           {isPending ? (
