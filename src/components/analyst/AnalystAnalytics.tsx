@@ -95,6 +95,20 @@ export default function AnalystAnalytics({
   const [draftVideo, setDraftVideo] = useState<string>(appliedVideoId)
   const [filtering, setFiltering] = useState(false)
 
+  // ——— Version analytique (actuelle ou historique figée) ———
+  const versionContext = analytics.version
+  const versionHistory = versionContext?.history ?? []
+  const selectedVersionId = versionContext?.versionId ?? ''
+  const [draftVersionId, setDraftVersionId] = useState<string>(selectedVersionId)
+  const [draftAsOfDate, setDraftAsOfDate] = useState<string>(versionContext?.asOfDate ?? '')
+  const isHistoricalVersion = versionContext?.mode === 'version'
+  // Suffixe de version pour les liens d'export : le fichier téléchargé porte
+  // exactement la version affichée (dashboard = Excel = PDF).
+  const versionQuery = selectedVersionId
+    ? `?versionId=${encodeURIComponent(selectedVersionId)}`
+    : ''
+
+
   const appliedVideoLabel = videoDisplayName(
     (analytics.project.videos ?? []).find((video) => video.id === appliedVideoId),
   )
@@ -113,20 +127,38 @@ export default function AnalystAnalytics({
   ]
     .filter(Boolean)
     .join(' · ')
-  const draftDirty = draftType.trim() !== appliedType || draftVideo.trim() !== appliedVideoId
+  const draftDirty =
+    draftType.trim() !== appliedType ||
+    draftVideo.trim() !== appliedVideoId ||
+    draftVersionId !== selectedVersionId ||
+    draftAsOfDate !== (versionContext?.asOfDate ?? '')
 
-  const runServerFilter = (nextType: string, nextVideo: string) => {
+  const runServerFilter = (
+    nextType: string,
+    nextVideo: string,
+    nextVersionId: string,
+    nextAsOfDate: string,
+  ) => {
     setFiltering(true)
     const projectId = analytics.project.id
-    void getProjectAnalytics(projectId, {
-      observationType: nextType ? nextType : undefined,
-      videoId: nextVideo ? nextVideo : undefined,
-    })
+    void getProjectAnalytics(
+      projectId,
+      {
+        observationType: nextType ? nextType : undefined,
+        videoId: nextVideo ? nextVideo : undefined,
+      },
+      {
+        versionId: nextVersionId ? nextVersionId : null,
+        asOfDate: nextVersionId ? null : nextAsOfDate || null,
+      },
+    )
       .then((result) => {
         if (!result) return // projet inaccessible : on conserve l'état précédent
         setAnalytics(result)
         // Le filtre observateur (couche client) ne s'applique plus au nouveau contexte.
         setSelectedObserverId('')
+        setDraftVersionId(result.version?.versionId ?? '')
+        setDraftAsOfDate(result.version?.asOfDate ?? '')
       })
       .catch((error: unknown) => {
         toast.error(t.filterApply, {
@@ -138,12 +170,21 @@ export default function AnalystAnalytics({
 
   const handleApplyFilter = () => {
     if (!draftDirty || filtering) return
-    runServerFilter(draftType.trim(), draftVideo.trim())
+    runServerFilter(draftType.trim(), draftVideo.trim(), draftVersionId, draftAsOfDate)
   }
 
   const handleResetFilterDraft = () => {
     setDraftType(appliedType)
     setDraftVideo(appliedVideoId)
+    setDraftVersionId(selectedVersionId)
+    setDraftAsOfDate(versionContext?.asOfDate ?? '')
+  }
+
+  const handleBackToCurrent = () => {
+    if (filtering) return
+    setDraftVersionId('')
+    setDraftAsOfDate('')
+    runServerFilter(draftType.trim(), draftVideo.trim(), '', '')
   }
 
   const summary = analytics.summary
@@ -236,8 +277,55 @@ export default function AnalystAnalytics({
         )}
       </section>
 
-      {/* ——— Filtres Type / Vidéo — recalcul côté serveur ——— */}
+      {/* ——— Filtres Version / Type / Vidéo — recalcul côté serveur ——— */}
       <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
+        <div className="mb-4 flex flex-wrap items-end gap-4 border-b border-zinc-100 pb-4 dark:border-white/5">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            Version analytique
+            <select
+              value={draftVersionId}
+              disabled={filtering}
+              onChange={(event) => {
+                setDraftVersionId(event.target.value)
+                if (event.target.value) setDraftAsOfDate('')
+              }}
+              className="h-9 min-w-[16rem] rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-200 dark:focus:border-milk dark:focus:ring-milk/15"
+            >
+              <option value="">Analyse actuelle</option>
+              {versionHistory
+                .slice()
+                .reverse()
+                .map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {`V${entry.versionNumber} — ${new Date(entry.effectiveAt).toLocaleDateString(
+                      'fr-FR',
+                    )} · ${entry.detections}/${entry.possibleObservations} · ${entry.configuredPoints} fenêtre${
+                      entry.configuredPoints > 1 ? 's' : ''
+                    }`}
+                  </option>
+                ))}
+            </select>
+          </label>
+
+          {isHistoricalVersion ? (
+            <button
+              type="button"
+              onClick={handleBackToCurrent}
+              disabled={filtering}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3.5 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              <RotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
+              Analyse actuelle
+            </button>
+          ) : null}
+
+          <p className="basis-full text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            {isHistoricalVersion
+              ? 'Instantané figé : ces chiffres ne changeront plus, même si la configuration évolue. Les exports portent cette version.'
+              : 'Analyse actuelle : configuration en vigueur et toutes les observations valides. Ajouter une fenêtre augmente les possibles sans effacer les détections passées.'}
+          </p>
+        </div>
+
         <div className="flex flex-wrap items-end gap-4">
           <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
             {t.filterType}
@@ -316,7 +404,7 @@ export default function AnalystAnalytics({
       <section className="flex flex-wrap items-center gap-3">
         {hasData ? (
           <a
-            href={`/api/admin/projects/${analytics.project.id}/export-global-excel`}
+            href={`/api/admin/projects/${analytics.project.id}/export-global-excel${versionQuery}`}
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-ink px-4 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
             title={t.exportExcelHint}
           >
