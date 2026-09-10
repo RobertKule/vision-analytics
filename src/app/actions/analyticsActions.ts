@@ -1,8 +1,17 @@
 'use server'
 
+import { getCurrentSession } from '@/lib/auth'
+import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
-import { detectionProbability } from '@/lib/globalExportModel'
+import { captureImageEndpoint } from '@/lib/captureImageAccess'
+import {
+  auditVersionViewed,
+  resolveAnalyticsView,
+  type AnalyticsVersionSelector,
+  type AnalyticsVersionSummary,
+} from '@/lib/analyticsVersionStore'
+import type { AnalyticsRowFilter } from '@/lib/analyticsSource'
+import type { AnalyticsObservationRow } from '@/lib/analyticsVersioning'
 import type {
   AnalyticsFilter,
   AnalyticsVideoContextDto,
@@ -13,8 +22,25 @@ import type {
   ProjectAnalyticsDto,
 } from '@/lib/types'
 
-/** Passe générique héritée représentée par l'absence de `videoId` ('' côté client). */
-const LEGACY_GENERIC_VIDEO_ID = ''
+/**
+ * ANALYSES D'UN PROJET — LECTURE SEULE.
+ *
+ * Cette Server Action ne crée JAMAIS de version analytique : consulter le tableau
+ * de bord, appliquer un filtre, consulter un type ou l'historique sont des lectures
+ * pures. Seule une modification de configuration versionne (cf. `analyticsVersionStore`).
+ *
+ * Toutes les métriques proviennent de la SOURCE ANALYTIQUE UNIQUE
+ * (`resolveAnalyticsView`) — la même que l'Excel global, l'Excel observateur et le
+ * PDF. Pour une même version : dashboard = Excel = PDF.
+ *
+ * Deux modes :
+ *  — « Analyse actuelle » : configuration courante + TOUTES les observations valides
+ *    (anciennes + nouvelles). Ajouter une fenêtre augmente le dénominateur sans
+ *    jamais effacer les détections déjà réalisées.
+ *  — Version historique (identifiant exact, ou « afficher l'analyse avant le : ») :
+ *    l'instantané IMMUABLE est renvoyé tel quel, jamais recalculé avec la
+ *    configuration actuelle.
+ */
 
 function formatSeconds(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -38,44 +64,103 @@ function normalizeFilter(filter: unknown): AnalyticsFilter {
   // '' est un marqueur RÉSERVÉ pour la passe générique héritée (videoId null).
   const rawVideo = (filter as Record<string, unknown>)?.videoId
   if (typeof rawVideo === 'string') {
-    const trimmed = rawVideo.trim()
-    normalized.videoId = trimmed
+    normalized.videoId = rawVideo.trim()
   }
   return normalized
 }
 
+/** Sélecteur de version normalisé (identifiant exact ou date `YYYY-MM-DD`). */
+function normalizeSelector(input: unknown): AnalyticsVersionSelector {
+  if (!input || typeof input !== 'object') return {}
+  const raw = input as Record<string, unknown>
+  const versionId = typeof raw.versionId === 'string' ? raw.versionId.trim() : ''
+  const asOfDate = typeof raw.asOfDate === 'string' ? raw.asOfDate.trim() : ''
+  return { versionId: versionId || null, asOfDate: asOfDate || null }
+}
+
+/** Traduit le filtre d'interface en restriction de lecture serveur. */
+function toRowFilter(applied: AnalyticsFilter): AnalyticsRowFilter {
+  const rowFilter: AnalyticsRowFilter = {}
+  if (applied.observationType !== undefined) rowFilter.observationType = applied.observationType
+  if (applied.videoId !== undefined) rowFilter.videoId = applied.videoId
+  if (applied.observerId !== undefined) rowFilter.observerId = applied.observerId
+  return rowFilter
+}
+
+/** Capture exposée à l'interface — image servie par l'endpoint SÉCURISÉ. */
+function toCaptureDto(
+  row: AnalyticsObservationRow,
+  options: { delaySeconds: number | null; isGhostPoint: boolean },
+): ObservationCaptureDto {
+  return {
+    id: row.id ?? '',
+    timestampTotal: row.timestampTotal,
+    delaySeconds: options.delaySeconds,
+    // Jamais un lien Google Drive direct : les fichiers restent privés.
+    imageUrl: row.id ? captureImageEndpoint(row.id) : '',
+    observerAnonymousId: row.anonymousId,
+    observerEmail: row.email,
+    createdAt: row.createdAt,
+    isGhostPoint: options.isGhostPoint,
+  }
+}
+
+export type ProjectAnalyticsOptions = {
+  /** Version historique exacte à afficher. */
+  versionId?: string | null
+  /** Filtre « afficher l'analyse avant le : » (date `YYYY-MM-DD`). */
+  asOfDate?: string | null
+}
+
 /**
- * Calcule et extrait l'ensemble des métriques scientifiques et de concordance d'un
- * projet, pour un contexte éventuellement filtré (type / vidéo / observateur).
+ * Métriques scientifiques et de concordance d'un projet, pour un contexte
+ * éventuellement filtré (type / vidéo / observateur) et une version analytique
+ * éventuellement historique.
  *
- * Les filtres sont appliqués CÔTÉ SERVEUR : toutes les métriques (précision,
- * validées, fantômes, concordance, observateurs, délais, timeline) sont recalculées
+ * Les filtres sont appliqués CÔTÉ SERVEUR : toutes les métriques sont recalculées
  * sur le sous-ensemble réellement sélectionné — jamais une simple coupe frontend.
  */
 export async function getProjectAnalytics(
   projectId: string,
   filter?: AnalyticsFilter | null,
+  options?: ProjectAnalyticsOptions | null,
 ): Promise<ProjectAnalyticsDto | null> {
   const id = typeof projectId === 'string' ? projectId.trim() : ''
   if (!id) return null
 
-  // Garde d'accès multi-rôles unifiée (ADMIN / propriétaire / analyste partagé).
-  const accessLevel = await getCurrentProjectAccess(id)
-  if (!canManage(accessLevel)) return null
+  // Garde d'accès multi-rôles unifiée (ADMIN / propriétaire / analyste invité).
+  // Vérifiée AVANT toute lecture : rien ne part vers le frontend sans elle.
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!permissions.canAnalyze) return null
+
+  const appliedFilter = normalizeFilter(filter)
+  const selector = normalizeSelector(options)
+
+  const view = await resolveAnalyticsView(id, selector, toRowFilter(appliedFilter))
+  if (!view) return null
 
   const project = await prisma.project.findUnique({
     where: { id },
-    include: {
-      points: {
-        orderBy: { trameDebut: 'asc' },
-      },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      videoUrl: true,
+      createdAt: true,
+      observationTypes: true,
       videos: {
         orderBy: { orderIndex: 'asc' },
-        include: {
+        select: {
+          id: true,
+          typeLabel: true,
+          name: true,
+          source: true,
+          orderIndex: true,
+          benchmarkSeconds: true,
           _count: {
             select: {
-              // Seules les captures CERTIFIÉES (isVerified) comptent : une session
-              // « en cours » (transitoire) n'est jamais visible des analyses.
+              // Seules les captures CERTIFIÉES comptent : une session « en cours »
+              // (transitoire) n'est jamais visible des analyses.
               observations: { where: { isVerified: true } },
               points: true,
             },
@@ -84,269 +169,89 @@ export async function getProjectAnalytics(
       },
     },
   })
-
   if (!project) return null
 
-  const appliedFilter = normalizeFilter(filter)
-
-  // Construction du prédicat d'observations aligné sur le filtre. `isVerified` est
-  // TOUJOURS vrai : seules les données certifiées alimentent les statistiques.
-  const where: {
-    projectId: string
-    observationType?: string
-    userId?: string
-    videoId?: string | null
-    isVerified?: boolean
-  } = { projectId: project.id, isVerified: true }
-  if (appliedFilter.observationType) where.observationType = appliedFilter.observationType
-  if (appliedFilter.observerId) where.userId = appliedFilter.observerId
-  if (appliedFilter.videoId !== undefined) {
-    where.videoId = appliedFilter.videoId === LEGACY_GENERIC_VIDEO_ID ? null : appliedFilter.videoId
+  if (view.version) {
+    const session = await getCurrentSession()
+    await auditVersionViewed({
+      actorId: session?.uid ?? null,
+      projectId: id,
+      version: view.version,
+      surface: 'dashboard',
+    })
   }
 
-  // Récupération des observations certifiées du contexte filtré.
-  const observations = await prisma.observation.findMany({
-    where,
-    include: {
-      user: {
-        select: {
-          id: true,
-          anonymousId: true,
-          email: true,
-        },
-      },
-    },
-    orderBy: { timestampTotal: 'asc' },
-  })
+  const { config, rows, metrics } = view
 
-  // Fenêtres pertinentes : toutes, ou uniquement celles de la vidéo filtrée.
-  const relevantPoints =
-    appliedFilter.videoId === undefined
-      ? project.points
-      : project.points.filter((point) =>
-          appliedFilter.videoId === LEGACY_GENERIC_VIDEO_ID
-            ? point.videoId === null
-            : point.videoId === appliedFilter.videoId,
-        )
-
-  // Ensemble des observateurs distincts ayant soumis des données certifiées.
-  const observerMap = new Map<string, { id: string; anonymousId: string; email: string }>()
-  for (const obs of observations) {
-    if (obs.user && !observerMap.has(obs.user.id)) {
-      observerMap.set(obs.user.id, obs.user)
-    }
-  }
-  const totalObservers = observerMap.size
-
-  const validObservations = observations.filter((o) => !o.isGhostPoint)
-  const ghostObservations = observations.filter((o) => o.isGhostPoint)
-
-  // ——— Règle produit « détection analytique » ———
-  // Une détection = UNE par (observateur, type d'observation, fenêtre). La clé de
-  // déduplication inclut l'observationType : un observateur qui capture N fois la
-  // même fenêtre SOUS LE MÊME TYPE ne « détecte » cette fenêtre qu'une fois ; deux
-  // types distincts sur la même fenêtre produisent deux détections (règle affinée).
-  // Les fausses alertes restent des événements (chaque capture hors trame = 1).
-  // Le total « déclarations » = détections analytiques + fausses alertes →
-  // dénominateur commun de la précision.
-  const validPointKeys = new Set<string>()
-  for (const obs of validObservations) {
-    if (obs.pointId) {
-      validPointKeys.add(`${obs.userId}|${obs.observationType?.trim() || ''}|${obs.pointId}`)
-    }
-  }
-  const validObservationsCount = validPointKeys.size
-  const ghostPointsCount = ghostObservations.length
-  const totalObservations = validObservationsCount + ghostPointsCount
-
-  // ——— Points configurés du périmètre réellement filtré (type + vidéo) ———
-  // Pour surface une probabilité empirique cohérente avec le filtre, le
-  // dénominateur ne compte que les fenêtres rattachées à la passe du type filtré
-  // (typeLabel de la vidéo) ; sans filtre de type, toutes les fenêtres pertinentes.
-  const videoTypeByVideoId = new Map<string, string>()
-  for (const video of project.videos) {
-    videoTypeByVideoId.set(video.id, video.typeLabel?.trim() || '')
-  }
-  const configuredPointsInScope =
-    appliedFilter.observationType !== undefined
-      ? relevantPoints.filter((point) =>
-          point.videoId
-            ? (videoTypeByVideoId.get(point.videoId) ?? '') === appliedFilter.observationType
-            : appliedFilter.observationType === '',
-        ).length
-      : relevantPoints.length
-  const summaryDetectionProbability = detectionProbability(
-    validObservationsCount,
-    configuredPointsInScope,
-    totalObservers,
-  )
-
-  // ——— 1. Analyse par Point Cible (Concordance & Délais) ———
-  const pointsAnalytics: PointConcordanceDto[] = relevantPoints.map((point) => {
-    const matching = observations.filter((o) => o.pointId === point.id)
-    const distinctObserversOnPoint = new Set(matching.map((o) => o.userId)).size
-    const concordanceRate =
-      totalObservers > 0 ? Math.round((distinctObserversOnPoint / totalObservers) * 100) : 0
-
-    // Délai moyen PAR ÉVÉNEMENT (chaque capture validée de la fenêtre contribue un
-    // délai) — mesure de réaction, volontairement pas dédupliquée par point unique.
-    const delays = matching.map((o) => Math.max(0, o.timestampTotal - point.trameDebut))
-    const avgDelaySeconds =
-      delays.length > 0
-        ? Math.round((delays.reduce((acc, d) => acc + d, 0) / delays.length) * 10) / 10
-        : null
-
-    const timestamps = matching.map((o) => o.timestampTotal)
-    const minTimestamp = timestamps.length > 0 ? Math.min(...timestamps) : null
-    const maxTimestamp = timestamps.length > 0 ? Math.max(...timestamps) : null
-
-    const captures: ObservationCaptureDto[] = matching.map((o) => ({
-      id: o.id,
-      timestampTotal: o.timestampTotal,
-      delaySeconds: o.timestampTotal - point.trameDebut,
-      imageUrl: o.imageUrl,
-      observerAnonymousId: o.user.anonymousId,
-      observerEmail: o.user.email,
-      createdAt: o.createdAt.toISOString(),
-      isGhostPoint: false,
-    }))
-
+  // ——— 1. Analyse par fenêtre cible (concordance & délais) ———
+  const pointsAnalytics: PointConcordanceDto[] = config.points.map((point) => {
+    const metric = metrics.perPoint.find((item) => item.pointId === point.id)
+    const matching = rows.filter((row) => row.pointId === point.id)
+    const timestamps = matching.map((row) => row.timestampTotal)
     return {
       pointId: point.id,
-      pointName: point.pointName,
+      pointName: point.label,
       trameDebut: point.trameDebut,
       trameFin: point.trameFin,
       targetDuration: point.trameFin - point.trameDebut,
-      observerCount: distinctObserversOnPoint,
-      concordanceRate,
-      avgDelaySeconds,
-      minTimestamp,
-      maxTimestamp,
-      captures,
+      observerCount: metric?.observersDetected ?? 0,
+      concordanceRate: metric?.concordanceRate ?? 0,
+      avgDelaySeconds: metric?.avgDelaySeconds ?? null,
+      minTimestamp: timestamps.length > 0 ? Math.min(...timestamps) : null,
+      maxTimestamp: timestamps.length > 0 ? Math.max(...timestamps) : null,
+      captures: matching.map((row) =>
+        toCaptureDto(row, {
+          delaySeconds: row.timestampTotal - point.trameDebut,
+          isGhostPoint: false,
+        }),
+      ),
     }
   })
 
-  // Calcul du taux moyen de concordance globale
-  const overallConcordanceRate =
-    pointsAnalytics.length > 0
-      ? Math.round(
-          pointsAnalytics.reduce((acc, p) => acc + p.concordanceRate, 0) /
-            pointsAnalytics.length,
-        )
-      : 0
-
-  // Précision globale = points uniques validés / « déclarations » (points uniques
-  // validés + fausses alertes). Même formule que dans les exports Excel/CSV/PDF.
-  const overallPrecisionRate =
-    totalObservations > 0
-      ? Math.round((validObservationsCount / totalObservations) * 100)
-      : 0
-
-  // Délai moyen de réaction — PAR ÉVÉNEMENT : moyenne sur chaque capture validée
-  // (une fenêtre capturée 3 fois contribue 3 délais), pas par point unique.
-  const allDelays = pointsAnalytics.flatMap((p) =>
-    p.captures.map((c) => c.delaySeconds).filter((d): d is number => d !== null),
-  )
-  const averageDetectionDelay =
-    allDelays.length > 0
-      ? Math.round((allDelays.reduce((acc, d) => acc + d, 0) / allDelays.length) * 10) / 10
-      : null
-
-  // ——— 2. Analyse des Fausses Alertes (Points Fantômes) ———
-  const maxObsTime =
-    observations.length > 0 ? Math.max(...observations.map((o) => o.timestampTotal)) : 60
+  // ——— 2. Fausses alertes (points fantômes) ———
+  const ghostRows = rows.filter((row) => row.isGhostPoint)
+  const maxObsTime = rows.length > 0 ? Math.max(...rows.map((row) => row.timestampTotal)) : 60
   const maxTimelineSeconds = Math.max(60, Math.ceil((maxObsTime + 10) / 10) * 10)
 
   const bucketSize = 10
   const bucketCount = Math.max(1, Math.ceil(maxTimelineSeconds / bucketSize))
-  const ghostBuckets: GhostBucketDto[] = Array.from({ length: bucketCount }, (_, i) => {
-    const start = i * bucketSize
-    const end = start + bucketSize
+  const ghostBuckets: GhostBucketDto[] = Array.from({ length: bucketCount }, (_, index) => {
+    const start = index * bucketSize
     return {
-      intervalLabel: `${formatSeconds(start)} - ${formatSeconds(end)}`,
+      intervalLabel: `${formatSeconds(start)} - ${formatSeconds(start + bucketSize)}`,
       startSecond: start,
-      endSecond: end,
+      endSecond: start + bucketSize,
       count: 0,
     }
   })
-
-  for (const ghost of ghostObservations) {
-    const bucketIndex = Math.min(
-      Math.floor(ghost.timestampTotal / bucketSize),
-      ghostBuckets.length - 1,
-    )
-    if (bucketIndex >= 0 && ghostBuckets[bucketIndex]) {
-      ghostBuckets[bucketIndex].count++
-    }
+  for (const ghost of ghostRows) {
+    const index = Math.min(Math.floor(ghost.timestampTotal / bucketSize), ghostBuckets.length - 1)
+    if (index >= 0 && ghostBuckets[index]) ghostBuckets[index].count += 1
   }
-
-  const ghostCaptures: ObservationCaptureDto[] = ghostObservations.map((o) => ({
-    id: o.id,
-    timestampTotal: o.timestampTotal,
-    delaySeconds: null,
-    imageUrl: o.imageUrl,
-    observerAnonymousId: o.user.anonymousId,
-    observerEmail: o.user.email,
-    createdAt: o.createdAt.toISOString(),
-    isGhostPoint: true,
-  }))
 
   const ghostPointsAnalytics = {
-    totalGhostPoints: ghostPointsCount,
+    totalGhostPoints: metrics.ghostEvents,
     ghostRate:
-      totalObservations > 0 ? Math.round((ghostPointsCount / totalObservations) * 100) : 0,
+      metrics.totalClaims > 0 ? Math.round((metrics.ghostEvents / metrics.totalClaims) * 100) : 0,
     timelineDistribution: ghostBuckets.filter(
-      (b) => b.count > 0 || b.startSecond < maxTimelineSeconds,
+      (bucket) => bucket.count > 0 || bucket.startSecond < maxTimelineSeconds,
     ),
-    captures: ghostCaptures,
+    captures: ghostRows.map((row) => toCaptureDto(row, { delaySeconds: null, isGhostPoint: true })),
   }
 
-  // ——— 3. Matrice de Performance des Observateurs ———
-  // Compteurs « détections » selon la règle analytique : `validObservationsCount`
-  // et `pointsDetectedCount` = triplets distincts (observateur, type, fenêtre)
-  // non fantômes détectés par l'observateur ; `totalObservations` =
-  // « déclarations » (détections analytiques + fausses alertes) ;
-  // `precisionRate` = détections / déclarations.
-  const observersMetrics: ObserverMetricDto[] = Array.from(observerMap.values()).map(
-    (observer) => {
-      const userObs = observations.filter((o) => o.userId === observer.id)
-      const validObs = userObs.filter((o) => !o.isGhostPoint)
-      const ghostObs = userObs.filter((o) => o.isGhostPoint)
-      const uniquePointKeys = new Set<string>()
-      for (const obs of validObs) {
-        if (obs.pointId) {
-          uniquePointKeys.add(`${obs.userId}|${obs.observationType?.trim() || ''}|${obs.pointId}`)
-        }
-      }
-      const uniquePointsDetected = uniquePointKeys.size
-      const ghostEvents = ghostObs.length
-      const totalDeclarations = uniquePointsDetected + ghostEvents
-
-      const timestamps = userObs.map((o) => new Date(o.createdAt).getTime())
-      const firstSessionAt =
-        timestamps.length > 0 ? new Date(Math.min(...timestamps)).toISOString() : ''
-      const lastSessionAt =
-        timestamps.length > 0 ? new Date(Math.max(...timestamps)).toISOString() : ''
-
-      return {
-        userId: observer.id,
-        anonymousId: observer.anonymousId,
-        email: observer.email,
-        totalObservations: totalDeclarations,
-        validObservationsCount: uniquePointsDetected,
-        ghostPointsCount: ghostEvents,
-        pointsDetectedCount: uniquePointsDetected,
-        precisionRate:
-          totalDeclarations > 0
-            ? Math.round((uniquePointsDetected / totalDeclarations) * 100)
-            : 0,
-        firstSessionAt,
-        lastSessionAt,
-      }
-    },
-  )
-
-  observersMetrics.sort((a, b) => b.totalObservations - a.totalObservations)
+  // ——— 3. Matrice de performance des observateurs ———
+  const observersMetrics: ObserverMetricDto[] = metrics.perObserver.map((observer) => ({
+    userId: observer.observerId,
+    anonymousId: observer.anonymousId,
+    email: observer.email ?? '',
+    totalObservations: observer.totalClaims,
+    validObservationsCount: observer.detections,
+    ghostPointsCount: observer.ghostEvents,
+    pointsDetectedCount: observer.detections,
+    precisionRate: observer.precision !== null ? Math.round(observer.precision * 100) : 0,
+    firstSessionAt: observer.firstSubmittedAt ?? '',
+    lastSessionAt: observer.lastSubmittedAt ?? '',
+  }))
 
   const videosContext: AnalyticsVideoContextDto[] = project.videos.map((video) => ({
     id: video.id,
@@ -367,23 +272,46 @@ export async function getProjectAnalytics(
       description: project.description,
       videoUrl: project.videoUrl,
       createdAt: project.createdAt.toISOString(),
-      totalDefinedPoints: project.points.length,
+      totalDefinedPoints: metrics.configuredPoints,
       observationTypes: project.observationTypes,
       videos: videosContext,
     },
     summary: {
-      totalObservers,
-      totalObservations,
-      validObservationsCount,
-      ghostPointsCount,
-      overallConcordanceRate,
-      overallPrecisionRate,
-      averageDetectionDelay,
-      detectionProbability: summaryDetectionProbability,
+      totalObservers: metrics.observerCount,
+      totalObservations: metrics.totalClaims,
+      validObservationsCount: metrics.detections,
+      ghostPointsCount: metrics.ghostEvents,
+      overallConcordanceRate: metrics.concordanceRate,
+      overallPrecisionRate: metrics.precision !== null ? Math.round(metrics.precision * 100) : 0,
+      averageDetectionDelay: metrics.averageDetectionDelay,
+      detectionProbability: metrics.detectionProbability,
+      possibleObservations: metrics.possibleObservations,
       appliedFilter,
+    },
+    version: {
+      mode: view.mode,
+      frozen: view.frozen,
+      versionId: view.version?.id ?? null,
+      versionNumber: view.version?.versionNumber ?? null,
+      effectiveAt: view.version?.effectiveAt ?? null,
+      trigger: view.version?.trigger ?? null,
+      asOfDate: selector.asOfDate ?? null,
+      history: view.versions,
     },
     pointsAnalytics,
     ghostPointsAnalytics,
     observersMetrics,
   }
+}
+
+/** Historique des versions analytiques d'un projet (sélecteur d'interface). */
+export async function listProjectAnalyticsVersions(
+  projectId: string,
+): Promise<AnalyticsVersionSummary[]> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return []
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!permissions.canAnalyze) return []
+  const view = await resolveAnalyticsView(id, null, null)
+  return view?.versions ?? []
 }

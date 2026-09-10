@@ -31,6 +31,28 @@ enum ObserverTokenStatus {
   EXPIRED
 }
 
+/// Cycle de vie d'une PARTIE (passe vidéo) au sein d'une session d'observation.
+///
+/// « Envoyer cette partie » ≠ « terminer la session » : une partie peut être
+/// SUBMITTED (finalisée / verrouillée) alors que la session globale reste ACTIVE.
+/// Seul « Envoyer tout » finalise la session et la passe à COMPLETED.
+enum ObserverPartStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  SUBMITTED
+}
+
+/// État d'une DEMANDE de réactivation d'accès observateur.
+///
+/// L'observateur peut DEMANDER une réactivation (jamais la déclencher lui-même) ;
+/// seul un ADMIN confirme (APPROVED) ou refuse (REJECTED). Le statut de la demande
+/// est INDÉPENDANT du statut du jeton (`ObserverTokenStatus`).
+enum ReactivationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model User {
   id            String          @id @default(uuid())
   email         String          @unique
@@ -51,9 +73,31 @@ model User {
   grantedAccess ProjectAccess[]
   observerTokens ObserverAccessToken[]
   approvedAccounts User[]       @relation("AccountApproval")
+  reactivationDecisions ObserverReactivationRequest[] @relation("ReactivationDecisions")
   auditLogs     AuditLog[]
+  notifications Notification[]
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @default(now()) @updatedAt
+}
+
+/// NOTIFICATION IN-APP d'un utilisateur (lecture seule pour son destinataire).
+///
+/// Un utilisateur ne consulte QUE ses propres notifications ; la lecture et le
+/// marquage sont toujours vérifiés côté serveur (jamais un `userId` cible accepté
+/// du client). `readAt` non nul = lue (READ), sinon UNREAD.
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Type métier (ex. ACCOUNT_APPROVED, EXPERIENCE_SHARED, REACTIVATION_REQUESTED…).
+  type      String
+  title     String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId])
 }
 
 /// Journal d'audit (append-only) : trace « qui a fait quoi, sur quelle ressource, quand ».
@@ -91,6 +135,7 @@ model Project {
   videos           Video[]         // Passes vidéo du projet (multi-vidéo : chaque vidéo peut être rattachée à un type d'observation)
   accessList       ProjectAccess[] // Partage ANALYST → ANALYST (par username)
   accessTokens     ObserverAccessToken[] // Liens d'accès observateur (jetons par projet)
+  analyticsVersions AnalyticsVersion[] // Versions analytiques immuables (historique)
   createdAt        DateTime        @default(now())
 }
 
@@ -114,22 +159,75 @@ model Video {
   benchmarkSeconds Int?
   points      ProjectPoint[]
   observations Observation[]
+  partSubmissions ObserverPartSubmission[]
   createdAt   DateTime   @default(now())
 
   @@index([projectId])
 }
 
-/// Partage d'un projet entre analystes (propriétaire + invités).
+/// Partage d'un projet (« expérience ») entre analystes (propriétaire + invités).
+///
+/// RBAC du partage : un invité obtient TOUJOURS la consultation (voir / analyser /
+/// exporter). Le droit de MODIFICATION (configuration, types, vidéos, fenêtres,
+/// partage, clés observateur) n'est accordé que si `canEdit = true` — c'est-à-dire
+/// uniquement quand le partage a explicitement donné un droit d'édition.
 model ProjectAccess {
   id        String   @id @default(uuid())
   projectId String
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Droit d'édition explicite du partage (false = consultation/analyse/export seuls).
+  canEdit   Boolean  @default(false)
   createdAt DateTime @default(now())
 
   @@unique([projectId, userId])
   @@index([userId])
+}
+
+/// VERSION ANALYTIQUE IMMUABLE d'un projet (« expérience »).
+///
+/// Une version est un INSTANTANÉ figé de l'état analytique : la configuration du
+/// périmètre (fenêtres/points, types, passes vidéo) ET les métriques calculées à
+/// partir des observations valides disponibles à cet instant (`dataCutoffAt`).
+///
+/// Règles (jamais violées) :
+///  — une version est créée UNIQUEMENT lorsqu'une modification de configuration peut
+///    changer le périmètre analytique (ajout/suppression de fenêtre ou de point,
+///    modification des types, des passes vidéo…) ;
+///  — une nouvelle capture / observation ne crée JAMAIS de version ;
+///  — une version déjà écrite n'est JAMAIS recalculée ni mise à jour : aucune
+///    fonction de ce dépôt ne met à jour `configuration` ni `metrics` ;
+///  — l'« analyse actuelle » n'est pas une ligne de cette table : elle est calculée
+///    en direct sur la configuration courante et TOUTES les données valides.
+model AnalyticsVersion {
+  id            String   @id @default(uuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Numéro croissant par projet (1, 2, 3…), attribué à l'écriture.
+  versionNumber Int
+  /// Instant de figement = borne haute des observations incluses dans les métriques.
+  effectiveAt   DateTime @default(now())
+  /// Borne haute explicite des données prises en compte (identique à `effectiveAt`).
+  dataCutoffAt  DateTime
+  /// Cause du figement (ex. WINDOW_ADDED, WINDOW_REMOVED, TYPES_UPDATED, VIDEO_ADDED…).
+  trigger       String
+  /// `previous` = état analytique JUSTE AVANT la modification de configuration ;
+  /// `current`  = état analytique JUSTE APRÈS la modification.
+  stage         String
+  /// Empreinte stable du périmètre analytique (sert à détecter un vrai changement).
+  perimeterHash String
+  /// Instantané figé de la configuration (fenêtres, types, passes) — jamais réécrit.
+  configuration Json
+  /// Instantané figé des métriques analytiques — jamais réécrit.
+  metrics       Json
+  /// Auteur de la modification de configuration (null si non identifiable).
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  @@unique([projectId, versionNumber])
+  @@index([projectId, effectiveAt])
+  @@index([projectId])
 }
 
 /// Lien d'accès observateur par projet : un jeton aléatoire à haute entropie (dont seul le
@@ -145,6 +243,9 @@ model ObserverAccessToken {
   /// que le lien n'a jamais été ouvert.
   observerId     String?
   observer       User?               @relation(fields: [observerId], references: [id], onDelete: SetNull)
+  /// Email du destinataire de l'invitation (affichage admin, déduplication, notifications).
+  /// Ce n'est PAS une authentification : le droit d'accès repose sur le token/session.
+  observerEmail  String?
   status         ObserverTokenStatus @default(ACTIVE)
   createdAt      DateTime            @default(now())
   expiresAt      DateTime? // null = sans expiration
@@ -154,10 +255,63 @@ model ObserverAccessToken {
   /// Session d'observation logique (runId) stable pour ce lien : la reprise du travail et la
   /// finalisation s'appuient dessus (jamais exposé à l'observateur).
   sessionRunId   String?
+  /// États par PARTIE (passe vidéo) de cette session : une partie envoyée est verrouillée
+  /// indépendamment des autres, la session globale n'étant clôturée qu'à « Envoyer tout ».
+  partSubmissions ObserverPartSubmission[]
+  /// Demandes de réactivation de l'accès (une seule PENDING à la fois par jeton).
+  reactivationRequests ObserverReactivationRequest[]
 
   @@index([projectId])
   @@index([observerId])
   @@index([status])
+}
+
+/// DEMANDE DE RÉACTIVATION d'un accès observateur (jeton terminé / désactivé).
+///
+/// L'observateur crée UNE demande (PENDING) sans jamais réactiver lui-même son accès.
+/// Seul un ADMIN confirme (APPROVED → le jeton redevient ACTIVE) ou refuse (REJECTED →
+/// l'accès reste tel quel). Les données, parties envoyées et l'historique sont toujours
+/// conservés : une réactivation ne supprime ni ne recrée rien.
+model ObserverReactivationRequest {
+  id          String            @id @default(uuid())
+  tokenId     String
+  token       ObserverAccessToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  status      ReactivationStatus @default(PENDING)
+  requestedAt DateTime          @default(now())
+  decidedAt   DateTime?
+  /// ADMIN ayant statué sur la demande (jamais l'observateur).
+  decidedById String?
+  decidedBy   User?             @relation("ReactivationDecisions", fields: [decidedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime          @default(now())
+
+  @@index([tokenId])
+  @@index([status])
+}
+
+/// ÉTAT PAR PARTIE d'une session d'observation (lien par projet).
+///
+/// Une « partie » = une passe vidéo (`videoId`) ou la passe générique héritée
+/// (`videoId = null`). Chaque partie a son propre statut : NOT_STARTED, IN_PROGRESS,
+/// ou SUBMITTED. « Envoyer cette partie » finalise la partie visée (ses captures
+/// deviennent certifiées) SANS clôturer la session ; « Envoyer tout » finalise les
+/// parties restantes puis clôture la session (le jeton passe COMPLETED).
+///
+/// La base est la source de vérité : une partie SUBMITTED refuse toute nouvelle
+/// capture / modification / suppression, mais n'invalide pas le jeton — l'observateur
+/// reprend normalement les parties encore ouvertes.
+model ObserverPartSubmission {
+  id          String             @id @default(uuid())
+  tokenId     String
+  token       ObserverAccessToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  /// Passe vidéo cible ; null = passe générique héritée (projet à vidéo unique).
+  videoId     String?
+  video       Video?             @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  status      ObserverPartStatus @default(NOT_STARTED)
+  submittedAt DateTime?
+  createdAt   DateTime           @default(now())
+
+  @@index([tokenId])
+  @@index([tokenId, videoId])
 }
 
 model ProjectPoint {

@@ -25,6 +25,8 @@ export type AuditEntityType =
   | 'observation'
   | 'share'
   | 'export'
+  | 'analytics'
+  | 'session'
 
 export type AuditMetadata = Record<string, string | number | boolean | null>
 
@@ -59,6 +61,21 @@ export const AUDIT_ACTIONS = {
   observerAccessSuccess: 'OBSERVER_ACCESS_SUCCESS',
   observerAccessFailure: 'OBSERVER_ACCESS_FAILURE',
   observerSessionCompleted: 'OBSERVER_SESSION_COMPLETED',
+  // Envoi par partie (Partie 12) : « Envoyer cette partie » ≠ « terminer la session ».
+  observerPartSubmitted: 'OBSERVER_PART_SUBMITTED',
+  // Réactivation d'accès observateur (l'observateur demande, l'ADMIN décide).
+  observerReactivationRequested: 'OBSERVER_TOKEN_REACTIVATION_REQUESTED',
+  observerReactivationApproved: 'OBSERVER_TOKEN_REACTIVATION_APPROVED',
+  observerReactivationRejected: 'OBSERVER_TOKEN_REACTIVATION_REJECTED',
+  observerTokenReactivated: 'OBSERVER_TOKEN_REACTIVATED',
+  // Notifications in-app + emails transactionnels (Partie V)
+  notificationCreated: 'NOTIFICATION_CREATED',
+  notificationRead: 'NOTIFICATION_READ',
+  emailSent: 'EMAIL_SENT',
+  emailFailed: 'EMAIL_FAILED',
+  observerInvitationCreated: 'OBSERVER_INVITATION_CREATED',
+  observerInvitationEmailSent: 'OBSERVER_INVITATION_EMAIL_SENT',
+  observerInvitationEmailFailed: 'OBSERVER_INVITATION_EMAIL_FAILED',
   // Projets
   projectCreated: 'PROJECT_CREATED',
   projectUpdated: 'PROJECT_UPDATED',
@@ -83,6 +100,17 @@ export const AUDIT_ACTIONS = {
   exportChart: 'EXPORT_CHART',
   exportPdf: 'EXPORT_PDF',
   exportObserver: 'EXPORT_OBSERVER',
+  // Versionnage des analyses (Partie I). `metadata` ne porte que des identifiants
+  // internes et des compteurs — jamais de jeton, secret ou cookie.
+  analyticsVersionCreated: 'ANALYTICS_VERSION_CREATED',
+  analyticsRecalculated: 'ANALYTICS_RECALCULATED',
+  analyticsVersionViewed: 'ANALYTICS_VERSION_VIEWED',
+  // Partage d'expériences entre analystes
+  experienceShared: 'EXPERIENCE_SHARED',
+  experienceShareRevoked: 'EXPERIENCE_SHARE_REVOKED',
+  // Vérification de session (Partie D) — jamais le jeton brut, jamais le cookie
+  sessionCheckSuccess: 'SESSION_CHECK_SUCCESS',
+  sessionCheckFailure: 'SESSION_CHECK_FAILURE',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]

@@ -4,8 +4,15 @@ import { revalidatePath, updateTag } from 'next/cache'
 import { Prisma, Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentSession } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { recordAudit, AUDIT_ACTIONS, type AuditLogInput } from '@/lib/audit'
+import { notify } from '@/lib/notify'
+import { ANALYTICS_TRIGGERS, type AnalyticsTrigger } from '@/lib/analyticsVersioning'
+import {
+  captureAnalyticsSnapshot,
+  recordConfigChangeVersions,
+} from '@/lib/analyticsVersionStore'
+import { reclassifyGhostsForNewWindow } from '@/lib/observationReclassify'
 import type { ActionResult, AnalystProjectDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 
@@ -15,6 +22,28 @@ const msg = (locale: Locale, en: string, fr: string) => (locale === 'fr' ? fr : 
 async function actorAudit(input: Omit<AuditLogInput, 'userId'>): Promise<void> {
   const session = await getCurrentSession()
   await recordAudit({ ...input, userId: session?.uid ?? null })
+}
+
+/**
+ * Encadre une modification de configuration par le VERSIONNAGE ANALYTIQUE :
+ * l'état d'avant est figé, la mutation s'applique, l'état d'après est figé.
+ * Les observations et détections déjà réalisées ne sont jamais touchées.
+ */
+async function versionedConfigChange<T>(
+  projectId: string,
+  trigger: AnalyticsTrigger,
+  mutate: () => Promise<T>,
+): Promise<T> {
+  const before = await captureAnalyticsSnapshot(projectId)
+  const result = await mutate()
+  const session = await getCurrentSession()
+  await recordConfigChangeVersions({
+    projectId,
+    before,
+    trigger,
+    actorId: session?.uid ?? null,
+  })
+  return result
 }
 
 /** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
@@ -57,6 +86,9 @@ export async function listAnalystProjects(): Promise<AnalystProjectDto[]> {
   return projects.map((project) => {
     const isOwner = project.ownerId === session.uid
     const ownerId = project.ownerId
+    const myShare = project.accessList.find((access) => access.userId === session.uid)
+    // Droit de modification effectif : ADMIN, propriétaire, ou partage avec édition.
+    const canEdit = session.role === 'ADMIN' || isOwner || myShare?.canEdit === true
     return {
       id: project.id,
       title: project.title,
@@ -74,9 +106,15 @@ export async function listAnalystProjects(): Promise<AnalystProjectDto[]> {
       ownerUsername: project.owner?.username ?? project.owner?.email ?? null,
       isOwner,
       isShared: !isOwner && project.ownerId !== null,
+      canEdit,
       sharedWith: project.accessList
         .filter((a) => a.userId !== session.uid)
-        .map((a) => ({ userId: a.userId, username: a.user.username, email: a.user.email })),
+        .map((a) => ({
+          userId: a.userId,
+          username: a.user.username,
+          email: a.user.email,
+          canEdit: a.canEdit,
+        })),
     }
   })
 }
@@ -124,11 +162,11 @@ export async function createOwnedProject(input: {
   }
 }
 
-/** Archive un projet (propriétaire, partagé ou administrateur). */
+/** Archive un projet — propriétaire, ADMIN, ou invité avec droit d'édition. */
 export async function archiveOwnedProject(input: { projectId: string; locale?: Locale }): Promise<ActionResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
-  const level = await getCurrentProjectAccess(input?.projectId ?? '')
-  if (!canManage(level)) {
+  const permissions = await getCurrentProjectPermissions(input?.projectId ?? '')
+  if (!permissions.canConfigure) {
     return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
   }
   try {
@@ -156,7 +194,14 @@ export async function archiveOwnedProject(input: { projectId: string; locale?: L
   }
 }
 
-/** Ajoute une fenêtre de validation temporelle (propriétaire, partagé ou admin). */
+/**
+ * Ajoute une fenêtre de validation temporelle.
+ *
+ * Réservé au propriétaire, à l'ADMIN, ou à un invité dont le partage donne
+ * explicitement le droit d'édition. L'ajout est VERSIONNÉ : l'état analytique
+ * précédent reste consultable à l'identique, et les détections déjà réalisées sont
+ * conservées — seul le nombre d'observations possibles augmente.
+ */
 export async function addWindowToProject(input: {
   projectId: string
   pointName: string
@@ -166,8 +211,8 @@ export async function addWindowToProject(input: {
 }): Promise<ActionResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
   const projectId = (input?.projectId ?? '').trim()
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  const permissions = await getCurrentProjectPermissions(projectId)
+  if (!permissions.canConfigure) {
     return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
   }
   const pointName = (input?.pointName ?? '').trim()
@@ -205,10 +250,22 @@ export async function addWindowToProject(input: {
     if (overlaps) {
       return { ok: false, error: msg(locale, 'This window overlaps an existing one.', 'Cette fenêtre chevauche une fenêtre existante.') }
     }
-    const created = await prisma.projectPoint.create({
-      data: { projectId, pointName, trameDebut, trameFin },
-      select: { id: true },
-    })
+    const created = await versionedConfigChange(
+      projectId,
+      ANALYTICS_TRIGGERS.windowAdded,
+      async () => {
+        const point = await prisma.projectPoint.create({
+          data: { projectId, pointName, trameDebut, trameFin },
+          select: { id: true, videoId: true, trameDebut: true, trameFin: true },
+        })
+        // ——— Ajouter une fenêtre ne supprime pas le passé ———
+        // Les observations déjà certifiées hors-trame qui tombent désormais dans la
+        // nouvelle fenêtre redeviennent des DÉTECTIONS VALIDES (le numérateur
+        // augmente). Fait DANS le callback pour que la version « après » le reflète.
+        await reclassifyGhostsForNewWindow(projectId, point)
+        return point
+      },
+    )
     await actorAudit({
       action: AUDIT_ACTIONS.projectUpdated,
       entityType: 'project',
@@ -217,6 +274,8 @@ export async function addWindowToProject(input: {
     })
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
+    revalidatePath(`/admin/projects/${projectId}/analytics`)
+    revalidatePath(`/analyst/projects/${projectId}/analytics`)
     return { ok: true }
   } catch (error) {
     console.error('Erreur lors de l’ajout de la fenêtre :', error)
@@ -224,7 +283,11 @@ export async function addWindowToProject(input: {
   }
 }
 
-/** Supprime une fenêtre de validation (les observations restent, sans point rattaché). */
+/**
+ * Supprime une fenêtre de validation. Les observations restent en base (aucune
+ * donnée supprimée), simplement plus rattachées au périmètre courant. La
+ * suppression est versionnée : l'état d'avant reste consultable à l'identique.
+ */
 export async function deleteWindowFromProject(input: { pointId: string; locale?: Locale }): Promise<ActionResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
   try {
@@ -233,9 +296,13 @@ export async function deleteWindowFromProject(input: { pointId: string; locale?:
       select: { projectId: true },
     })
     if (!point) return { ok: false, error: msg(locale, 'Window not found.', 'Fenêtre introuvable.') }
-    const level = await getCurrentProjectAccess(point.projectId)
-    if (!canManage(level)) return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
-    await prisma.projectPoint.delete({ where: { id: input.pointId } })
+    const permissions = await getCurrentProjectPermissions(point.projectId)
+    if (!permissions.canConfigure) {
+      return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
+    }
+    await versionedConfigChange(point.projectId, ANALYTICS_TRIGGERS.windowRemoved, () =>
+      prisma.projectPoint.delete({ where: { id: input.pointId } }),
+    )
     await actorAudit({
       action: AUDIT_ACTIONS.projectUpdated,
       entityType: 'project',
@@ -251,19 +318,30 @@ export async function deleteWindowFromProject(input: { pointId: string; locale?:
   }
 }
 
-/** Partage un projet avec un collègue analyste (par nom d'utilisateur). */
+/**
+ * Partage une expérience avec un collègue analyste (par nom d'utilisateur).
+ *
+ * Le partage donne TOUJOURS la consultation, l'analyse et l'export. Le droit de
+ * MODIFICATION n'est accordé que si `canEdit` est explicitement demandé — sans quoi
+ * l'invité ne peut ni configurer, ni re-partager, ni créer de clé observateur.
+ * Seuls le propriétaire, un ADMIN ou un invité disposant du droit d'édition peuvent
+ * partager. La gestion des UTILISATEURS reste réservée à l'ADMIN.
+ */
 export async function shareProjectWithUser(input: {
   projectId: string
   username: string
+  /** Droit d'édition explicite accordé à l'invité (défaut : consultation seule). */
+  canEdit?: boolean
   locale?: Locale
 }): Promise<ActionResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
   const projectId = (input?.projectId ?? '').trim()
   const username = (input?.username ?? '').trim()
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  const permissions = await getCurrentProjectPermissions(projectId)
+  if (!permissions.canShare) {
     return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
   }
+  const canEdit = input?.canEdit === true
 
   try {
     const colleague = await prisma.user.findFirst({
@@ -288,15 +366,29 @@ export async function shareProjectWithUser(input: {
 
     await prisma.projectAccess.upsert({
       where: { projectId_userId: { projectId, userId: colleague.id } },
-      create: { projectId, userId: colleague.id },
-      update: {},
+      create: { projectId, userId: colleague.id, canEdit },
+      update: { canEdit },
     })
 
     await actorAudit({
-      action: AUDIT_ACTIONS.projectUpdated,
+      action: AUDIT_ACTIONS.experienceShared,
       entityType: 'share',
       entityId: colleague.id,
-      metadata: { projectId, sharedWith: colleague.email },
+      metadata: { projectId, sharedWith: colleague.email, canEdit },
+    })
+    // ——— Notification in-app + email à l'analyste invité (Partie S) ———
+    await notify({
+      inApp: {
+        userId: colleague.id,
+        type: 'EXPERIENCE_SHARED',
+        title: 'Expérience partagée',
+        message: `Une expérience vous a été partagée.`,
+      },
+      email: {
+        to: colleague.email,
+        kind: 'EXPERIENCE_SHARED',
+        context: { recipientName: colleague.email },
+      },
     })
     revalidatePath('/analyst/projects')
     return { ok: true }
@@ -306,7 +398,7 @@ export async function shareProjectWithUser(input: {
   }
 }
 
-/** Retire l'accès d'un collègue au projet (propriétaire ou admin). */
+/** Retire l'accès d'un collègue au projet (propriétaire ou administrateur). */
 export async function unshareProjectFromUser(input: {
   projectId: string
   userId: string
@@ -314,8 +406,8 @@ export async function unshareProjectFromUser(input: {
 }): Promise<ActionResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
   const projectId = (input?.projectId ?? '').trim()
-  const level = await getCurrentProjectAccess(projectId)
-  if (level !== 'owner' && level !== 'admin') {
+  const permissions = await getCurrentProjectPermissions(projectId)
+  if (permissions.level !== 'owner' && permissions.level !== 'admin') {
     return { ok: false, error: msg(locale, 'Only the owner can unshare.', 'Seul le propriétaire peut retirer un accès.') }
   }
   try {
@@ -323,7 +415,7 @@ export async function unshareProjectFromUser(input: {
       where: { projectId, userId: input.userId },
     })
     await actorAudit({
-      action: AUDIT_ACTIONS.projectUpdated,
+      action: AUDIT_ACTIONS.experienceShareRevoked,
       entityType: 'share',
       entityId: input.userId,
       metadata: { projectId, unsharedWith: input.userId },

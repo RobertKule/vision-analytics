@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getCurrentSession } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { buildObserverWorkbookBuffer, observerKeyName } from '@/lib/serverExport'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
@@ -35,8 +35,9 @@ export async function GET(_request: Request, ctx: DataContext): Promise<NextResp
     return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
   }
 
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  // RBAC : ADMIN, propriétaire, ou analyste invité (l'export suit la consultation).
+  const permissions = await getCurrentProjectPermissions(projectId)
+  if (!permissions.canExport) {
     return NextResponse.json(
       { error: 'Accès de gestion requis sur ce projet.' },
       { status: 403 },

@@ -56,6 +56,11 @@ export type SharedAccessDto = {
   userId: string
   username: string | null
   email: string
+  /**
+   * Vrai si ce partage donne le droit de MODIFICATION. Faux = consultation,
+   * analyse et export uniquement (règle par défaut du partage d'expérience).
+   */
+  canEdit: boolean
 }
 
 /** Projet vu depuis l'espace analyste (propriétaire ou partagé). */
@@ -64,6 +69,8 @@ export type AnalystProjectDto = ProjectDto & {
   ownerUsername: string | null
   isOwner: boolean
   isShared: boolean
+  /** Droit de modification effectif de la session courante sur cette expérience. */
+  canEdit: boolean
   sharedWith: SharedAccessDto[]
 }
 
@@ -140,6 +147,13 @@ export type CaptureRecord = {
    * le carrousel, jamais transmis à la soumission.
    */
   centroid?: { x: number; y: number }
+  /**
+   * Géométrie des cercles au moment de la capture — MÉMOIRE LOCALE UNIQUEMENT
+   * (brouillon du navigateur). Elle permet au mode « Modifier » de restaurer le
+   * cercle exact et de garder la sélection active. Elle n'est JAMAIS transmise au
+   * serveur ni persistée en base : le protocole n'enregistre aucune géométrie.
+   */
+  circles?: Array<{ id: string; x: number; y: number; r: number; placedAt: number }>
 }
 
 /** Données nécessaires pour soumettre les observations d'une session. */
@@ -209,6 +223,12 @@ export type ObservationCaptureDto = {
   id: string
   timestampTotal: number
   delaySeconds: number | null // Décalage temporel par rapport à trameDebut
+  /**
+   * Adresse d'affichage de la capture : TOUJOURS l'endpoint serveur sécurisé
+   * (`/api/captures/<id>/image`). Les fichiers Google Drive restent privés — aucun
+   * lien Drive direct n'est transmis au navigateur (les exports, eux, conservent
+   * le `driveFileId` et le lien Drive).
+   */
   imageUrl: string
   observerAnonymousId: string
   observerEmail?: string | null
@@ -293,6 +313,45 @@ export type AnalyticsFilter = {
   observerId?: string
 }
 
+/**
+ * Version analytique disponible dans l'historique d'un projet (résumé).
+ * Chaque entrée est un instantané IMMUABLE : ses chiffres ne changent jamais.
+ */
+export type AnalyticsVersionOptionDto = {
+  id: string
+  versionNumber: number
+  /** Instant de figement (ISO) — base du filtre « afficher l'analyse avant le : ». */
+  effectiveAt: string
+  /** Cause du figement (ex. WINDOW_ADDED). */
+  trigger: string
+  /** `previous` = état d'avant la modification, `current` = état d'après. */
+  stage: 'previous' | 'current'
+  /** Fenêtres/points configurés à cet instant (dénominateur de base). */
+  configuredPoints: number
+  observerCount: number
+  /** Détections analytiques figées (numérateur). */
+  detections: number
+  /** Observations possibles = fenêtres configurées × observateurs. */
+  possibleObservations: number
+  detectionProbability: number | null
+}
+
+/** Contexte de version de l'analyse affichée (actuelle ou historique). */
+export type AnalyticsVersionContextDto = {
+  /** `current` = analyse actuelle (calculée en direct) ; `version` = instantané figé. */
+  mode: 'current' | 'version'
+  /** Vrai si les chiffres proviennent tels quels d'un instantané immuable. */
+  frozen: boolean
+  versionId: string | null
+  versionNumber: number | null
+  effectiveAt: string | null
+  trigger: string | null
+  /** Date demandée par le filtre « avant le : » (`YYYY-MM-DD`), si utilisé. */
+  asOfDate: string | null
+  /** Historique complet disponible (plus ancienne d'abord). */
+  history: AnalyticsVersionOptionDto[]
+}
+
 /** Contexte vidéo exposé aux vues autorisées (analytics / admin) : inclut le benchmark. */
 export type AnalyticsVideoContextDto = BlindVideoDto & {
   projectId: string
@@ -345,9 +404,21 @@ export type ProjectAnalyticsDto = {
      * null si le dénominateur est nul (aucun point configuré ou aucun observateur).
      */
     detectionProbability?: number | null
+    /**
+     * Observations POSSIBLES du périmètre = fenêtres/points configurés × observateurs.
+     * C'est le DÉNOMINATEUR : ajouter une fenêtre l'augmente, sans jamais toucher au
+     * numérateur (`validObservationsCount`).
+     */
+    possibleObservations?: number
     /** Filtre réellement appliqué aux calculs (cohérence métriques ↔ contexte). */
     appliedFilter?: AnalyticsFilter
   }
+  /**
+   * Version analytique de ces chiffres. En mode `version`, les valeurs viennent
+   * d'un instantané immuable et ne sont jamais remplacées par la configuration
+   * actuelle. Les exports reçoivent la MÊME version (dashboard = Excel = PDF).
+   */
+  version?: AnalyticsVersionContextDto
   pointsAnalytics: PointConcordanceDto[]
   ghostPointsAnalytics: GhostPointAnalyticsDto
   observersMetrics: ObserverMetricDto[]
@@ -361,8 +432,14 @@ export type ProjectObservationRowDto = {
   /** Horodatage vidéo en secondes. */
   timestampTotal: number
   isGhostPoint: boolean
-  /** URL publique de la capture annotée (Google Drive / CDN historique). */
+  /**
+   * Lien Google Drive de consultation de la capture — conservé pour les EXPORTS
+   * (CSV / JSON / Excel). Le fichier reste privé : ce lien n'est jamais utilisé
+   * comme source d'une balise `<img>`.
+   */
   imageUrl: string
+  /** Adresse d'affichage sécurisée dans l'application (`/api/captures/<id>/image`). */
+  imageEndpoint: string
   /** Date de soumission (ISO). */
   createdAt: string
   /** Type d'observation choisi par l'observateur (null si non configuré). */

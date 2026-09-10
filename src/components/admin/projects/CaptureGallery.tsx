@@ -2,6 +2,7 @@
 
 import { ImageIcon } from 'lucide-react'
 import type { ProjectObservationRowDto } from '@/lib/types'
+import { CAPTURE_IMAGE_UNAVAILABLE } from '@/lib/captureImageAccess'
 import { observerLabelOf } from '@/lib/exportHelpers'
 import { formatClock, formatDateTime } from '@/components/admin/projects/projectFormat'
 
@@ -22,7 +23,11 @@ function PointChip({ row }: { row: ProjectObservationRowDto }) {
 
 /**
  * Galerie / tableau des captures d'une sélection d'observations.
- * Chaque miniature s'ouvre en grand dans un nouvel onglet.
+ *
+ * Les images des captures sont servies par l'ENDPOINT SÉCURISÉ
+ * (`/api/captures/<id>/image`) : les fichiers Google Drive restent privés, et le
+ * serveur vérifie la session et l'autorisation avant de renvoyer le moindre octet.
+ * Une image indisponible affiche « Image indisponible », jamais un détail technique.
  */
 export default function CaptureGallery({
   rows,
@@ -59,7 +64,7 @@ export default function CaptureGallery({
             <tr key={row.id} className="transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.03]">
               <td className="px-4 py-2">
                 <a
-                  href={row.imageUrl}
+                  href={row.imageEndpoint}
                   target="_blank"
                   rel="noreferrer noopener"
                   title="Ouvrir la capture en grand"
@@ -67,11 +72,21 @@ export default function CaptureGallery({
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={row.imageUrl}
+                    src={row.imageEndpoint}
                     alt={`Capture à ${formatClock(row.timestampTotal)}`}
                     loading="lazy"
+                    onError={(event) => {
+                      // Capture retirée du stockage ou lecture Drive impossible :
+                      // on remplace la miniature par le message unique, sans détail.
+                      const image = event.currentTarget
+                      image.style.display = 'none'
+                      image.parentElement?.setAttribute('data-unavailable', 'true')
+                    }}
                     className="h-14 w-20 rounded-md border border-zinc-200 object-cover transition-transform group-hover:scale-105 dark:border-zinc-700"
                   />
+                  <span className="hidden items-center rounded-md border border-dashed border-zinc-300 px-2 py-1 text-[10px] font-medium text-zinc-500 group-data-[unavailable=true]:inline-flex dark:border-zinc-700 dark:text-zinc-400">
+                    {CAPTURE_IMAGE_UNAVAILABLE}
+                  </span>
                 </a>
               </td>
               <td className="whitespace-nowrap px-4 py-2">

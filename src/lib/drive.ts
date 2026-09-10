@@ -10,7 +10,11 @@
  *  — La configuration (email + clé privée du compte de service, dossier cible) est résolue
  *    PAresseusement, au moment d'une opération réelle — un environnement sans stockage
  *    configuré peut démarrer (les opérations de stockage échouent alors avec un message clair).
- *  — La base ne conserve QUE des références (`driveFileId` + `imageUrl` publique), jamais le binaire.
+ *  — La base ne conserve QUE des références (`driveFileId` + lien « view » Drive), jamais le binaire.
+ *  — Les fichiers restent PRIVÉS : aucune permission publique n'est jamais posée. L'affichage
+ *    des captures dans l'application passe par l'endpoint serveur sécurisé
+ *    `/api/captures/<id>/image` (vérification de session + autorisation, puis lecture
+ *    authentifiée des octets). Les exports conservent, eux, le `driveFileId` et le lien Drive.
  *  — Suppression ciblée par `fileId` ; un fichier déjà absent (404) est considéré supprimé.
  *  — Les erreurs TRANSITOIRES (réseau, 5xx, 429, 401 sans rétablissement) sont levées : l'appelant
  *    doit alors conserver la référence en base (jamais de suppression silencieuse → pas d'orphelin).
@@ -159,7 +163,12 @@ function decodeDataUrl(dataUrl: string): { mimeType: string; buffer: Buffer } {
 export type DriveUploadResult = {
   /** Identifiant Google Drive du fichier (persisté dans `Observation.driveFileId`). */
   driveFileId: string
-  /** URL publique de visualisation (persistée dans `Observation.imageUrl`, rendue en <img>). */
+  /**
+   * Lien « view » Google Drive (persisté dans `Observation.imageUrl`). Le fichier
+   * restant PRIVÉ, ce lien sert aux EXPORTS (ouverture par un profil autorisé sur
+   * Drive) — jamais de `<img src>` : l'application affiche les captures via
+   * l'endpoint serveur sécurisé `/api/captures/<id>/image`.
+   */
   imageUrl: string
   mimeType: string
 }
@@ -171,8 +180,10 @@ function captureFileBaseName(): string {
 }
 
 /**
- * Upload une capture annotée (data URL) vers Google Drive : création, écriture des octets,
- * partage « toute personne ayant le lien (lecture) ». Renvoie `driveFileId` + URL publique.
+ * Upload une capture annotée (data URL) vers Google Drive : création puis écriture des
+ * octets. Le fichier reste PRIVÉ (aucune permission publique n'est posée) : l'affichage
+ * dans l'application passe par l'endpoint serveur sécurisé `/api/captures/<id>/image`.
+ * Renvoie `driveFileId` + le lien « view » Drive (conservé pour les exports).
  * En cas d'échec après création du fichier, un nettoyage best-effort supprime le fichier partiel.
  */
 export async function uploadCaptureImage(
@@ -215,17 +226,11 @@ export async function uploadCaptureImage(
     )
     await assertOk(mediaResponse, 'écriture des octets')
 
-    // Partage public en lecture (la capture est rendue dans un <img> navigateur sans jeton).
-    const permissionResponse = await driveRequest(
-      context,
-      `/drive/v3/files/${encodeURIComponent(createdId)}/permissions?supportsAllDrives=true`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: 'reader', type: 'anyone' }),
-      },
-    )
-    await assertOk(permissionResponse, 'partage public')
+    // AUCUN PARTAGE PUBLIC : la capture reste PRIVÉE dans Google Drive. L'affichage
+    // dans l'application passe par l'endpoint serveur sécurisé
+    // (`/api/captures/<id>/image`), qui vérifie la session et l'autorisation puis lit
+    // les octets avec le compte de service. `imageUrl` reste le lien « view » Drive,
+    // conservé pour les exports (consultation par un profil autorisé sur Drive).
 
     console.log(`[DriveSync] UPLOAD_GOOGLE_DRIVE_SUCCESS fileId=${createdId} name="${name}"`)
     return { driveFileId: createdId, imageUrl: driveViewUrl(createdId), mimeType }

@@ -7,19 +7,14 @@ import {
   type PDFImage,
 } from 'pdf-lib'
 import { getCurrentSession } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
-import { prisma } from '@/lib/prisma'
-import { brandFileName, sanitizeBaseName, videoDisplayName } from '@/lib/exportHelpers'
-import type {
-  GlobalExportPoint,
-  GlobalExportRow,
-  GlobalExportSource,
-} from '@/lib/globalExportModel'
+import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
+import type { GlobalExportRow } from '@/lib/globalExportModel'
 import {
   buildDetectionProbabilityTable,
   buildProjectSummary,
-  computeDefinedPointsByType,
 } from '@/lib/globalExportModel'
+import { resolveExportSource } from '@/lib/exportSource'
+import { auditVersionViewed } from '@/lib/analyticsVersionStore'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
@@ -343,91 +338,33 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
   const chartsRaw = (payload as { charts?: unknown }).charts
   const chartInput = Array.isArray(chartsRaw) ? chartsRaw : []
 
-  // ——— Autorisation (même garde que les routes d'export existantes) ———
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      videoUrl: true,
-      observationTypes: true,
-      createdAt: true,
-      points: {
-        orderBy: { trameDebut: 'asc' },
-        select: {
-          id: true,
-          pointName: true,
-          trameDebut: true,
-          trameFin: true,
-          video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
-        },
-      },
-    },
+  // ——— Autorisation + SOURCE ANALYTIQUE UNIQUE ———
+  // Le PDF ne calcule rien de son côté : il reçoit exactement la vue affichée par
+  // le tableau de bord (même configuration, même version, mêmes détections).
+  // `?versionId=` / `?before=` sélectionnent une version historique figée.
+  const resolution = await resolveExportSource({
+    projectId,
+    url: new URL(request.url),
   })
-  if (!project) {
-    return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
-  }
-
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  if (!resolution.ok) {
     return NextResponse.json(
-      { error: 'Accès de gestion requis sur ce projet.' },
-      { status: 403 },
+      { error: resolution.refusal.error },
+      { status: resolution.refusal.status },
     )
   }
+  const { source, view, versionLabel, fileToken } = resolution.resolved
+  const project = source.project
+  const points = source.project.points
+  const rows = source.rows
 
-  // ——— Recalcul SERVEUR des observations (isVerified=true uniquement) ———
-  const observations = await prisma.observation.findMany({
-    where: { projectId, isVerified: true },
-    include: {
-      user: { select: { username: true, email: true, anonymousId: true } },
-      point: { select: { id: true, pointName: true } },
-      video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
-    },
-    orderBy: { createdAt: 'asc' },
-  })
-
-  const points: GlobalExportPoint[] = project.points.map((point) => ({
-    id: point.id,
-    label: point.pointName,
-    trameDebut: point.trameDebut,
-    trameFin: point.trameFin,
-    videoName: point.video ? videoDisplayName(point.video) : null,
-    type: point.video?.typeLabel?.trim() ?? '',
-  }))
-
-  const rows: GlobalExportRow[] = observations.map((observation) => ({
-    userId: observation.userId,
-    username: observation.user?.username ?? null,
-    email: observation.user?.email ?? null,
-    anonymousId: observation.user?.anonymousId ?? '—',
-    timestampTotal: observation.timestampTotal,
-    observationType: observation.observationType,
-    isGhostPoint: observation.isGhostPoint,
-    pointId: observation.pointId,
-    pointLabel: observation.point?.pointName ?? null,
-    imageUrl: observation.imageUrl,
-    driveFileId: observation.driveFileId,
-    videoName: observation.video ? videoDisplayName(observation.video) : null,
-    createdAt: observation.createdAt.toISOString(),
-  }))
-
-  const source: GlobalExportSource = {
-    project: {
-      id: project.id,
-      title: project.title,
-      description: project.description,
-      videoUrl: project.videoUrl,
-      observationTypes: project.observationTypes,
-      createdAt: project.createdAt.toISOString(),
-      definedPoints: points.length,
-      points,
-      definedPointsByType: computeDefinedPointsByType(points),
-    },
-    rows,
+  if (view.version) {
+    await auditVersionViewed({
+      actorId: session.uid,
+      projectId: project.id,
+      version: view.version,
+      surface: 'export-report-pdf',
+    })
   }
-
   const report = buildReportModel(
     rows,
     points.map((point) => ({
@@ -642,6 +579,12 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
   const author = session.username?.trim() || session.email || 'Non renseigné'
   const reference = `Réf. Étude : VA-${project.id.slice(0, 8).toUpperCase()} · Rédigé par ${author} · Généré le ${formatDateTimeFr(new Date().toISOString())}`
   drawTextLine(reference, { size: 8.5, color: COLOR_MUTED, lineHeight: 12 })
+  // Version analytique du rapport : même source que le tableau de bord et l'Excel.
+  drawTextLine(`Version analytique : ${versionLabel}`, {
+    size: 8.5,
+    color: COLOR_MUTED,
+    lineHeight: 12,
+  })
   gap(4)
   drawTextLine('CONFIDENTIEL', {
     size: 8,
@@ -658,7 +601,8 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     ['Projet analysé', project.title],
     ['Vidéo source', project.videoUrl || 'Non spécifiée'],
     ['Cibles scientifiques', `${project.points.length} point(s)`],
-    ['Étude créée le', formatDateFr(project.createdAt.toISOString()) || '—'],
+    ['Étude créée le', formatDateFr(project.createdAt) || '—'],
+    ['Version analytique', versionLabel],
   ]
   for (const [label, value] of metadataCells) drawMetaRow(label, value)
   drawHLine(COLOR_LIGHT, 0.8)
@@ -1064,11 +1008,13 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       totalDeclarations: report.totalObservations,
       charts: embeddedCharts.length,
       format: 'pdf',
+      version: versionLabel,
+      versionId: view.version?.id ?? null,
     },
   })
 
   const pdfBytes = await pdfDoc.save()
-  const filename = reportFileName(project.title)
+  const filename = reportFileName(`${project.title}${fileToken}`)
   const headers = new Headers({
     'Content-Type': 'application/pdf',
     'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,

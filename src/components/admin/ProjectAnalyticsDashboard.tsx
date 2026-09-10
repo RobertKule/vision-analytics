@@ -12,6 +12,7 @@ import {
   FileArchive,
   FileSpreadsheet,
   FileText,
+  History,
   LayoutDashboard,
   Loader2,
   RotateCcw,
@@ -127,6 +128,17 @@ export default function ProjectAnalyticsDashboard({
   const appliedType = appliedFilter?.observationType ?? ''
   const appliedVideoId = appliedFilter?.videoId ?? ''
 
+  // ——— Versionnage des analyses ———
+  // `version` décrit la version analytique réellement affichée : l'analyse ACTUELLE
+  // (configuration courante + toutes les données valides) ou un INSTANTANÉ FIGÉ de
+  // l'historique. Une version historique n'est jamais recalculée avec la
+  // configuration actuelle, et les exports reçoivent exactement la même version.
+  const versionContext = analytics.version
+  const versionHistory = versionContext?.history ?? []
+  const selectedVersionId = versionContext?.versionId ?? ''
+  const [draftVersionId, setDraftVersionId] = useState<string>(selectedVersionId)
+  const [draftAsOfDate, setDraftAsOfDate] = useState<string>(versionContext?.asOfDate ?? '')
+
   // Brouillon du formulaire (appliqué uniquement au clic sur « Recalculer »).
   const [draftType, setDraftType] = useState<string>(appliedType)
   const [draftVideo, setDraftVideo] = useState<string>(appliedVideoId)
@@ -152,17 +164,41 @@ export default function ProjectAnalyticsDashboard({
     .filter(Boolean)
     .join(' · ')
 
-  const draftDirty = draftType.trim() !== appliedType || draftVideo.trim() !== appliedVideoId
+  const draftDirty =
+    draftType.trim() !== appliedType ||
+    draftVideo.trim() !== appliedVideoId ||
+    draftVersionId !== selectedVersionId ||
+    draftAsOfDate !== (versionContext?.asOfDate ?? '')
 
   const fileBase = sanitizeBaseName(project.title)
 
-  const runServerFilter = (nextType: string, nextVideo: string) => {
+  /**
+   * Suffixe de version pour les liens d'export : le fichier téléchargé porte
+   * EXACTEMENT la version affichée à l'écran (dashboard = Excel = PDF).
+   */
+  const versionQuery = selectedVersionId
+    ? `?versionId=${encodeURIComponent(selectedVersionId)}`
+    : ''
+
+  const runServerFilter = (
+    nextType: string,
+    nextVideo: string,
+    nextVersionId: string,
+    nextAsOfDate: string,
+  ) => {
     setFiltering(true)
     const projectId = project.id
-    void getProjectAnalytics(projectId, {
-      observationType: nextType ? nextType : undefined,
-      videoId: nextVideo ? nextVideo : undefined,
-    })
+    void getProjectAnalytics(
+      projectId,
+      {
+        observationType: nextType ? nextType : undefined,
+        videoId: nextVideo ? nextVideo : undefined,
+      },
+      {
+        versionId: nextVersionId ? nextVersionId : null,
+        asOfDate: nextVersionId ? null : nextAsOfDate || null,
+      },
+    )
       .then((result) => {
         if (!result) {
           toast.error('Analyse indisponible', {
@@ -173,6 +209,8 @@ export default function ProjectAnalyticsDashboard({
         setAnalytics(result)
         // Synchronise la liste des fenêtres après changement de contexte.
         setSelectedPointId(null)
+        setDraftVersionId(result.version?.versionId ?? '')
+        setDraftAsOfDate(result.version?.asOfDate ?? '')
       })
       .catch((error: unknown) => {
         toast.error('Filtre impossible', { description: friendlyActionError(error, 'fr') })
@@ -182,12 +220,22 @@ export default function ProjectAnalyticsDashboard({
 
   const handleApplyFilter = () => {
     if (!draftDirty || filtering) return
-    runServerFilter(draftType.trim(), draftVideo.trim())
+    runServerFilter(draftType.trim(), draftVideo.trim(), draftVersionId, draftAsOfDate)
   }
 
   const handleResetFilterDraft = () => {
     setDraftType(appliedType)
     setDraftVideo(appliedVideoId)
+    setDraftVersionId(selectedVersionId)
+    setDraftAsOfDate(versionContext?.asOfDate ?? '')
+  }
+
+  /** Retour immédiat à l'analyse actuelle (aucune version sélectionnée). */
+  const handleBackToCurrent = () => {
+    if (filtering) return
+    setDraftVersionId('')
+    setDraftAsOfDate('')
+    runServerFilter(draftType.trim(), draftVideo.trim(), '', '')
   }
 
   const selectedPoint = pointsAnalytics.find((p) => p.pointId === selectedPointId)
@@ -299,13 +347,15 @@ export default function ProjectAnalyticsDashboard({
         })
       }
       await downloadChartPackage(
-        `/api/admin/projects/${project.id}/export-global-package`,
+        `/api/admin/projects/${project.id}/export-global-package${versionQuery}`,
         {
           observationType: appliedType || undefined,
           videoId: appliedVideoId || undefined,
           charts,
         },
-        `${fileBase}_Export_Global_Graphiques.zip`,
+        `${fileBase}_Export_Global_Graphiques${
+          versionContext?.versionNumber ? `_V${versionContext.versionNumber}` : ''
+        }.zip`,
       )
       toast.success('Export ZIP téléchargé', {
         description: 'Classeur Excel (3 feuilles) + graphiques PNG + manifest.json.',
@@ -326,6 +376,17 @@ export default function ProjectAnalyticsDashboard({
         'Consultez l’aperçu puis cliquez sur « Télécharger le rapport PDF » pour obtenir le fichier réel.',
     })
   }
+
+  /** Libellé humain de la version affichée (repris par les infobulles d'export). */
+  const versionLabelText =
+    versionContext && versionContext.mode === 'version' && versionContext.versionNumber !== null
+      ? `Version ${versionContext.versionNumber}${
+          versionContext.effectiveAt
+            ? ` du ${new Date(versionContext.effectiveAt).toLocaleDateString('fr-FR')}`
+            : ''
+        }`
+      : 'Analyse actuelle'
+  const isHistoricalVersion = versionContext?.mode === 'version'
 
   return (
     <div className="flex flex-col gap-6">
@@ -369,10 +430,10 @@ export default function ProjectAnalyticsDashboard({
             </span>
           ) : (
             <a
-              href={`/api/admin/projects/${project.id}/export-global-excel`}
+              href={`/api/admin/projects/${project.id}/export-global-excel${versionQuery}`}
               onClick={() =>
                 toast.info('Préparation de l’Export Global (Excel)…', {
-                  description: 'Synthèse, matrice observateurs et relevé global (3 feuilles .xlsx).',
+                  description: `Synthèse, matrice observateurs et relevé global — ${versionLabelText}.`,
                 })
               }
               className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-ink px-3.5 text-xs font-semibold text-milk shadow-sm transition-colors hover:bg-ink-soft dark:bg-milk dark:text-ink dark:hover:bg-white/90"
@@ -396,11 +457,87 @@ export default function ProjectAnalyticsDashboard({
         </div>
       </header>
 
-      {/* ——— Filtres d'analyse (Type / Vidéo) — recalcul côté serveur ——— */}
+      {/* ——— Filtres d'analyse (Version / Type / Vidéo) — recalcul côté serveur ——— */}
       <section
         aria-label="Filtres de l’analyse"
         className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
       >
+        {/* Sélection de la VERSION analytique (actuelle ou historique figée). */}
+        <div className="mb-4 flex flex-wrap items-end gap-4 border-b border-zinc-100 pb-4 dark:border-white/5">
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            Version analytique
+            <select
+              value={draftVersionId}
+              disabled={filtering}
+              onChange={(event) => {
+                setDraftVersionId(event.target.value)
+                // Choisir une version explicite prime sur le filtre par date.
+                if (event.target.value) setDraftAsOfDate('')
+              }}
+              className="h-9 min-w-[16rem] rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200"
+            >
+              <option value="">Analyse actuelle</option>
+              {versionHistory
+                .slice()
+                .reverse()
+                .map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {`V${entry.versionNumber} — ${new Date(entry.effectiveAt).toLocaleDateString(
+                      'fr-FR',
+                    )} · ${entry.detections}/${entry.possibleObservations} · ${entry.configuredPoints} fenêtre${
+                      entry.configuredPoints > 1 ? 's' : ''
+                    }`}
+                  </option>
+                ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            Afficher l’analyse avant le
+            <input
+              type="date"
+              value={draftAsOfDate}
+              disabled={filtering || draftVersionId !== ''}
+              onChange={(event) => setDraftAsOfDate(event.target.value)}
+              className="h-9 rounded-lg border border-zinc-300 bg-white px-2 text-xs font-semibold text-zinc-700 focus:border-ink focus:outline-none focus:ring-2 focus:ring-ink/15 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-200"
+            />
+          </label>
+
+          {isHistoricalVersion ? (
+            <button
+              type="button"
+              onClick={handleBackToCurrent}
+              disabled={filtering}
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 px-3.5 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              <History aria-hidden="true" className="h-3.5 w-3.5" />
+              Revenir à l’analyse actuelle
+            </button>
+          ) : null}
+
+          <p className="basis-full text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+            {isHistoricalVersion ? (
+              <>
+                <span className="font-semibold text-gold-700 dark:text-gold-400">
+                  {versionLabelText}
+                </span>{' '}
+                — instantané figé : ces chiffres ne changeront plus, même si la configuration
+                évolue ou si de nouvelles observations arrivent. Les exports téléchargés depuis
+                cet écran portent exactement cette version.
+              </>
+            ) : (
+              <>
+                <span className="font-semibold text-gold-700 dark:text-gold-400">
+                  Analyse actuelle
+                </span>{' '}
+                — configuration en vigueur et TOUTES les observations valides (anciennes +
+                nouvelles). Ajouter une fenêtre augmente les observations possibles sans jamais
+                effacer les détections déjà réalisées.
+              </>
+            )}
+          </p>
+        </div>
+
         <div className="flex flex-wrap items-end gap-4">
           <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
             Type d’observation
@@ -635,6 +772,16 @@ export default function ProjectAnalyticsDashboard({
                 summary.detectionProbability !== undefined
                   ? 'Une détection par observateur + type + trame'
                   : 'Non calculable (points configurés ou observateurs manquants)'}
+              </p>
+              {/*
+                NUMÉRATEUR / DÉNOMINATEUR explicites : ajouter une fenêtre augmente les
+                « observations possibles » sans jamais effacer les détections passées.
+              */}
+              <p className="mt-1 font-mono text-xs font-semibold tabular-nums text-zinc-600 dark:text-zinc-300">
+                {summary.validObservationsCount} détection
+                {summary.validObservationsCount > 1 ? 's' : ''} /{' '}
+                {summary.possibleObservations ?? 0} possible
+                {(summary.possibleObservations ?? 0) > 1 ? 's' : ''}
               </p>
             </div>
           </section>

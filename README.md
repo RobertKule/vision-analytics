@@ -96,11 +96,13 @@ et reprend où il s'était arrêté.
 | Rôle       | Périmètre |
 |------------|-----------|
 | **ADMIN**  | Tout : projets, utilisateurs, journal d'audit global, statistiques plateforme. Accès `/admin`. |
-| **ANALYST**| Uniquement les projets qu'il possède ou qui lui sont partagés (`ProjectAccess`) + leurs analyses/exports. |
+| **ANALYST**| Uniquement les projets qu'il possède ou qui lui sont partagés (`ProjectAccess`) + leurs analyses/exports. **Ses propres expériences** : modification, configuration, types, vidéos, duplication, partage, clés observateur. **Expérience partagée** : consultation / analyse / export par défaut ; la **modification** n'est accordée que si le partage donne un **droit d'édition explicite** (`ProjectAccess.canEdit`). La gestion des **utilisateurs** reste réservée à l'ADMIN. |
 | **OBSERVER** | Les expériences ouvertes par son **lien de partage** (un jeton = un projet) et ses propres sessions. Une session connectée **écrase toujours** un identifiant d'observateur (anti-usurpation). |
 
 L'accès est revérifié à **chaque** Server Action et à **chaque** route `/api` (les routes ne s'appuient
 jamais sur le proxy). Les routes d'export vérifient `session + accès projet` avant de servir le moindre octet.
+Modifier un `projectId`, une URL ou un paramètre ne donne jamais accès à une expérience non autorisée : la
+décision est **toujours re-calculée côté serveur** sur le projet réel.
 
 ### Comptes & validation
 
@@ -129,6 +131,18 @@ jamais sur le proxy). Les routes d'export vérifient `session + accès projet` a
 La re-soumission est idempotente ; la confirmation ne re-téléverse pas l'ensemble des captures.
 **Aucune position spatiale de clic n'est persistée** — seule l'image annotée l'est, avec son horodatage.
 
+**Mode « Modifier » (VideoAnnotator).** Sélectionner une annotation puis cliquer **« Modifier »** **conserve la
+sélection** : le même cercle reste visible et actif, le lecteur revient sur la frame de la capture. On peut
+déplacer le cercle ou cliquer ailleurs pour **remplacer** son emplacement — même identifiant, même horodatage,
+même type, même passe vidéo : seules les coordonnées changent. **Valider** réécrit l'image de la **même**
+annotation (aucune nouvelle annotation) ; **Annuler** restaure la position précédente.
+
+**Raccourci clavier.** La touche **`Espace`** sert **uniquement** à basculer **lecture ↔ pause**. Elle ne capture
+pas, ne modifie pas, ne supprime pas, ne valide pas, ne change ni de type ni de fenêtre. Dans un champ de saisie
+(`input`, `textarea`, `select`, `contenteditable`) ou sur un bouton/lien focalisé, elle conserve son comportement
+naturel. Le raccourci fonctionne aussi en **plein écran**. La capture immédiate reste sur des touches distinctes
+(`C` / `Entrée`).
+
 **Vidéo attendue (Type ↓ Vidéo).** Quand un type d'observation est associé à une passe vidéo, le serveur
 **refuse toute capture** qui n'a pas été produite sur la vidéo exactement configurée : comparaison par
 identifiant de passe, sinon par **nom de fichier normalisé exact** (dernier segment d'URL décodé ; aucune
@@ -154,6 +168,27 @@ en altérant la requête (`videoId` ou type inconnus, source absente ou différe
 - Métriques : précision (détections uniques valides / total), concordance (partage d'une fenêtre entre
   observateurs), délai moyen de détection (par événement), répartition des fantômes.
 
+### Versionnage des analyses
+
+L'analyse d'un projet est **versionnée**. Une **version analytique** (`AnalyticsVersion`) est un **instantané
+immuable** de l'état analytique à un instant donné : la configuration (fenêtres, types, passes vidéo) **et** les
+métriques calculées sur les observations valides disponibles à cette date.
+
+- Une version est créée **uniquement** quand une modification de configuration peut changer le périmètre
+  analytique : **ajout / suppression d'une fenêtre ou d'un point**, modification des **types**, ajout /
+  modification / suppression / duplication d'une **passe vidéo**. Consulter le dashboard, filtrer, consulter un
+  type, l'historique, un export, enregistrer une capture ou une observation **ne crée jamais** de version.
+- **AJOUTER UNE FENÊTRE NE SUPPRIME PAS LE PASSÉ.** Les détections déjà réalisées restent comptabilisées
+  (le **numérateur** ne baisse jamais) ; seul le **dénominateur** (`observations possibles = fenêtres configurées
+  × observateurs`) augmente. L'analyse actuelle combine **anciennes données valides + nouvelles données valides**.
+- Chaque version historique est **immuable** : elle n'est jamais recalculée avec la configuration ou les données
+  apparues après elle. Exemple : `V1` = 10 fenêtres / 8 détections / 10 possibles ; `V2` (ajout fenêtre 11) =
+  11 fenêtres / 8 détections / 11 possibles ; `V3` (détection sur la fenêtre 11) = 11 / 9 / 11.
+- Dans le tableau de bord, on peut afficher **« l'analyse actuelle »** ou **« l'analyse avant le : »** une date
+  (filtre de **versions**, pas de captures) — qui sélectionne la dernière version disponible à cette date.
+- **Dashboard = Excel = PDF.** Tous les exports partent de la **même source analytique** ; un export sans paramètre
+  utilise l'**analyse actuelle**, `?versionId=` / `?before=YYYY-MM-DD` exportent la version historique figée.
+
 ---
 
 ## Exports
@@ -165,15 +200,39 @@ en altérant la requête (`videoId` ou type inconnus, source absente ou différe
 | Rapport PDF | titre, métadonnées, KPI, graphiques réels | `ONA_Field_Rapport_<Projet>_<Date>.pdf` |
 | Graphique PNG | graphique en haute résolution | selon export |
 
-Chaque ligne brute d'un export inclut une colonne **« Lien image »** : le lien public
+Chaque ligne brute d'un export inclut une colonne **« Lien image »** : le lien
 `https://drive.google.com/file/d/<id>/view` de la capture quand son fichier Drive existe, **vide sinon** — un
-même format partout (exports globaux, par observateur et données brutes).
+même format partout (exports globaux, par observateur et données brutes). Ce lien sert à la **consultation** de
+l'export (un profil autorisé ouvre le fichier sur Drive) : **les fichiers ne sont jamais rendus publics**.
+
+**Affichage dans l'application.** Les captures Google Drive restent **privées** ; un lien Drive privé ne s'affiche
+pas dans une balise `<img>`. L'application les affiche donc via un **endpoint serveur sécurisé**
+`GET /api/captures/<captureId>/image` qui : récupère la capture, résout son `driveFileId`, **vérifie la session et
+l'autorisation** (ADMIN → tout ; ANALYSTE → ses projets ; OBSERVATEUR → ses propres captures), lit les octets via
+le compte de service, puis renvoie l'image avec le bon `Content-Type` et un cache **privé**. Un `captureId`
+falsifié ne donne jamais accès à la capture d'un autre projet ; en cas d'échec, l'interface affiche
+**« Image indisponible »** (aucun détail technique).
 
 La génération Excel/PDF est **exclusivement serveur** ; les graphiques du PDF sont rastérisés côté
 client puis ré-embarqués et **validés** avant montage. Chaque export est journalisé (`EXPORT_GLOBAL`,
 `EXPORT_OBSERVER`, `EXPORT_PDF`, `EXPORT_CHART`) avec utilisateur + projet — append-only, sans secret.
 
 ---
+
+## Notifications & emails
+
+- **Notifications in-app** (`Notification`) : un utilisateur ne consulte QUE ses notifications (lecture /
+  marquage re-vérifiés côté serveur). Événements : compte approuvé/refusé, expérience partagée, demande de
+  réactivation, partie envoyée, session terminée, etc.
+- **Emails transactionnels (Resend)** : service centralisé `src/lib/email.ts` — expéditeur **« ONA Field »**,
+  objets clairs et explicites, contenu professionnel lisible sur mobile. `RESEND_API_KEY` reste **côté serveur**
+  (jamais dans le frontend, jamais versionnée).
+- **Invitations observateurs multiples** : un ou plusieurs emails → **un email = un token = une session**. Chaque
+  destinataire reçoit SON lien `/share/<token>`, sa session et ses observations totalement isolées. Le jeton brut
+  n'apparaît que dans le lien de l'email (jamais en base, jamais dans les logs).
+- **Canal futur** : l'orchestrateur `notify()` (in-app + email) est le point d'insertion d'un futur canal WhatsApp
+  sans modifier les actions métier.
+- Variables : `RESEND_API_KEY`, `EMAIL_FROM`, `EMAIL_REPLY_TO`, `APP_URL` (voir `.env.example`).
 
 ## Journal d'audit
 
@@ -272,6 +331,10 @@ npm run dev            # http://localhost:3000
 | `GOOGLE_DRIVE_CLIENT_EMAIL` / `GOOGLE_DRIVE_PRIVATE_KEY` | Stockage des captures annotées (compte de service Google Drive — clé PEM, retours à la ligne échappés acceptés) |
 | `GOOGLE_DRIVE_FOLDER_ID` | Optionnel mais **recommandé** — dossier Drive racine des captures. **Le dossier doit appartenir à un Google Shared Drive dont le compte de service est membre** (« Contributeur » au minimum) : un compte de service n'a pas de quota de stockage personnel, et ne peut écrire des fichiers que dans un Shared Drive. S'il est omis, le code cible la racine du compte de service, laquelle refuse les écritures (HTTP 403 « no storage quota »). |
 | `AUTH_SECRET` | Signature du cookie de session (obligatoire en production) |
+| `RESEND_API_KEY` | Emails transactionnels (Resend) — **serveur uniquement** |
+| `EMAIL_FROM` | Adresse réelle d'envoi (expéditeur affiché : « ONA Field ») |
+| `EMAIL_REPLY_TO` | Optionnel — adresse de réponse |
+| `APP_URL` | Base publique pour les liens des emails (ex. `https://onafield.example.com`) |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | Optionnel — bootstrap du premier administrateur (`db:seed`) |
 
 Seuls les **noms** sont listés ici ; aucune valeur réelle n'est jamais versionnée. Les comptes sont gérés en

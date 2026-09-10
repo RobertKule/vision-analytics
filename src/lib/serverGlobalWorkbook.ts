@@ -199,7 +199,21 @@ function writeMetaPair(
   if (wrap) row.height = 30
 }
 
-function writeSummarySheet(workbook: ExcelJS.Workbook, source: GlobalExportSource): ExcelJS.Worksheet {
+/**
+ * Options communes aux classeurs : identification de la VERSION ANALYTIQUE
+ * exportée. Le libellé est fourni par la source d'export (`exportSource.ts`) —
+ * jamais recalculé ici : dashboard, Excel et PDF nomment la même version.
+ */
+export type WorkbookOptions = {
+  /** Ex. « Analyse actuelle » ou « Version 2 (20/04/2026) ». */
+  versionLabel?: string
+}
+
+function writeSummarySheet(
+  workbook: ExcelJS.Workbook,
+  source: GlobalExportSource,
+  options?: WorkbookOptions,
+): ExcelJS.Worksheet {
   const sheet = workbook.addWorksheet('Synthèse', {
     views: [{ state: 'frozen', ySplit: 0 }],
   })
@@ -231,6 +245,8 @@ function writeSummarySheet(workbook: ExcelJS.Workbook, source: GlobalExportSourc
 
   // ——— Métadonnées projet ———
   writeMetaPair(sheet, 'Projet', project.title)
+  // Version analytique exportée : identique à celle affichée par le tableau de bord.
+  writeMetaPair(sheet, 'Version analytique', options?.versionLabel?.trim() || 'Analyse actuelle')
   writeMetaPair(sheet, 'Description', project.description?.trim() || '—', Boolean(project.description?.trim()))
   writeMetaPair(sheet, 'Vidéo cible', project.videoUrl?.trim() || '—', Boolean(project.videoUrl?.trim()))
   writeMetaPair(sheet, 'Créé le', new Date(project.createdAt).toLocaleString('fr-FR'))
@@ -544,15 +560,21 @@ function writeTypeSheet(
 /**
  * Construit le classeur `.xlsx` global du projet et renvoie son buffer.
  * Feuilles : Synthèse · Méthodologie · <une par type/décalage> · Données_Brutes_Globales.
+ *
+ * Les chiffres proviennent intégralement de la `source` transmise par
+ * `exportSource.ts` : ce module ne choisit ni la version, ni le périmètre.
  */
-export async function generateExcelWorkbook(source: GlobalExportSource): Promise<Buffer> {
+export async function generateExcelWorkbook(
+  source: GlobalExportSource,
+  options?: WorkbookOptions,
+): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'ONA Field'
   workbook.created = new Date()
 
   const usedNames = new Set<string>(['Synthèse', 'Méthodologie', 'Données_Brutes_Globales'])
 
-  writeSummarySheet(workbook, source)
+  writeSummarySheet(workbook, source, options)
   writeMethodologySheet(workbook)
 
   const table = buildDetectionProbabilityTable(source)
@@ -579,6 +601,7 @@ function writeObserverSummarySheet(
   workbook: ExcelJS.Workbook,
   source: GlobalExportSource,
   observerLabel: string,
+  options?: WorkbookOptions,
 ): ExcelJS.Worksheet {
   const sheet = workbook.addWorksheet('Synthèse', {
     views: [{ state: 'frozen', ySplit: 0 }],
@@ -597,6 +620,8 @@ function writeObserverSummarySheet(
   title.height = 24
   sheet.addRow([])
   writeMetaPair(sheet, 'Projet', project.title)
+  // Même version analytique que le tableau de bord et l'Excel global.
+  writeMetaPair(sheet, 'Version analytique', options?.versionLabel?.trim() || 'Analyse actuelle')
   writeMetaPair(sheet, 'Points / trames configurés', String(pointsPossible))
   sheet.addRow([])
   writeMetaPair(sheet, 'Points uniques détectés (analytique)', String(detections))
@@ -747,6 +772,7 @@ function writeObserverLedgerSheet(
 export async function generateObserverWorkbook(
   source: GlobalExportSource,
   observerLabel: string,
+  options?: WorkbookOptions,
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook()
   workbook.creator = 'ONA Field'
@@ -754,7 +780,7 @@ export async function generateObserverWorkbook(
 
   const usedNames = new Set<string>(['Synthèse', 'Données_Brutes'])
 
-  writeObserverSummarySheet(workbook, source, observerLabel)
+  writeObserverSummarySheet(workbook, source, observerLabel, options)
 
   // Une feuille par type utilisé par l'observateur (détail des captures + note).
   const ledger = buildGlobalObservations(source)

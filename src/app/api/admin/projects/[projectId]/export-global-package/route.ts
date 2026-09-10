@@ -1,23 +1,14 @@
 import { NextResponse } from 'next/server'
 import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
-import { prisma } from '@/lib/prisma'
-import { brandFileName, sanitizeBaseName, videoDisplayName } from '@/lib/exportHelpers'
-import type {
-  GlobalExportPoint,
-  GlobalExportRow,
-  GlobalExportSource,
-} from '@/lib/globalExportModel'
-import { computeDefinedPointsByType } from '@/lib/globalExportModel'
+import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import { generateExcelWorkbook } from '@/lib/serverGlobalWorkbook'
+import { resolveExportSource } from '@/lib/exportSource'
+import { auditVersionViewed } from '@/lib/analyticsVersionStore'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
-/** Passe générique héritée représentée par l'absence de `videoId` ('' côté client). */
-const LEGACY_GENERIC_VIDEO_ID = ''
 
 const PNG_PREFIX = 'data:image/png;base64,'
 const MAX_PNG_BYTES = 15 * 1024 * 1024 // 15 Mo / graphique (garde-fou anti-abuse)
@@ -75,40 +66,6 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     return NextResponse.json({ error: 'Corps JSON invalide.' }, { status: 400 })
   }
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: {
-      id: true,
-      title: true,
-      description: true,
-      videoUrl: true,
-      observationTypes: true,
-      createdAt: true,
-      points: {
-        select: {
-          id: true,
-          videoId: true,
-          pointName: true,
-          trameDebut: true,
-          trameFin: true,
-          video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
-        },
-      },
-    },
-  })
-  if (!project) {
-    return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
-  }
-
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
-    return NextResponse.json(
-      { error: 'Accès de gestion requis sur ce projet.' },
-      { status: 403 },
-    )
-  }
-
-  // ——— Filtre réellement appliqué (même normalisation que getProjectAnalytics) ———
   const observationType =
     typeof body.observationType === 'string' && body.observationType.trim()
       ? body.observationType.trim()
@@ -117,86 +74,43 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
   const videoFilterDefined = videoIdRaw !== ''
   // '' est le marqueur réservé de la passe générique héritée (videoId null).
 
-  const where: {
-    projectId: string
-    observationType?: string
-    videoId?: string | null
-    isVerified?: boolean
-  } = { projectId, isVerified: true }
-  if (observationType) where.observationType = observationType
-  if (videoFilterDefined) {
-    where.videoId =
-      videoIdRaw === LEGACY_GENERIC_VIDEO_ID ? null : videoIdRaw
-  }
-
-  // Données CERTIFIÉES uniquement (une session « en cours » n'est jamais exportée).
-  const observations = await prisma.observation.findMany({
-    where,
-    include: {
-      user: { select: { username: true, email: true, anonymousId: true } },
-      point: { select: { id: true, pointName: true } },
-      video: { select: { id: true, name: true, typeLabel: true, orderIndex: true } },
+  // ——— Autorisation + SOURCE ANALYTIQUE UNIQUE (même vue que le tableau de bord) ———
+  // Le paquet ne recalcule rien : il reçoit la configuration (figée si une version
+  // historique est demandée via `?versionId=` / `?before=`) et ses lignes.
+  const resolution = await resolveExportSource({
+    projectId,
+    url: new URL(request.url),
+    filter: {
+      ...(observationType !== undefined ? { observationType } : {}),
+      ...(videoFilterDefined ? { videoId: videoIdRaw } : {}),
     },
-    orderBy: { createdAt: 'asc' },
   })
+  if (!resolution.ok) {
+    return NextResponse.json(
+      { error: resolution.refusal.error },
+      { status: resolution.refusal.status },
+    )
+  }
+  const { source, view, versionLabel, fileToken } = resolution.resolved
+  const project = source.project
 
-  if (observations.length === 0) {
+  if (source.rows.length === 0) {
     return NextResponse.json(
       { error: 'Aucune observation à exporter pour ce filtre.' },
       { status: 404 },
     )
   }
 
-  // Fenêtres pertinentes : uniquement celles de la vidéo filtrée, sinon toutes.
-  const scopedProjectPoints = videoFilterDefined
-    ? project.points.filter((point) =>
-        videoIdRaw === LEGACY_GENERIC_VIDEO_ID
-          ? point.videoId === null
-          : point.videoId === videoIdRaw,
-      )
-    : project.points
-
-  const points: GlobalExportPoint[] = scopedProjectPoints.map((point) => ({
-    id: point.id,
-    label: point.pointName,
-    trameDebut: point.trameDebut,
-    trameFin: point.trameFin,
-    videoName: point.video ? videoDisplayName(point.video) : null,
-    type: point.video?.typeLabel?.trim() ?? '',
-  }))
-
-  const rows: GlobalExportRow[] = observations.map((row) => ({
-    userId: row.userId,
-    username: row.user?.username ?? null,
-    email: row.user?.email ?? null,
-    anonymousId: row.user?.anonymousId ?? '—',
-    timestampTotal: row.timestampTotal,
-    observationType: row.observationType,
-    isGhostPoint: row.isGhostPoint,
-    pointId: row.pointId,
-    pointLabel: row.point?.pointName ?? null,
-    imageUrl: row.imageUrl,
-    driveFileId: row.driveFileId,
-    videoName: row.video ? videoDisplayName(row.video) : null,
-    createdAt: row.createdAt.toISOString(),
-  }))
-
-  const source: GlobalExportSource = {
-    project: {
-      id: project.id,
-      title: project.title,
-      description: project.description,
-      videoUrl: project.videoUrl,
-      observationTypes: project.observationTypes,
-      createdAt: project.createdAt.toISOString(),
-      definedPoints: points.length,
-      points,
-      definedPointsByType: computeDefinedPointsByType(points),
-    },
-    rows,
+  if (view.version) {
+    await auditVersionViewed({
+      actorId: session.uid,
+      projectId: project.id,
+      version: view.version,
+      surface: 'export-global-package',
+    })
   }
 
-  const workbookBuffer = await generateExcelWorkbook(source)
+  const workbookBuffer = await generateExcelWorkbook(source, { versionLabel })
 
   // ——— Validation des PNG fournis par le client (graphiques visibles) ———
   const chartBuffers = new Map<string, Buffer>()
@@ -243,8 +157,10 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     entityId: project.id,
     metadata: {
       title: project.title,
-      observations: rows.length,
+      observations: source.rows.length,
       charts: chartBuffers.size,
+      version: versionLabel,
+      versionId: view.version?.id ?? null,
       ...(observationType ? { observationType } : {}),
       ...(videoIdRaw ? { videoId: videoIdRaw } : {}),
     },
@@ -252,7 +168,7 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
 
   // ——— Assemblage de l'archive ———
   const zip = new JSZip()
-  const rootFolder = `${sanitizeBaseName(project.title)}_Export_Global_Graphiques`
+  const rootFolder = `${sanitizeBaseName(project.title)}_Export_Global_Graphiques${fileToken}`
 
   zip.file(`${rootFolder}/Export_Global.xlsx`, workbookBuffer)
   for (const [id, image] of chartBuffers) {
@@ -275,13 +191,21 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       {
         project: { id: project.id, title: project.title },
         exportedAt: new Date().toISOString(),
+        // Version analytique exportée — identique à celle du tableau de bord et du PDF.
+        analyticsVersion: {
+          label: versionLabel,
+          id: view.version?.id ?? null,
+          versionNumber: view.version?.versionNumber ?? null,
+          effectiveAt: view.version?.effectiveAt ?? null,
+          frozen: view.frozen,
+        },
         // Comptes au niveau des LIGNES exportées (chaque capture certifiée est une ligne
         // du relevé). Les statistiques agrégées (points uniques validés, revendications)
         // sont celles du classeur / rapport, calculées en déduplication — non reproduites
         // ici pour ne pas confondre les deux échelles.
-        totalRows: rows.length,
-        validRows: rows.filter((row) => !row.isGhostPoint).length,
-        ghostRows: rows.filter((row) => row.isGhostPoint).length,
+        totalRows: source.rows.length,
+        validRows: source.rows.filter((row) => !row.isGhostPoint).length,
+        ghostRows: source.rows.filter((row) => row.isGhostPoint).length,
         appliedFilter: appliedFilterContext,
         files: {
           excel: `${rootFolder}/Export_Global.xlsx`,

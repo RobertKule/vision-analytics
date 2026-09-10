@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import type { ExportObservationRow } from '@/lib/exportHelpers'
@@ -9,7 +9,7 @@ import { buildObservationExportCsv } from '@/lib/exportHelpers'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 import {
   buildObserverWorkbookBuffer,
-  fetchImage,
+  fetchStoredImage,
   mapLimited,
   MAX_CONCURRENCY,
   mmssFileToken,
@@ -38,6 +38,8 @@ type GroupedObserver = {
     isGhostPoint: boolean
     pointLabel: string | null
     imageUrl: string
+    /** Référence Google Drive (fichier privé) — lecture serveur uniquement. */
+    driveFileId: string | null
     createdAt: string
   }>
 }
@@ -69,8 +71,10 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
     return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
   }
 
-  const level = await getCurrentProjectAccess(projectId)
-  if (!canManage(level)) {
+  // RBAC : ADMIN, propriétaire, ou analyste invité (un partage donne toujours la
+  // consultation, l'analyse et l'export ; la configuration exige un droit d'édition).
+  const permissions = await getCurrentProjectPermissions(projectId)
+  if (!permissions.canExport) {
     return NextResponse.json(
       { error: 'Accès de gestion requis sur ce projet.' },
       { status: 403 },
@@ -115,6 +119,7 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
         isGhostPoint: row.isGhostPoint,
         pointLabel: row.point?.pointName ?? null,
         imageUrl: row.imageUrl,
+        driveFileId: row.driveFileId,
         createdAt: row.createdAt.toISOString(),
       })
     } else {
@@ -133,6 +138,7 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
             isGhostPoint: row.isGhostPoint,
             pointLabel: row.point?.pointName ?? null,
             imageUrl: row.imageUrl,
+            driveFileId: row.driveFileId,
             createdAt: row.createdAt.toISOString(),
           },
         ],
@@ -190,8 +196,10 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
       workbook,
     )
 
+    // Les fichiers Google Drive sont PRIVÉS : les octets sont lus côté serveur via
+    // le compte de service (`alt=media`), jamais par une URL publique.
     const downloaded = await mapLimited(observer.rows, MAX_CONCURRENCY, (row) =>
-      fetchImage(row.imageUrl),
+      fetchStoredImage({ driveFileId: row.driveFileId, imageUrl: row.imageUrl }),
     )
     downloaded.forEach((image, index) => {
       if (!image) {
