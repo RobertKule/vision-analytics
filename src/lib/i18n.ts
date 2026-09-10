@@ -262,6 +262,24 @@ const en = {
     captureBlockedByDraft: 'Resume or discard your saved session before capturing.',
     // — Garde anti-doublon : capture déjà acceptée pour ce temps vidéo —
     captureDuplicateTime: 'You have just recorded a capture for this time.',
+    // — Mode « Modifier » : la sélection et le cercle restent actifs —
+    editing: 'Editing a capture',
+    editingHint:
+      'The selected marker stays active: move it or click elsewhere to relocate it, then confirm.',
+    editConfirm: 'Confirm the change',
+    editCancel: 'Cancel',
+    editSaved: 'Capture updated',
+    editFrameUnavailable: 'The edited frame is not ready yet. Try again in a moment.',
+    // — Envoi par partie (Partie 1–11) —
+    submitPart: 'Send this part',
+    submitPartHint: 'Finalize this video part without ending the session.',
+    partSent: 'This part has been sent.',
+    partAlreadySent: 'This part is already sent and read-only.',
+    partEmpty: 'This part has no capture to send yet.',
+    partSendError: 'This part could not be sent. Please retry.',
+    partSentBadge: 'Sent',
+    partInProgressBadge: 'In progress',
+    partNotStartedBadge: 'To do',
     zones: {
       topLeft: 'top-left',
       topCenter: 'top-center',
@@ -764,6 +782,14 @@ const en = {
     statCaptures: 'Captures recorded',
     captureChip: 'Capture {{t}}',
     emptyCaption: 'No capture recorded for this session.',
+    // ——— Demande de réactivation (l'observateur demande, l'ADMIN décide) ———
+    reactivationTitle: 'Your session is finished or inactive.',
+    reactivationHint: 'You can ask the administrator to reactivate your access.',
+    reactivationCta: 'Request reactivation',
+    reactivationAlreadyPending: 'Your reactivation request is already pending.',
+    reactivationSent: 'Your reactivation request has been sent.',
+    reactivationSentHint: 'An administrator must confirm your access.',
+    reactivationError: 'Unable to request reactivation. Please retry.',
   },
 }
 
@@ -1009,6 +1035,24 @@ const fr: typeof en = {
     captureBlockedByDraft: 'Reprenez ou supprimez la session enregistrée avant de capturer.',
     // — Garde anti-doublon : capture déjà acceptée pour ce temps vidéo —
     captureDuplicateTime: 'Vous venez juste d’enregistrer la capture pour ce temps.',
+    // — Mode « Modifier » : la sélection et le cercle restent actifs —
+    editing: 'Modification d’une capture',
+    editingHint:
+      'Le marqueur sélectionné reste actif : déplacez-le ou cliquez ailleurs pour le repositionner, puis validez.',
+    editConfirm: 'Valider la modification',
+    editCancel: 'Annuler',
+    editSaved: 'Capture modifiée',
+    editFrameUnavailable: 'La frame modifiée n’est pas encore prête. Réessayez dans un instant.',
+    // — Envoi par partie (Partie 1–11) —
+    submitPart: 'Envoyer cette partie',
+    submitPartHint: 'Finalisez cette partie vidéo sans terminer la session.',
+    partSent: 'Cette partie a été envoyée.',
+    partAlreadySent: 'Cette partie a déjà été envoyée et est en lecture seule.',
+    partEmpty: 'Cette partie n’a encore aucune capture à envoyer.',
+    partSendError: 'Impossible d’envoyer cette partie. Veuillez réessayer.',
+    partSentBadge: 'Envoyée',
+    partInProgressBadge: 'En cours',
+    partNotStartedBadge: 'À faire',
     zones: {
       topLeft: 'haut-gauche',
       topCenter: 'haut-centre',
@@ -1513,6 +1557,14 @@ const fr: typeof en = {
     statCaptures: 'Captures enregistrées',
     captureChip: 'Capture {{t}}',
     emptyCaption: 'Aucune capture enregistrée pour cette session.',
+    // ——— Demande de réactivation (l'observateur demande, l'ADMIN décide) ———
+    reactivationTitle: 'Votre session est terminée ou inactive.',
+    reactivationHint: 'Vous pouvez demander à l’administrateur de réactiver votre accès.',
+    reactivationCta: 'Demander la réactivation',
+    reactivationAlreadyPending: 'Votre demande de réactivation est déjà en attente.',
+    reactivationSent: 'Votre demande de réactivation a été envoyée.',
+    reactivationSentHint: 'Un administrateur doit confirmer votre accès.',
+    reactivationError: 'Impossible de demander la réactivation. Veuillez réessayer.',
   },
 }
 

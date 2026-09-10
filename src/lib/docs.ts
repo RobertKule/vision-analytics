@@ -221,9 +221,10 @@ const en: DocsLocale = {
           kind: 'ul',
           items: [
             'ADMIN: everything — all projects, users and the global audit log.',
-            'ANALYST: only projects they own or that are shared with them (ProjectAccess).',
+            'ANALYST: only projects they own or that are shared with them (ProjectAccess). On their own experiments they configure, edit types/videos, duplicate, share and create observer keys. On a shared experiment they view, analyse and export by default; modification is granted only when the share carries an explicit edit right (ProjectAccess.canEdit). User management is ADMIN-only.',
             'OBSERVER: their own sessions and the experiments opened by their share token (one token per project); a logged-in session always overrides an observer identifier (anti-impersonation).',
             'Audit log protection: ADMIN sees all logs, ANALYST and OBSERVER only their own — the server never accepts a target userId.',
+            'Every permission is re-checked server-side before data reaches the frontend: editing a projectId, a URL, a parameter or an API request never grants access to an unauthorized experiment.',
           ],
         },
       ],
@@ -242,6 +243,10 @@ const en: DocsLocale = {
             'Idempotent submission: each capture carries a clientKey; the unique (projectId, clientKey) constraint and skipDuplicates prevent duplicates after a retry.',
             'Each stepper run emits a sessionRunId that powers the real “sessions” counters.',
           ],
+        },
+        {
+          kind: 'p',
+          text: 'VideoAnnotator “Edit” mode: selecting an annotation then clicking Edit keeps the selection — the same circle stays visible and active, the player returns to the capture frame. The circle can be moved, or clicked elsewhere to relocate it (same id, same timestamp, same type, same video pass — only the coordinates change). Confirming rewrites the image of the SAME annotation (never a new one); Cancel restores the previous position. The Space key is reserved for play/pause only: it never captures, edits, deletes, validates or switches type/window; inside input/textarea/select/contenteditable it keeps its natural behavior, and it works fullscreen. Immediate capture stays on distinct keys (C / Enter).',
         },
       ],
     },
@@ -272,6 +277,10 @@ const en: DocsLocale = {
           kind: 'p',
           text: 'Per-project analytics apply a single detection rule on every surface (dashboard, analytics, global Excel, per-observer Excel, PDF): for one observer, several captures inside the same frame/type-décalage window count as ONE analytical detection. The empirical probability of detection is P(detection) = detections ÷ (configured points/frames × observers) × 100. Only certified sessions (isVerified=true) feed these counters, while raw exports (Données brutes) always keep every capture line. Charts (Recharts) render the time distribution of detections and the validated/ghost split.',
         },
+        {
+          kind: 'p',
+          text: 'Analytics are versioned. An AnalyticsVersion is an immutable snapshot of the analytic state at one moment: the perimeter configuration (windows, types, video passes) and the metrics computed over the valid observations available at that time. A version is created ONLY when a configuration change may change the observation possibilities (add/remove a window or point, edit types, add/edit/remove/duplicate a video pass); consulting, filtering, exporting, or recording a capture never creates one. ADDING A WINDOW DOES NOT ERASE THE PAST: existing detections stay counted (the numerator never drops) while the denominator (possible observations = configured windows × observers) grows. Historical versions are never recomputed with later configuration or data. The dashboard can show the current analysis or “analysis before <date>” (a version filter), and dashboard = Excel = PDF for the same version.',
+        },
       ],
     },
     {
@@ -290,6 +299,14 @@ const en: DocsLocale = {
         {
           kind: 'p',
           text: 'Every export is traced in the append-only audit log (EXPORT_GLOBAL, EXPORT_OBSERVER, EXPORT_PDF, EXPORT_CHART) with its author and project — never any secret. Access follows RBAC: ADMIN exports anything, ANALYST only the projects they own or that are shared with them, OBSERVER only their own exports.',
+        },
+        {
+          kind: 'p',
+          text: 'Exports share the exact analytic source as the dashboard: no export computes analytics on its own. Without parameters an export uses the current analysis; adding ?versionId=<id> or ?before=YYYY-MM-DD exports that immutable historical version — historical values are never replaced by the current configuration.',
+        },
+        {
+          kind: 'p',
+          text: 'Capture images are private in Google Drive. The application displays them through a secure server endpoint GET /api/captures/<captureId>/image which resolves the capture, checks session + authorization (ADMIN: all; ANALYST: their authorized projects; OBSERVER: their own captures), reads the bytes through the service account and returns the image with the right Content-Type and a private cache. Exports keep the Drive File ID and the Google Drive consultation link, but never make files public.',
         },
       ],
     },
@@ -532,9 +549,10 @@ const fr: DocsLocale = {
           kind: 'ul',
           items: [
             'ADMIN : tout — tous les projets, utilisateurs et le journal d’audit global.',
-            'ANALYST : uniquement ses projets ou ceux partagés avec lui (ProjectAccess).',
+            'ANALYST : uniquement ses projets ou ceux partagés avec lui (ProjectAccess). Sur ses propres expériences il configure, édite types/vidéos, duplique, partage et crée des clés observateur. Sur une expérience partagée il voit, analyse et exporte par défaut ; la modification n’est accordée que si le partage porte un droit d’édition explicite (ProjectAccess.canEdit). La gestion des utilisateurs reste réservée à l’ADMIN.',
             'OBSERVER : ses propres sessions et les expériences ouvertes par son jeton de partage (un jeton = un projet) ; une session connectée écrase toujours un identifiant d’observateur (anti-usurpation).',
             'Protection du journal : l’ADMIN voit tous les journaux, ANALYST et OBSERVER uniquement les leurs — le serveur n’accepte jamais un userId cible.',
+            'Chaque permission est re-vérifiée côté serveur avant tout envoi de données au frontend : modifier un projectId, une URL, un paramètre ou une requête API ne donne jamais accès à une expérience non autorisée.',
           ],
         },
       ],
@@ -553,6 +571,10 @@ const fr: DocsLocale = {
             'Soumission idempotente : chaque capture porte une clientKey ; la contrainte unique (projectId, clientKey) et skipDuplicates évitent les doublons après une reprise.',
             'Chaque passage du stepper émet un sessionRunId qui alimente les compteurs réels de « sessions ».',
           ],
+        },
+        {
+          kind: 'p',
+          text: 'Mode « Modifier » du VideoAnnotator : sélectionner une annotation puis cliquer « Modifier » conserve la sélection — le même cercle reste visible et actif, le lecteur revient sur la frame de la capture. On peut déplacer le cercle ou cliquer ailleurs pour le repositionner (même identifiant, même horodatage, même type, même passe vidéo — seules les coordonnées changent). « Valider » réécrit l’image de la MÊME annotation (jamais une nouvelle) ; « Annuler » restaure la position précédente. La touche Espace est réservée à la lecture/pause uniquement : elle ne capture, ne modifie, ne supprime, ne valide ni ne change de type/fenêtre ; dans un champ de saisie (input/textarea/select/contenteditable) elle conserve son comportement naturel, et elle fonctionne en plein écran. La capture immédiate reste sur des touches distinctes (C / Entrée).',
         },
       ],
     },
@@ -583,6 +605,10 @@ const fr: DocsLocale = {
           kind: 'p',
           text: 'Les analyses par projet appliquent une règle de détection unique partout (tableau de bord, analyses, Excel global, Excel par observateur, PDF) : pour un observateur, plusieurs captures dans la même fenêtre trame/type-décalage comptent pour UNE seule détection analytique. La probabilité empirique de détection est P(détection) = Détections / (Nombre de points/trames configurés × Nombre d’observateurs) × 100. Seules les sessions certifiées (isVerified=true) alimentent ces compteurs ; les exports bruts (Données brutes) conservent toujours chaque ligne de capture. Les graphiques (Recharts) représentent la distribution temporelle des détections et la ventilation validées / fantômes.',
         },
+        {
+          kind: 'p',
+          text: 'Les analyses sont versionnées. Une AnalyticsVersion est un instantané immuable de l’état analytique à un instant donné : la configuration du périmètre (fenêtres, types, passes vidéo) et les métriques calculées sur les observations valides disponibles à cette date. Une version n’est créée QUE lorsqu’une modification de configuration peut changer les possibilités d’observation (ajout/suppression d’une fenêtre ou d’un point, édition des types, ajout/modification/suppression/duplication d’une passe vidéo) ; consulter, filtrer, exporter ou enregistrer une capture n’en crée jamais. AJOUTER UNE FENÊTRE NE SUPPRIME PAS LE PASSÉ : les détections existantes restent comptées (le numérateur ne baisse jamais) tandis que le dénominateur (observations possibles = fenêtres configurées × observateurs) augmente. Les versions historiques ne sont jamais recalculées avec une configuration ou des données postérieures. Le tableau de bord affiche l’analyse actuelle ou « l’analyse avant le <date> » (filtre de versions), et tableau de bord = Excel = PDF pour une même version.',
+        },
       ],
     },
     {
@@ -601,6 +627,14 @@ const fr: DocsLocale = {
         {
           kind: 'p',
           text: 'Chaque export est tracé dans le journal d’audit append-only (EXPORT_GLOBAL, EXPORT_OBSERVER, EXPORT_PDF, EXPORT_CHART) avec son auteur et son projet — jamais aucun secret. L’accès suit la RBAC : l’ADMIN exporte tout, l’ANALYST uniquement ses projets ou ceux partagés, l’OBSERVER uniquement ses propres exports.',
+        },
+        {
+          kind: 'p',
+          text: 'Les exports partagent exactement la même source analytique que le tableau de bord : aucun export ne calcule d’analyse de son côté. Sans paramètre, un export utilise l’analyse actuelle ; en ajoutant ?versionId=<id> ou ?before=AAAA-MM-JJ, il exporte cette version historique immuable — les valeurs historiques ne sont jamais remplacées par la configuration actuelle.',
+        },
+        {
+          kind: 'p',
+          text: 'Les images des captures sont privées dans Google Drive. L’application les affiche via un endpoint serveur sécurisé GET /api/captures/<captureId>/image qui résout la capture, vérifie la session et l’autorisation (ADMIN : tout ; ANALYSTE : ses projets autorisés ; OBSERVATEUR : ses propres captures), lit les octets via le compte de service puis renvoie l’image avec le bon Content-Type et un cache privé. Les exports conservent le Drive File ID et le lien de consultation Google Drive, sans jamais rendre les fichiers publics.',
         },
       ],
     },
