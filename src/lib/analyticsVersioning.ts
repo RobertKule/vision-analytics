@@ -52,6 +52,7 @@ import {
   type GlobalExportRow,
   type GlobalExportSource,
 } from '@/lib/globalExportModel'
+import { observationFallsInWindow } from '@/lib/windowMatch'
 
 /** Déclencheurs de version (modifications de configuration du périmètre analytique). */
 export const ANALYTICS_TRIGGERS = {
@@ -275,6 +276,39 @@ export function toExportSource(
   rows: readonly AnalyticsObservationRow[],
 ): GlobalExportSource {
   return { project: toExportProject(config), rows: rows.slice() }
+}
+
+/**
+ * RECALCUL ANALYTIQUE DYNAMIQUE — réévalue chaque capture RAW contre les fenêtres
+ * COURANTES, indépendamment du `pointId`/`isGhostPoint` persisté.
+ *
+ * RÈGLE MÉTIER : une capture ancienne reste valide et doit être réévaluée si une
+ * fenêtre (ajoutée/modifiée plus tard) permet désormais de l'associer à une cible
+ * analytique. Le calcul COURANT ne lit donc pas la classification persistée : il la
+ * REDÉRIVE à partir de l'horodatage + de la passe vidéo de chaque capture.
+ *
+ *  — une capture dont l'horodatage tombe dans une fenêtre de SA passe vidéo ⇒ VALIDE
+ *    (pointId = fenêtre, isGhostPoint = false) ;
+ *  — sinon ⇒ POINT FANTÔME (fausse alerte, pointId = null, isGhostPoint = true).
+ *
+ * Une version HISTORIQUE, elle, reste immuable : elle ne passe jamais par ici.
+ */
+export function rematchRowsToWindows(
+  rows: readonly AnalyticsObservationRow[],
+  config: AnalyticsPerimeterConfig,
+): AnalyticsObservationRow[] {
+  return rows.map((row) => {
+    const matched = config.points.find((point) =>
+      observationFallsInWindow(
+        { videoId: row.videoId ?? null, timestampTotal: row.timestampTotal },
+        point,
+      ),
+    )
+    if (matched) {
+      return { ...row, pointId: matched.id, pointLabel: matched.label, isGhostPoint: false }
+    }
+    return { ...row, pointId: null, pointLabel: null, isGhostPoint: true }
+  })
 }
 
 function roundTenth(value: number): number {

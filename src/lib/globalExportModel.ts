@@ -108,6 +108,12 @@ export type GlobalExportRow = {
   driveFileId?: string | null
   /** Nom lisible de la passe vidéo d'origine (null si générique/introuvable). */
   videoName?: string | null
+  /**
+   * Identifiant de la passe vidéo d'origine (null = passe générique héritée).
+   * Requis pour le RECALCUL ANALYTIQUE DYNAMIQUE : une capture est réévaluée contre
+   * les fenêtres de SA passe vidéo, jamais contre celles d'une autre passe.
+   */
+  videoId?: string | null
   createdAt: string
 }
 
