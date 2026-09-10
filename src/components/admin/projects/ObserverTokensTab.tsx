@@ -22,6 +22,12 @@ import {
   reissueObserverToken,
   revokeObserverToken,
 } from '@/app/actions/observerTokenActions'
+import type { ReactivationRequestRow } from '@/app/actions/observerReactivationActions'
+import {
+  approveObserverReactivation,
+  listObserverReactivationRequests,
+  rejectObserverReactivation,
+} from '@/app/actions/observerReactivationActions'
 import { copyToClipboard, formatDateTime, inputClass, labelClass } from '@/components/admin/projects/projectFormat'
 import { friendlyActionError } from '@/lib/actionError'
 
@@ -92,6 +98,10 @@ export default function ObserverTokensTab({ projectId, projectTitle }: ObserverT
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // ——— Demandes de réactivation (Partie A4) ———
+  const [reactivationRequests, setReactivationRequests] = useState<ReactivationRequestRow[] | null>(null)
+  const [decidingId, setDecidingId] = useState<string | null>(null)
+
   // ——— Création ———
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [validDays, setValidDays] = useState<ValidDays>(null)
@@ -128,10 +138,43 @@ export default function ObserverTokensTab({ projectId, projectTitle }: ObserverT
     void listObserverTokens(projectId).then((result) => {
       if (!cancelled) applyResult(result)
     })
+    void listObserverReactivationRequests(projectId).then((result) => {
+      if (!cancelled) setReactivationRequests(result.ok ? result.requests : [])
+    })
     return () => {
       cancelled = true
     }
   }, [projectId, applyResult])
+
+  const reloadReactivation = async () => {
+    const result = await listObserverReactivationRequests(projectId).catch(() => ({ ok: false as const, error: '' }))
+    setReactivationRequests(result.ok ? result.requests : [])
+  }
+
+  const handleDecideReactivation = async (requestId: string, approve: boolean) => {
+    setDecidingId(requestId)
+    const result = approve
+      ? await approveObserverReactivation(requestId).catch((error: unknown) => ({
+          ok: false as const,
+          error: friendlyActionError(error, 'fr'),
+        }))
+      : await rejectObserverReactivation(requestId).catch((error: unknown) => ({
+          ok: false as const,
+          error: friendlyActionError(error, 'fr'),
+        }))
+    setDecidingId(null)
+    if (!result.ok) {
+      toast.error(approve ? 'Confirmation impossible' : 'Refus impossible', { description: result.error })
+      return
+    }
+    toast.success(approve ? 'Accès réactivé' : 'Demande refusée', {
+      description: approve
+        ? 'L’observateur peut reprendre sa session.'
+        : 'L’accès reste désactivé ; aucune donnée n’a été supprimée.',
+    })
+    await reloadReactivation()
+    await load()
+  }
 
   const handleCreate = async () => {
     setBusy(true)
@@ -340,6 +383,86 @@ export default function ObserverTokensTab({ projectId, projectTitle }: ObserverT
           })}
         </ul>
       )}
+
+      {/* ——— Demandes de réactivation (Partie A4–A6) ——— */}
+      {reactivationRequests !== null && reactivationRequests.length > 0 ? (
+        <section aria-label="Demandes de réactivation" className="flex flex-col gap-3">
+          <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">Demandes de réactivation</h3>
+          <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 bg-white dark:divide-white/5 dark:border-white/10 dark:bg-[#161b22]">
+            {reactivationRequests.map((request) => {
+              const pending = request.status === 'PENDING'
+              return (
+                <li key={request.id} className="flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3">
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      pending
+                        ? 'bg-gold-500/15 text-gold-800 dark:bg-gold-400/10 dark:text-gold-200'
+                        : request.status === 'APPROVED'
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300'
+                    }`}
+                  >
+                    {pending ? 'En attente' : request.status === 'APPROVED' ? 'Approuvée' : 'Refusée'}
+                  </span>
+
+                  <dl className="grid flex-1 grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3">
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                        Observateur
+                      </dt>
+                      <dd className="text-xs text-zinc-700 dark:text-zinc-300">{request.observerLabel}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                        Projet
+                      </dt>
+                      <dd className="text-xs text-zinc-700 dark:text-zinc-300">{request.projectTitle}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+                        Demandé le
+                      </dt>
+                      <dd className="text-xs text-zinc-700 dark:text-zinc-300">{formatDateTime(request.requestedAt)}</dd>
+                    </div>
+                  </dl>
+
+                  {pending ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleDecideReactivation(request.id, true)}
+                        disabled={decidingId === request.id}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-ink px-2.5 text-xs font-semibold text-milk transition-colors hover:bg-ink-soft disabled:opacity-50 dark:bg-milk dark:text-ink"
+                      >
+                        {decidingId === request.id ? (
+                          <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ShieldCheck aria-hidden="true" className="h-3.5 w-3.5" />
+                        )}
+                        Confirmer
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDecideReactivation(request.id, false)}
+                        disabled={decidingId === request.id}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-clay-300 px-2.5 text-xs font-semibold text-clay-700 transition-colors hover:bg-clay-50 disabled:opacity-50 dark:border-clay-700 dark:text-clay-300 dark:hover:bg-clay-900"
+                      >
+                        <X aria-hidden="true" className="h-3.5 w-3.5" />
+                        Refuser
+                      </button>
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ul>
+          {reactivationRequests.some((request) => request.status !== 'PENDING') ? (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Seules les demandes en attente sont décidables.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
 
       {/* ——— Note de bonnes pratiques ——— */}
       {activeCount > 0 ? (
