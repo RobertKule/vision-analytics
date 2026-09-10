@@ -43,16 +43,13 @@ export function isEmailConfigured(): boolean {
 
 export type SendEmailResult = { ok: true } | { ok: false; reason: 'unconfigured' | 'failed' }
 
-/**
- * Envoie un email transactionnel via Resend (fetch, aucune dépendance SDK).
- * L'expéditeur affiché est « ONA Field », l'objet et le corps viennent du module pur.
- */
-export async function sendEmail(input: {
-  kind: EmailKind
+/** Envoi Resend unique (POST + audit), partagé par `sendEmail` et `sendRawEmail`. */
+async function postEmail(input: {
   to: string
-  context?: EmailContext
-  /** Acteur pour l'audit (email = pas de userId ciblé par défaut). */
+  subject: string
+  html: string
   actorId?: string | null
+  auditKind: string
 }): Promise<SendEmailResult> {
   const apiKey = (process.env.RESEND_API_KEY ?? '').trim()
   const fromAddress = configuredFromAddress()
@@ -62,8 +59,6 @@ export async function sendEmail(input: {
     return { ok: false, reason: 'unconfigured' }
   }
 
-  const subject = emailSubject(input.kind, input.context)
-  const html = emailHtml(input.kind, input.context)
   const replyTo = (process.env.EMAIL_REPLY_TO ?? '').trim() || undefined
 
   try {
@@ -76,8 +71,8 @@ export async function sendEmail(input: {
       body: JSON.stringify({
         from: emailFrom(fromAddress),
         to: [input.to],
-        subject,
-        html,
+        subject: input.subject,
+        html: input.html,
         ...(replyTo ? { reply_to: replyTo } : {}),
       }),
     })
@@ -89,8 +84,8 @@ export async function sendEmail(input: {
         userId: input.actorId ?? null,
         action: AUDIT_ACTIONS.emailFailed,
         entityType: 'export',
-        entityId: input.kind,
-        metadata: { kind: input.kind, to: input.to },
+        entityId: input.auditKind,
+        metadata: { kind: input.auditKind, to: input.to },
       })
       return { ok: false, reason: 'failed' }
     }
@@ -99,8 +94,8 @@ export async function sendEmail(input: {
       userId: input.actorId ?? null,
       action: AUDIT_ACTIONS.emailSent,
       entityType: 'export',
-      entityId: input.kind,
-      metadata: { kind: input.kind, to: input.to, subject },
+      entityId: input.auditKind,
+      metadata: { kind: input.auditKind, to: input.to, subject: input.subject },
     })
     return { ok: true }
   } catch (error) {
@@ -109,11 +104,52 @@ export async function sendEmail(input: {
       userId: input.actorId ?? null,
       action: AUDIT_ACTIONS.emailFailed,
       entityType: 'export',
-      entityId: input.kind,
-      metadata: { kind: input.kind, to: input.to },
+      entityId: input.auditKind,
+      metadata: { kind: input.auditKind, to: input.to },
     })
     return { ok: false, reason: 'failed' }
   }
+}
+
+/**
+ * Envoie un email transactionnel via Resend (fetch, aucune dépendance SDK).
+ * L'expéditeur affiché est « ONA Field », l'objet et le corps viennent du module pur.
+ */
+export async function sendEmail(input: {
+  kind: EmailKind
+  to: string
+  context?: EmailContext
+  /** Acteur pour l'audit (email = pas de userId ciblé par défaut). */
+  actorId?: string | null
+}): Promise<SendEmailResult> {
+  return postEmail({
+    to: input.to,
+    subject: emailSubject(input.kind, input.context),
+    html: emailHtml(input.kind, input.context),
+    actorId: input.actorId,
+    auditKind: input.kind,
+  })
+}
+
+/**
+ * Envoie un email « libre » (objet + corps HTML fournis par l'appelant, ex. module
+ * Communication admin). Même identité « ONA Field », même canal Resend, même audit.
+ */
+export async function sendRawEmail(input: {
+  to: string
+  subject: string
+  html: string
+  /** Identifiant du template de communication (audit). */
+  auditKind?: string
+  actorId?: string | null
+}): Promise<SendEmailResult> {
+  return postEmail({
+    to: input.to,
+    subject: input.subject,
+    html: input.html,
+    actorId: input.actorId,
+    auditKind: input.auditKind ?? 'MESSAGE',
+  })
 }
 
 /** Compte l'utilisateur par identifiant (helper serveur partagé). */
