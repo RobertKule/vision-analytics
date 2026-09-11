@@ -13,6 +13,12 @@ import {
   recordConfigChangeVersions,
 } from '@/lib/analyticsVersionStore'
 import { reclassifyGhostsForNewWindow } from '@/lib/observationReclassify'
+import {
+  MAX_WINDOWS_PER_SUBMISSION,
+  validateWindowBounds,
+  windowBoundsKeys,
+  type WindowBoundsError,
+} from '@/lib/windowDraft'
 import type { ActionResult, AnalystProjectDto } from '@/lib/types'
 import { defaultLocale, type Locale } from '@/lib/i18n'
 
@@ -49,9 +55,41 @@ async function versionedConfigChange<T>(
 /** Doit rester synchronisé avec observationActions.ts (lectures observateur). */
 const BLIND_PROJECTS_TAG = 'blind-projects'
 
-function parseSeconds(value: unknown): number | null {
-  const number = typeof value === 'number' ? value : Number(value)
-  return Number.isInteger(number) && number >= 0 ? number : null
+/**
+ * Traduit un motif de refus de `lib/windowDraft` en message bilingue.
+ *
+ * La RÈGLE vit dans le noyau pur (partagé avec l'interface) ; seuls les libellés
+ * sont propres à cette surface.
+ */
+function windowBoundsMessage(locale: Locale, error: WindowBoundsError): string {
+  switch (error) {
+    case 'empty':
+      return msg(locale, 'Add at least one window.', 'Ajoutez au moins une fenêtre.')
+    case 'count':
+      return msg(
+        locale,
+        `No more than ${MAX_WINDOWS_PER_SUBMISSION} windows at once.`,
+        `Un point ne peut pas recevoir plus de ${MAX_WINDOWS_PER_SUBMISSION} fenêtres en une fois.`,
+      )
+    case 'not-integer':
+      return msg(
+        locale,
+        'Bounds must be whole seconds ≥ 0.',
+        'Les bornes doivent être des secondes entières positives.',
+      )
+    case 'bounds':
+      return msg(
+        locale,
+        'The end must be strictly greater than the start.',
+        'La fin de chaque fenêtre doit être strictement supérieure à son début.',
+      )
+    case 'duplicate':
+      return msg(
+        locale,
+        'This window already exists for this video.',
+        'Cette fenêtre existe déjà pour cette vidéo.',
+      )
+  }
 }
 
 /**
@@ -209,6 +247,30 @@ export async function addWindowToProject(input: {
   trameFin: number
   locale?: Locale
 }): Promise<ActionResult> {
+  // Compatibilité : un seul intervalle = cas particulier d'un point à 1 fenêtre.
+  return addWindowsToProject({
+    projectId: input?.projectId,
+    pointName: input?.pointName,
+    windows: [{ trameDebut: input?.trameDebut, trameFin: input?.trameFin }],
+    locale: input?.locale,
+  })
+}
+
+/**
+ * Ajoute PLUSIEURS fenêtres temporelles à un même point logique, en une fois (§2).
+ *
+ * Un point scientifique peut apparaître plusieurs fois dans la même vidéo
+ * (00:10–00:20, 01:05–01:12, 03:40–03:55) : l'analyste saisit tous les intervalles
+ * d'un seul geste. Les CHEVAUCHEMENTS et INCLUSIONS sont autorisés — le moteur
+ * d'attribution les arbitre de façon déterministe — mais les DOUBLONS EXACTS
+ * (même point portant deux fois les mêmes bornes) restent refusés.
+ */
+export async function addWindowsToProject(input: {
+  projectId: string
+  pointName: string
+  windows: Array<{ trameDebut: number; trameFin: number }>
+  locale?: Locale
+}): Promise<ActionResult> {
   const locale: Locale = input?.locale === 'fr' ? 'fr' : defaultLocale
   const projectId = (input?.projectId ?? '').trim()
   const permissions = await getCurrentProjectPermissions(projectId)
@@ -216,25 +278,17 @@ export async function addWindowToProject(input: {
     return { ok: false, error: msg(locale, 'Access denied.', 'Accès refusé.') }
   }
   const pointName = (input?.pointName ?? '').trim()
-  const trameDebut = parseSeconds(input?.trameDebut)
-  const trameFin = parseSeconds(input?.trameFin)
+  const raw = Array.isArray(input?.windows) ? input.windows : []
 
   if (!projectId) return { ok: false, error: msg(locale, 'Invalid project.', 'Projet invalide.') }
   if (!pointName) {
     return { ok: false, error: msg(locale, 'The window name is required.', 'Le nom de la fenêtre est obligatoire.') }
   }
-  if (trameDebut === null || trameFin === null) {
-    return {
-      ok: false,
-      error: msg(locale, 'Bounds must be whole seconds ≥ 0.', 'Les bornes doivent être des secondes entières positives.'),
-    }
-  }
-  if (trameFin < trameDebut) {
-    return {
-      ok: false,
-      error: msg(locale, 'The end must be ≥ the start.', 'La fin doit être supérieure ou égale au début.'),
-    }
-  }
+
+  // Bornes + volumétrie : règle UNIQUE partagée avec l'interface (`lib/windowDraft`).
+  const bounds = validateWindowBounds(raw, [])
+  if (!bounds.ok) return { ok: false, error: windowBoundsMessage(locale, bounds.error) }
+  const windows = bounds.windows
 
   try {
     const project = await prisma.project.findUnique({ where: { id: projectId }, select: { isArchived: true } })
@@ -242,35 +296,47 @@ export async function addWindowToProject(input: {
     if (project.isArchived) {
       return { ok: false, error: msg(locale, 'Archived project.', 'Projet archivé.') }
     }
+    // Les fenêtres génériques (videoId null) partagent un même espace d'attribution.
     const existing = await prisma.projectPoint.findMany({
-      where: { projectId },
+      where: { projectId, videoId: null },
       select: { trameDebut: true, trameFin: true },
     })
-    const overlaps = existing.some((w) => w.trameDebut < trameFin && trameDebut < w.trameFin)
-    if (overlaps) {
-      return { ok: false, error: msg(locale, 'This window overlaps an existing one.', 'Cette fenêtre chevauche une fenêtre existante.') }
-    }
+    // Même règle qu'à l'interface, appliquée ici contre les trames déjà enregistrées :
+    // les doublons INTERNES à la soumission restent détectés par le même passage.
+    const dupes = validateWindowBounds(windows, windowBoundsKeys(existing))
+    if (!dupes.ok) return { ok: false, error: windowBoundsMessage(locale, dupes.error) }
     const created = await versionedConfigChange(
       projectId,
       ANALYTICS_TRIGGERS.windowAdded,
       async () => {
-        const point = await prisma.projectPoint.create({
-          data: { projectId, pointName, trameDebut, trameFin },
-          select: { id: true, videoId: true, trameDebut: true, trameFin: true },
-        })
+        const points: { id: string; videoId: string | null; trameDebut: number; trameFin: number }[] = []
+        for (const window of windows) {
+          points.push(
+            await prisma.projectPoint.create({
+              data: { projectId, pointName, trameDebut: window.trameDebut, trameFin: window.trameFin },
+              select: { id: true, videoId: true, trameDebut: true, trameFin: true },
+            }),
+          )
+        }
         // ——— Ajouter une fenêtre ne supprime pas le passé ———
-        // Les observations déjà certifiées hors-trame qui tombent désormais dans la
+        // Les observations déjà certifiées hors-trame qui tombent désormais dans une
         // nouvelle fenêtre redeviennent des DÉTECTIONS VALIDES (le numérateur
         // augmente). Fait DANS le callback pour que la version « après » le reflète.
-        await reclassifyGhostsForNewWindow(projectId, point)
-        return point
+        for (const point of points) {
+          await reclassifyGhostsForNewWindow(projectId, point)
+        }
+        return points
       },
     )
     await actorAudit({
       action: AUDIT_ACTIONS.projectUpdated,
       entityType: 'project',
       entityId: projectId,
-      metadata: { windowAdded: created.id, pointName },
+      metadata: {
+        pointName,
+        windowsAdded: created.length,
+        windowIds: created.map((point) => point.id).join(','),
+      },
     })
     revalidatePath('/analyst/projects')
     revalidatePath('/admin/projects')
