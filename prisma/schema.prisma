@@ -42,6 +42,17 @@ enum ObserverPartStatus {
   SUBMITTED
 }
 
+/// STATUT ANALYTIQUE d'un observateur DANS UN PROJET (déclassement scientifique).
+///
+/// Un observateur EXCLUDED reste un utilisateur à part entière : son compte, ses
+/// sessions, ses captures RAW et son historique sont INTÉGRALEMENT conservés. Seul
+/// le MOTEUR ANALYTIQUE courant cesse de compter ses observations. Aucune donnée
+/// n'est jamais supprimée pour obtenir ce comportement.
+enum ObserverAnalysisStatus {
+  INCLUDED
+  EXCLUDED
+}
+
 /// État d'une DEMANDE de réactivation d'accès observateur.
 ///
 /// L'observateur peut DEMANDER une réactivation (jamais la déclencher lui-même) ;
@@ -54,31 +65,34 @@ enum ReactivationStatus {
 }
 
 model User {
-  id            String          @id @default(uuid())
-  email         String          @unique
-  username      String?         @unique // Pseudonyme d'analyse (login lisible)
-  password      String
-  role          Role            @default(OBSERVER)
-  isActive      Boolean         @default(true) // Compte désactivable par un administrateur
+  id                    String                        @id @default(uuid())
+  email                 String                        @unique
+  username              String?                       @unique // Pseudonyme d'analyse (login lisible)
+  password              String
+  role                  Role                          @default(OBSERVER)
+  isActive              Boolean                       @default(true) // Compte désactivable par un administrateur
   /// État de la demande d'accès. APPROVED (défaut) : compte utilisable ; PENDING : demande
   /// d'inscription publique (rôle ANALYST) non encore validée par un ADMIN ; REJECTED : refusée.
-  accountStatus AccountStatus   @default(APPROVED)
+  accountStatus         AccountStatus                 @default(APPROVED)
   /// ADMIN ayant validé la demande d'accès (null tant que non traitée / créée directement).
-  approvedById  String?
-  approvedBy    User?           @relation("AccountApproval", fields: [approvedById], references: [id], onDelete: SetNull)
-  approvedAt    DateTime?
-  anonymousId   String          @unique @default(uuid())
-  observations  Observation[]
-  ownedProjects Project[]       @relation("ProjectOwner")
-  grantedAccess ProjectAccess[]
-  observerTokens ObserverAccessToken[]
-  approvedAccounts User[]       @relation("AccountApproval")
+  approvedById          String?
+  approvedBy            User?                         @relation("AccountApproval", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt            DateTime?
+  anonymousId           String                        @unique @default(uuid())
+  observations          Observation[]
+  ownedProjects         Project[]                     @relation("ProjectOwner")
+  observerInclusions    ProjectObserverInclusion[]    @relation("ObserverInclusionSubject")
+  exclusionsDecided     ProjectObserverInclusion[]    @relation("ObserverExclusionDecidedBy")
+  inclusionsDecided     ProjectObserverInclusion[]    @relation("ObserverInclusionDecidedBy")
+  grantedAccess         ProjectAccess[]
+  observerTokens        ObserverAccessToken[]
+  approvedAccounts      User[]                        @relation("AccountApproval")
   reactivationDecisions ObserverReactivationRequest[] @relation("ReactivationDecisions")
-  auditLogs     AuditLog[]
-  notifications Notification[]
-  communications Communication[] @relation("CommunicationAuthor")
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @default(now()) @updatedAt
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+  communications        Communication[]               @relation("CommunicationAuthor")
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @default(now()) @updatedAt
 }
 
 /// NOTIFICATION IN-APP d'un utilisateur (lecture seule pour son destinataire).
@@ -87,15 +101,15 @@ model User {
 /// marquage sont toujours vérifiés côté serveur (jamais un `userId` cible accepté
 /// du client). `readAt` non nul = lue (READ), sinon UNREAD.
 model Notification {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Type métier (ex. ACCOUNT_APPROVED, EXPERIENCE_SHARED, REACTIVATION_REQUESTED…).
   type      String
   title     String
   message   String
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([userId, readAt])
   @@index([userId])
@@ -126,15 +140,15 @@ model Communication {
 /// Les lignes ne sont jamais modifiées ni supprimées par les utilisateurs normaux ;
 /// seul un ADMIN peut les consulter (ou chaque utilisateur pour ses propres lignes).
 model AuditLog {
-  id         String    @id @default(uuid())
+  id         String   @id @default(uuid())
   userId     String?
-  user       User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   action     String // ex. LOGIN_SUCCESS, PROJECT_CREATED, EXPORT_GLOBAL…
   entityType String?
   entityId   String?
   /// Contexte non sensible (projectId, role, result…) — JAMAIS de secrets/passwords.
   metadata   Json?
-  createdAt  DateTime  @default(now())
+  createdAt  DateTime @default(now())
 
   @@index([userId])
   @@index([action])
@@ -144,21 +158,22 @@ model AuditLog {
 }
 
 model Project {
-  id               String          @id @default(uuid())
-  ownerId          String? // Créateur (ADMIN ou ANALYST) — null pour les projets hérités
-  owner            User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  title            String
-  description      String?
-  videoUrl         String?         // Chemin ou nom du fichier vidéo local (vidéo « générique » héritée)
-  observationTypes String[]        @default([]) // Types d'observation configurables proposés aux observateurs (ex: « 100m oblique », « Faune détectée »)
-  isArchived       Boolean         @default(false)
-  points           ProjectPoint[]
-  observations     Observation[]
-  videos           Video[]         // Passes vidéo du projet (multi-vidéo : chaque vidéo peut être rattachée à un type d'observation)
-  accessList       ProjectAccess[] // Partage ANALYST → ANALYST (par username)
-  accessTokens     ObserverAccessToken[] // Liens d'accès observateur (jetons par projet)
-  analyticsVersions AnalyticsVersion[] // Versions analytiques immuables (historique)
-  createdAt        DateTime        @default(now())
+  id                 String                     @id @default(uuid())
+  ownerId            String? // Créateur (ADMIN ou ANALYST) — null pour les projets hérités
+  owner              User?                      @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  title              String
+  description        String?
+  videoUrl           String? // Chemin ou nom du fichier vidéo local (vidéo « générique » héritée)
+  observationTypes   String[]                   @default([]) // Types d'observation configurables proposés aux observateurs (ex: « 100m oblique », « Faune détectée »)
+  isArchived         Boolean                    @default(false)
+  points             ProjectPoint[]
+  observations       Observation[]
+  videos             Video[] // Passes vidéo du projet (multi-vidéo : chaque vidéo peut être rattachée à un type d'observation)
+  accessList         ProjectAccess[] // Partage ANALYST → ANALYST (par username)
+  accessTokens       ObserverAccessToken[] // Liens d'accès observateur (jetons par projet)
+  analyticsVersions  AnalyticsVersion[] // Versions analytiques immuables (historique)
+  observerInclusions ProjectObserverInclusion[] // Déclassement analytique d'observateurs (INCLUDED/EXCLUDED)
+  createdAt          DateTime                   @default(now())
 }
 
 /// Passe vidéo d'un projet. Une vidéo peut être rattachée à UN type d'observation
@@ -166,23 +181,23 @@ model Project {
 /// générique (`typeLabel = null` : l'observateur y capture n'importe quel type
 /// proposé — comportement historique du projet à vidéo unique).
 model Video {
-  id        String    @id @default(uuid())
-  projectId String
-  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id               String                   @id @default(uuid())
+  projectId        String
+  project          Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   /// Libellé exact (issu de Project.observationTypes) auquel cette vidéo est rattachée ; null = vidéo générique.
-  typeLabel String?
+  typeLabel        String?
   /// Libellé humain affiché (ex. nom de fichier) ; null = généré depuis `source`.
-  name      String?
+  name             String?
   /// Source de la vidéo (URL distante ou nom de fichier chargé par l'observateur).
-  source    String
+  source           String
   /// Ordre d'affichage des onglets dans l'annotateur.
-  orderIndex Int @default(0)
+  orderIndex       Int                      @default(0)
   /// Point réel / vérité terrain (en secondes) pour cette passe — CONFIDENTIEL, jamais transmis à l'observateur.
   benchmarkSeconds Int?
-  points      ProjectPoint[]
-  observations Observation[]
-  partSubmissions ObserverPartSubmission[]
-  createdAt   DateTime   @default(now())
+  points           ProjectPoint[]
+  observations     Observation[]
+  partSubmissions  ObserverPartSubmission[]
+  createdAt        DateTime                 @default(now())
 
   @@index([projectId])
 }
@@ -257,29 +272,29 @@ model AnalyticsVersion {
 /// projet. Le jeton brut n'existe que dans l'URL partagée — jamais en base, jamais dans les
 /// journaux. Une session terminée (`COMPLETED`) passe le projet en consultation (lecture seule).
 model ObserverAccessToken {
-  id             String              @id @default(uuid())
-  tokenHash      String              @unique // SHA-256 du jeton brut — le brut n'est jamais stocké
-  projectId      String
-  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id                   String                        @id @default(uuid())
+  tokenHash            String                        @unique // SHA-256 du jeton brut — le brut n'est jamais stocké
+  projectId            String
+  project              Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   /// Observateur rattaché à la session (résolu à la première ouverture du lien) ; null tant
   /// que le lien n'a jamais été ouvert.
-  observerId     String?
-  observer       User?               @relation(fields: [observerId], references: [id], onDelete: SetNull)
+  observerId           String?
+  observer             User?                         @relation(fields: [observerId], references: [id], onDelete: SetNull)
   /// Email du destinataire de l'invitation (affichage admin, déduplication, notifications).
   /// Ce n'est PAS une authentification : le droit d'accès repose sur le token/session.
-  observerEmail  String?
-  status         ObserverTokenStatus @default(ACTIVE)
-  createdAt      DateTime            @default(now())
-  expiresAt      DateTime? // null = sans expiration
-  lastAccessedAt DateTime?
-  completedAt    DateTime?
-  revokedAt      DateTime?
+  observerEmail        String?
+  status               ObserverTokenStatus           @default(ACTIVE)
+  createdAt            DateTime                      @default(now())
+  expiresAt            DateTime? // null = sans expiration
+  lastAccessedAt       DateTime?
+  completedAt          DateTime?
+  revokedAt            DateTime?
   /// Session d'observation logique (runId) stable pour ce lien : la reprise du travail et la
   /// finalisation s'appuient dessus (jamais exposé à l'observateur).
-  sessionRunId   String?
+  sessionRunId         String?
   /// États par PARTIE (passe vidéo) de cette session : une partie envoyée est verrouillée
   /// indépendamment des autres, la session globale n'étant clôturée qu'à « Envoyer tout ».
-  partSubmissions ObserverPartSubmission[]
+  partSubmissions      ObserverPartSubmission[]
   /// Demandes de réactivation de l'accès (une seule PENDING à la fois par jeton).
   reactivationRequests ObserverReactivationRequest[]
 
@@ -295,16 +310,16 @@ model ObserverAccessToken {
 /// l'accès reste tel quel). Les données, parties envoyées et l'historique sont toujours
 /// conservés : une réactivation ne supprime ni ne recrée rien.
 model ObserverReactivationRequest {
-  id          String            @id @default(uuid())
+  id          String              @id @default(uuid())
   tokenId     String
   token       ObserverAccessToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
-  status      ReactivationStatus @default(PENDING)
-  requestedAt DateTime          @default(now())
+  status      ReactivationStatus  @default(PENDING)
+  requestedAt DateTime            @default(now())
   decidedAt   DateTime?
   /// ADMIN ayant statué sur la demande (jamais l'observateur).
   decidedById String?
-  decidedBy   User?             @relation("ReactivationDecisions", fields: [decidedById], references: [id], onDelete: SetNull)
-  createdAt   DateTime          @default(now())
+  decidedBy   User?               @relation("ReactivationDecisions", fields: [decidedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime            @default(now())
 
   @@index([tokenId])
   @@index([status])
@@ -322,72 +337,110 @@ model ObserverReactivationRequest {
 /// capture / modification / suppression, mais n'invalide pas le jeton — l'observateur
 /// reprend normalement les parties encore ouvertes.
 model ObserverPartSubmission {
-  id          String             @id @default(uuid())
+  id          String              @id @default(uuid())
   tokenId     String
   token       ObserverAccessToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
   /// Passe vidéo cible ; null = passe générique héritée (projet à vidéo unique).
   videoId     String?
-  video       Video?             @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  status      ObserverPartStatus @default(NOT_STARTED)
+  video       Video?              @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  status      ObserverPartStatus  @default(NOT_STARTED)
   submittedAt DateTime?
-  createdAt   DateTime           @default(now())
+  createdAt   DateTime            @default(now())
 
   @@index([tokenId])
   @@index([tokenId, videoId])
 }
 
+/// DÉCLASSEMENT D'UN OBSERVATEUR dans les analyses d'UN PROJET.
+///
+/// ADDITIF et non destructif : l'ABSENCE de ligne vaut INCLUDED, donc les données
+/// existantes n'ont besoin d'AUCUN backfill et restent strictement inchangées.
+/// Une ligne n'est créée que lorsqu'un ADMIN déclasse (ou re-classe) explicitement.
+///
+/// `EXCLUDED` ⇒ le moteur analytique courant ignore les observations de cet
+/// observateur (numérateur ET dénominateur : le nombre analytique d'observateurs
+/// diminue d'autant). `INCLUDED` ⇒ ses observations recomptent immédiatement.
+/// Aucune suppression n'est jamais effectuée — les captures restent consultables
+/// pour l'audit et l'historique.
+model ProjectObserverInclusion {
+  id              String                 @id @default(uuid())
+  projectId       String
+  project         Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User                   @relation("ObserverInclusionSubject", fields: [userId], references: [id], onDelete: Cascade)
+  status          ObserverAnalysisStatus @default(INCLUDED)
+  /// Horodatage du déclassement (null tant que l'observateur n'a jamais été exclu).
+  excludedAt      DateTime?
+  /// ADMIN ayant prononcé le déclassement.
+  excludedById    String?
+  excludedBy      User?                  @relation("ObserverExclusionDecidedBy", fields: [excludedById], references: [id], onDelete: SetNull)
+  /// Motif scientifique du déclassement (données biaisées, protocole non conforme…).
+  exclusionReason String?
+  /// Horodatage de la dernière ré-inclusion.
+  includedAt      DateTime?
+  /// ADMIN ayant rétabli l'observateur.
+  includedById    String?
+  includedBy      User?                  @relation("ObserverInclusionDecidedBy", fields: [includedById], references: [id], onDelete: SetNull)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @default(now()) @updatedAt
+
+  @@unique([projectId, userId])
+  @@index([projectId, status])
+  @@index([userId])
+}
+
 model ProjectPoint {
-  id             String        @id @default(uuid())
-  projectId      String
-  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  videoId        String?       // Fenêtre rattachée à une passe vidéo précise ; null = fenêtre « générique » (projet à vidéo unique)
-  video          Video?        @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  pointName      String        // ex: "Point 2"
-  trameDebut     Int           // Trame début en secondes
-  trameFin       Int           // Trame fin en secondes
-  observations   Observation[]
+  id           String        @id @default(uuid())
+  projectId    String
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  videoId      String? // Fenêtre rattachée à une passe vidéo précise ; null = fenêtre « générique » (projet à vidéo unique)
+  video        Video?        @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  pointName    String // ex: "Point 2"
+  trameDebut   Int // Trame début en secondes
+  trameFin     Int // Trame fin en secondes
+  observations Observation[]
 
   @@index([projectId])
   @@index([videoId])
 }
 
 model Observation {
-  id             String        @id @default(uuid())
-  projectId      String
-  project        Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  userId         String
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  videoId        String?       // Passe vidéo d'origine ; null = vidéo générique historique
-  video          Video?        @relation(fields: [videoId], references: [id], onDelete: SetNull)
-  pointId        String?       // Auto-assigné si dans [trameDebut, trameFin]
-  point          ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
-  timestampTotal Int           // Horodatage saisi en secondes
-  imageUrl       String        // URL publique d'accès à la capture annotée (CDN/Drive)
+  id              String        @id @default(uuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  videoId         String? // Passe vidéo d'origine ; null = vidéo générique historique
+  video           Video?        @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  pointId         String? // Auto-assigné si dans [trameDebut, trameFin]
+  point           ProjectPoint? @relation(fields: [pointId], references: [id], onDelete: SetNull)
+  timestampTotal  Int // Horodatage saisi en secondes
+  imageUrl        String // URL publique d'accès à la capture annotée (CDN/Drive)
   /// Identifiant Cloudinary (public_id) historique — lignes antérieures à la migration
   /// Google Drive. Conservé en lecture seule ; les nouvelles captures utilisent `driveFileId`.
-  imagePublicId  String?
+  imagePublicId   String?
   /// Identifiant Google Drive (fileId) de la capture annotée (stockage des nouvelles
   /// captures). Jamais exposé à l'observateur : usage serveur interne (suppression ciblée,
   /// lecture pour les exports serveur).
-  driveFileId    String?
-  observationType String?      // Type d'observation choisi par l'observateur (issu de Project.observationTypes)
-  isGhostPoint   Boolean       @default(false) // Indique si hors-trame / fausse alerte
+  driveFileId     String?
+  observationType String? // Type d'observation choisi par l'observateur (issu de Project.observationTypes)
+  isGhostPoint    Boolean       @default(false) // Indique si hors-trame / fausse alerte
   /// Vrai ⇒ capture « certifiée » (session finalisée), seule donnée comptée dans les
   /// statistiques/exports. Faux ⇒ capture enregistrée immédiatement mais dont la session
   /// n'est pas encore finalisée (donnée transitoire, invisible des analyses).
-  isVerified     Boolean       @default(true)
+  isVerified      Boolean       @default(true)
   /// Jeton de « session » logique (une soumission, toutes passes confondues) — sert au
   /// comptage de sessions par observateur et à la traçabilité (jamais exposé à l'observateur).
-  sessionRunId   String?
+  sessionRunId    String?
   /// Clé de déduplication émise par le client, stable pour une capture donnée (son `id`
   /// local). Le couple (projet, clé) est unique : re-soumettre une capture déjà enregistrée
   /// est sans effet (idempotence locale + reprise après échec partiel).
-  clientKey      String?
-  createdAt      DateTime      @default(now())
+  clientKey       String?
+  createdAt       DateTime      @default(now())
 
+  @@unique([projectId, clientKey])
   @@index([projectId])
   @@index([userId])
   @@index([pointId])
   @@index([videoId])
-  @@unique([projectId, clientKey])
 }
