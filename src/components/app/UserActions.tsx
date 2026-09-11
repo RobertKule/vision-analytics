@@ -298,6 +298,9 @@ export default function UserActions({
             {/* Liens de navigation */}
             <nav aria-label={t.menuOpenAria} className="flex-1 overflow-y-auto px-2 py-3">
               <ul className="flex flex-col gap-1">
+                {/* §18 — l'entrée Expériences est l'administration globale : pas pour
+                    l'ANALYSTE, qui travaille depuis ses projets autorisés. */}
+                {session?.role !== 'ANALYST' ? (
                 <li>
                   <Link
                     href={session ? '/experience' : '/observe'}
@@ -308,6 +311,7 @@ export default function UserActions({
                     {t.observe}
                   </Link>
                 </li>
+                ) : null}
                 {session ? (
                   <li>
                     <Link
