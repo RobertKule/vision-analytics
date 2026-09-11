@@ -4,6 +4,8 @@ import { getCurrentSession } from '@/lib/auth'
 import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { captureImageEndpoint } from '@/lib/captureImageAccess'
+import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
+import { buildTypeComparison, typeColumnLabel, type TypeComparisonModel } from '@/lib/typeComparison'
 import {
   auditVersionViewed,
   resolveAnalyticsView,
@@ -47,6 +49,9 @@ function formatSeconds(seconds: number): string {
   const s = seconds % 60
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
+
+/** Garde-fou : au-delà, la matrice cesse d'être lisible et le coût de calcul inutile. */
+const MAX_COMPARED_TYPES = 8
 
 /** Normalise le filtre envoyé par le client : vide / espaces ⇒ « tous ». */
 function normalizeFilter(filter: unknown): AnalyticsFilter {
@@ -301,7 +306,144 @@ export async function getProjectAnalytics(
     pointsAnalytics,
     ghostPointsAnalytics,
     observersMetrics,
+    // §13 — dénominateur humain explicite : l'interface affiche combien d'observateurs
+    // sont réellement comptés, et lesquels sont écartés (jamais masqué).
+    observerInclusion: view.observerInclusion,
   }
+}
+
+/** Types comparables d'un projet, avec leur nombre de points configurés. */
+export type ComparableTypesDto = {
+  /** Libellé affiché (passe générique → « Générique »). */
+  label: string
+  /** Clé normalisée à renvoyer dans `compareAnalyticsTypes`. */
+  type: string
+  pointCount: number
+  /** Faux si le type n'a AUCUN point configuré : comparer sa colonne n'a pas de sens. */
+  comparable: boolean
+}
+
+/**
+ * Liste les types comparables d'un projet : les types CONFIGURÉS, plus tout type
+ * réellement observé. Le décompte des points vient de la configuration courante,
+ * donc des mêmes données que le tableau de bord.
+ */
+export async function listComparableTypes(projectId: string): Promise<ComparableTypesDto[]> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return []
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!permissions.canAnalyze) return []
+
+  const [project, views] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id },
+      select: {
+        observationTypes: true,
+        points: { select: { video: { select: { typeLabel: true } } } },
+      },
+    }),
+    // Un type « observé mais non configuré » reste comparable : ses captures existent.
+    prisma.observation.groupBy({
+      by: ['observationType'],
+      where: { projectId: id, isVerified: true },
+      _count: { _all: true },
+    }),
+  ])
+  if (!project) return []
+
+  const countByType = new Map<string, number>()
+  const bump = (type: string) => countByType.set(type, (countByType.get(type) ?? 0) + 1)
+  for (const point of project.points) bump((point.video?.typeLabel ?? '').trim())
+  for (const row of views) bump((row.observationType ?? '').trim())
+
+  const configured = project.observationTypes.map((type) => type.trim())
+  const observed = views.map((row) => (row.observationType ?? '').trim())
+  const all = Array.from(new Set([...configured, ...observed]))
+
+  return all
+    .map((type) => ({
+      type,
+      label: typeColumnLabel(type),
+      pointCount: countByType.get(type) ?? 0,
+      comparable: (countByType.get(type) ?? 0) > 0,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+}
+
+/**
+ * COMPARAISON DE PLUSIEURS TYPES (§14) — LECTURE SEULE.
+ *
+ * Chaque type sélectionné est résolu par `resolveAnalyticsView`, le point d'entrée
+ * UNIQUE du tableau de bord, de l'inspection et de TOUS les exports. La matrice ne
+ * fait ensuite que METTRE EN REGARD ces résultats (`buildTypeComparison`) : aucun
+ * second moteur statistique, aucune requête parallèle, aucun recalcul de règle.
+ *
+ * Conséquence directe : pour un type donné, le taux affiché ici est EXACTEMENT celui
+ * du tableau de bord filtré sur ce type, et celui de l'Excel/PDF exporté.
+ */
+export async function compareAnalyticsTypes(
+  projectId: string,
+  types: string[],
+  options?: ProjectAnalyticsOptions | null,
+): Promise<TypeComparisonModel | null> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return null
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!permissions.canAnalyze) return null
+
+  const wanted = Array.from(
+    new Set((Array.isArray(types) ? types : []).map((type) => String(type ?? '').trim())),
+  ).slice(0, MAX_COMPARED_TYPES)
+  if (wanted.length === 0) return null
+
+  const selector = normalizeSelector(options)
+
+  // Une résolution PAR TYPE : le moteur partagé, jamais une seconde implémentation.
+  const resolved = await Promise.all(
+    wanted.map(async (type) => {
+      const view = await resolveAnalyticsView(id, selector, { observationType: type })
+      if (!view) return null
+      const observerIds = new Set<string>()
+      for (const row of view.rows) observerIds.add(row.userId)
+      return {
+        type,
+        config: view.config,
+        rows: view.rows,
+        observerCount: observerIds.size,
+        metrics: {
+          detections: view.metrics.detections,
+          ghostEvents: view.metrics.ghostEvents,
+          totalClaims: view.metrics.totalClaims,
+          configuredPoints: view.metrics.configuredPoints,
+          windowsHit: view.metrics.windowsHit,
+          concordanceRate: view.metrics.concordanceRate,
+          precision: view.metrics.precision,
+          detectionProbability: view.metrics.detectionProbability,
+          averageDetectionDelay: view.metrics.averageDetectionDelay,
+        },
+      }
+    }),
+  )
+
+  const inputs = resolved.filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+  if (inputs.length === 0) return null
+
+  const session = await getCurrentSession()
+  await recordAudit({
+    userId: session?.uid ?? null,
+    action: AUDIT_ACTIONS.analyticsTypeCompared,
+    entityType: 'analytics',
+    entityId: id,
+    // Uniquement des libellés de types et des compteurs — jamais de donnée sensible.
+    metadata: {
+      types: inputs.map((entry) => entry.type).join(','),
+      typeCount: inputs.length,
+      versionId: selector.versionId ?? null,
+      asOfDate: selector.asOfDate ?? null,
+    },
+  })
+
+  return buildTypeComparison(inputs)
 }
 
 /** Historique des versions analytiques d'un projet (sélecteur d'interface). */
