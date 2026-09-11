@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import JSZip from 'jszip'
 import { getCurrentSession } from '@/lib/auth'
-import { getCurrentProjectPermissions } from '@/lib/projectGuard'
-import { prisma } from '@/lib/prisma'
+import { resolveExportSource } from '@/lib/exportSource'
 import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import type { ExportObservationRow } from '@/lib/exportHelpers'
 import { buildObservationExportCsv } from '@/lib/exportHelpers'
@@ -53,9 +52,16 @@ type GroupedObserver = {
  *   │   └── Captures/capture_MMmSSs.png  (images annotées de l'observateur)
  *   └── manifest.json                    (métadonnées + protocole)
  *
+ * SOURCE ANALYTIQUE : ce n'est PAS une relecture parallèle de la base. Le relevé
+ * vient de `resolveExportSource`, donc de `resolveAnalyticsView` — la même source
+ * que le tableau de bord, l'Excel global et le PDF. Le ZIP applique ainsi, comme
+ * tout le reste, le rematch dynamique, les fenêtres multiples (hiérarchie
+ * parent/enfant, chevauchements), l'attribution déterministe et les exclusions
+ * d'observateurs. Un `isGhostPoint` persisté n'est JAMAIS utilisé comme vérité.
+ *
  * Auto-authentification de la route `/api/*` : session + accès de gestion requis.
  */
-export async function GET(_request: Request, ctx: ExportContext): Promise<NextResponse> {
+export async function GET(request: Request, ctx: ExportContext): Promise<NextResponse> {
   const session = await getCurrentSession()
   if (!session) {
     return NextResponse.json({ error: 'Non authentifié.' }, { status: 401 })
@@ -63,34 +69,15 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
 
   const { projectId } = await ctx.params
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { id: true, title: true },
-  })
-  if (!project) {
-    return NextResponse.json({ error: 'Projet introuvable.' }, { status: 404 })
+  // RBAC + version + configuration + relevé attribué, en un seul appel partagé.
+  const resolution = await resolveExportSource({ projectId, url: new URL(request.url) })
+  if (!resolution.ok) {
+    return NextResponse.json({ error: resolution.refusal.error }, { status: resolution.refusal.status })
   }
 
-  // RBAC : ADMIN, propriétaire, ou analyste invité (un partage donne toujours la
-  // consultation, l'analyse et l'export ; la configuration exige un droit d'édition).
-  const permissions = await getCurrentProjectPermissions(projectId)
-  if (!permissions.canExport) {
-    return NextResponse.json(
-      { error: 'Accès de gestion requis sur ce projet.' },
-      { status: 403 },
-    )
-  }
-
-  const rows = await prisma.observation.findMany({
-    // Données CERTIFIÉES uniquement : le relevé brut conserve chaque capture
-    // certifiée (`isVerified`), mais ignore les sessions « en cours ».
-    where: { projectId, isVerified: true },
-    include: {
-      user: { select: { username: true, email: true, anonymousId: true } },
-      point: { select: { pointName: true } },
-    },
-    orderBy: { createdAt: 'asc' },
-  })
+  const { source, versionLabel } = resolution.resolved
+  const project = source.project
+  const rows = source.rows
 
   if (rows.length === 0) {
     return NextResponse.json(
@@ -104,44 +91,35 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
   // ——— Regroupement par observateur (userId) ———
   const byObserver = new Map<string, GroupedObserver>()
   for (const row of rows) {
-    const userId = row.userId ?? 'sans-compte'
+    const userId = row.userId || 'sans-compte'
     const userKey = observerKeyName({
-      username: row.user?.username ?? null,
-      email: row.user?.email ?? null,
-      anonymousId: row.user?.anonymousId ?? null,
+      username: row.username,
+      email: row.email,
+      anonymousId: row.anonymousId,
     })
+    const mapped = {
+      id: row.id ?? '',
+      timestampTotal: row.timestampTotal,
+      observationType: row.observationType,
+      // Classement ATTRIBUÉ par le moteur partagé, jamais le drapeau persisté.
+      isGhostPoint: row.isGhostPoint,
+      pointLabel: row.pointLabel,
+      imageUrl: row.imageUrl,
+      driveFileId: row.driveFileId ?? null,
+      createdAt: row.createdAt,
+    }
     const existing = byObserver.get(userId)
     if (existing) {
-      existing.rows.push({
-        id: row.id,
-        timestampTotal: row.timestampTotal,
-        observationType: row.observationType,
-        isGhostPoint: row.isGhostPoint,
-        pointLabel: row.point?.pointName ?? null,
-        imageUrl: row.imageUrl,
-        driveFileId: row.driveFileId,
-        createdAt: row.createdAt.toISOString(),
-      })
+      existing.rows.push(mapped)
     } else {
       byObserver.set(userId, {
         userId,
         folderName: `Observateur_${userKey}`,
-        displayName: observerDisplayName(row.user),
-        username: row.user?.username ?? null,
-        email: row.user?.email ?? null,
-        anonymousId: row.user?.anonymousId ?? null,
-        rows: [
-          {
-            id: row.id,
-            timestampTotal: row.timestampTotal,
-            observationType: row.observationType,
-            isGhostPoint: row.isGhostPoint,
-            pointLabel: row.point?.pointName ?? null,
-            imageUrl: row.imageUrl,
-            driveFileId: row.driveFileId,
-            createdAt: row.createdAt.toISOString(),
-          },
-        ],
+        displayName: observerDisplayName(row),
+        username: row.username,
+        email: row.email,
+        anonymousId: row.anonymousId,
+        rows: [mapped],
       })
     }
   }
@@ -153,25 +131,26 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
 
   // ——— Rapport global du projet (relevé complet, 11 colonnes) ———
   const exportRows: ExportObservationRow[] = rows.map((row) => ({
-    id: row.id,
-    observerUsername: row.user?.username ?? null,
-    observerEmail: row.user?.email ?? null,
-    observerAnonymousId: row.user?.anonymousId ?? '—',
+    id: row.id ?? '',
+    observerUsername: row.username,
+    observerEmail: row.email,
+    observerAnonymousId: row.anonymousId || '—',
     timestampTotal: row.timestampTotal,
-    pointLabel: row.point?.pointName ?? null,
+    pointLabel: row.pointLabel,
     isGhostPoint: row.isGhostPoint,
     imageUrl: row.imageUrl,
-    createdAt: row.createdAt.toISOString(),
+    createdAt: row.createdAt,
   }))
 
   const rapportCsv = buildObservationExportCsv(
     {
       id: project.id,
       title: project.title,
-      description: null,
-      videoUrl: null,
-      createdAt: new Date().toISOString(),
-      totalDefinedPoints: 0,
+      description: project.description,
+      videoUrl: project.videoUrl,
+      createdAt: project.createdAt,
+      // Le dénominateur vient du périmètre RÉSOLU (figé pour une version), pas d'un 0.
+      totalDefinedPoints: project.definedPoints,
     },
     exportRows,
   )
@@ -227,6 +206,8 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
     JSON.stringify(
       {
         project: { id: project.id, title: project.title },
+        // Version analytique exportée : le ZIP porte EXACTEMENT ce que le dashboard affiche.
+        analyticsVersion: versionLabel,
         exportedAt: new Date().toISOString(),
         totalObservations: exportRows.length,
         totalFramesWritten: writtenFrames,
@@ -286,10 +267,10 @@ export async function GET(_request: Request, ctx: ExportContext): Promise<NextRe
 }
 
 /** Libellé d'affichage d'un observateur (username → email → identifiant anonyme). */
-function observerDisplayName(user: {
+function observerDisplayName(row: {
   username: string | null
   email: string | null
-  anonymousId: string | null
-} | null): string {
-  return user?.username?.trim() || user?.email?.trim() || user?.anonymousId || 'observateur'
+  anonymousId: string
+}): string {
+  return row.username?.trim() || row.email?.trim() || row.anonymousId || 'observateur'
 }
