@@ -204,7 +204,18 @@ const getCachedBlindProjects = unstable_cache(queryBlindProjects, ['blind-projec
   revalidate: 300,
 })
 
+/**
+ * Liste des expériences observables sous la coquille applicative (§18).
+ *
+ * GARDE SERVEUR : cette liste est l'ADMINISTRATION GLOBALE des expériences, réservée
+ * à l'ADMIN (et aux OBSERVER, qui y mènent leurs sessions). Un ANALYSTE reçoit une
+ * liste vide — il travaille exclusivement sur les projets qui lui sont autorisés
+ * (`/analyst/projects`), dont les droits restent intacts. Le masquage de navigation
+ * ne suffit pas : une Server Action reste appelable si l'URL est contournée.
+ */
 export async function listBlindProjects(): Promise<BlindProjectDto[]> {
+  const session = await getCurrentSession()
+  if (session?.role === 'ANALYST') return []
   return getCachedBlindProjects()
 }
 

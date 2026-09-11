@@ -16,7 +16,9 @@ import {
   detectionProbability,
   listDatasetObservers,
   typeGroupLabel,
+  type DetectionProbabilityRow,
 } from '@/lib/globalExportModel'
+import type { AnalyticsVersionMetrics } from '@/lib/analyticsVersioning'
 
 /**
  * « Export Global (Excel) » — classeur `.xlsx` généré CÔTÉ SERVEUR (ExcelJS
@@ -207,6 +209,29 @@ function writeMetaPair(
 export type WorkbookOptions = {
   /** Ex. « Analyse actuelle » ou « Version 2 (20/04/2026) ». */
   versionLabel?: string
+  /**
+   * Métriques du MOTEUR pour la vue résolue (`ResolvedAnalyticsView.metrics`).
+   *
+   * Le classeur ne recalcule alors plus les compteurs de tête : il reprend ceux du
+   * moteur partagé — donc exactement ceux du tableau de bord, du PDF et du ZIP.
+   * Indispensable pour une version historique : c'est l'instantané IMMUABLE qui fait
+   * foi, jamais un recomptage sur la configuration ou les données du jour.
+   */
+  metrics?: AnalyticsVersionMetrics
+}
+
+/**
+ * Tableau « probabilités de détection par type » du classeur.
+ *
+ * Le moteur le porte déjà (`metrics.perType`) : c'est alors LUI qui est utilisé, tel
+ * quel. À défaut (appel sans vue résolue), on retombe sur la fonction PURE PARTAGÉE
+ * appliquée à la même source — jamais sur une règle propre au classeur.
+ */
+function perTypeRowsOf(
+  source: GlobalExportSource,
+  options?: WorkbookOptions,
+): DetectionProbabilityRow[] {
+  return options?.metrics?.perType ?? buildDetectionProbabilityTable(source)
 }
 
 function writeSummarySheet(
@@ -228,7 +253,11 @@ function writeSummarySheet(
 
   const { project } = source
   const summary = buildProjectSummary(source)
-  const detectionTable = buildDetectionProbabilityTable(source)
+  // Compteurs de tête : ceux du MOTEUR quand la vue résolue les fournit (recours à la
+  // fonction pure partagée sinon) — l'Excel global affiche donc littéralement les
+  // mêmes nombres que le tableau de bord et le PDF.
+  const counters = options?.metrics
+  const detectionTable = perTypeRowsOf(source, options)
   const pointDetails = buildPointDetailRows(source)
   const observerSynth = buildObserverSynthesisRows(source)
 
@@ -256,10 +285,14 @@ function writeSummarySheet(
     'Types d’observation configurés',
     project.observationTypes.length > 0 ? project.observationTypes.join(', ') : 'Aucun (types libres)',
   )
-  writeMetaPair(sheet, 'Observateurs distincts', String(summary.observerCount))
-  writeMetaPair(sheet, 'Détections analytiques (total)', String(summary.validatedCount))
-  writeMetaPair(sheet, 'Fausses alertes (fantômes)', String(summary.ghostCount))
-  writeMetaPair(sheet, 'Fenêtres cibles touchées', String(summary.windowsHit))
+  writeMetaPair(sheet, 'Observateurs distincts', String(counters?.observerCount ?? summary.observerCount))
+  writeMetaPair(
+    sheet,
+    'Détections analytiques (total)',
+    String(counters?.detections ?? summary.validatedCount),
+  )
+  writeMetaPair(sheet, 'Fausses alertes (fantômes)', String(counters?.ghostEvents ?? summary.ghostCount))
+  writeMetaPair(sheet, 'Fenêtres cibles touchées', String(counters?.windowsHit ?? summary.windowsHit))
   const agreementLabel =
     summary.agreement.rate === null
       ? 'Non calculable (moins de deux observateurs actifs)'
@@ -577,7 +610,7 @@ export async function generateExcelWorkbook(
   writeSummarySheet(workbook, source, options)
   writeMethodologySheet(workbook)
 
-  const table = buildDetectionProbabilityTable(source)
+  const table = perTypeRowsOf(source, options)
   // Une feuille par type/décalage ayant au moins un point configuré, ordre du tableau.
   for (const entry of table) {
     if (entry.pointCount <= 0) continue

@@ -87,7 +87,15 @@ export default function AppSidebar({ role, userName, roleName, t }: AppSidebarPr
 
   const items: Array<{ key: string; label: string; href: string; icon: typeof LayoutDashboard; visible: boolean }> = [
     { key: 'overview', label: t.overview, href: '/dashboard', icon: LayoutDashboard, visible: true },
-    { key: 'observe', label: t.observe, href: '/experience', icon: Eye, visible: true },
+    {
+      // §18 — l'onglet Expériences est l'administration GLOBALE des expériences :
+      // réservé à l'ADMIN. L'ANALYSTE garde ses projets autorisés (« Projets »).
+      key: 'observe',
+      label: t.observe,
+      href: '/experience',
+      icon: Eye,
+      visible: role === 'ADMIN' || role === 'OBSERVER',
+    },
     {
       key: 'history',
       label: t.history,

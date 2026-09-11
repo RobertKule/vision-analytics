@@ -27,8 +27,9 @@ export async function proxy(request: NextRequest) {
   const isAdminArea = isIn(pathname, '/admin')
   const isAnalystArea = isIn(pathname, '/analyst')
   const isDashboardArea = isIn(pathname, '/dashboard')
+  const isExperienceArea = isIn(pathname, '/experience')
   const isAuthPage = pathname === '/login' || pathname === '/register'
-  const isProtectedArea = isAdminArea || isAnalystArea || isDashboardArea
+  const isProtectedArea = isAdminArea || isAnalystArea || isDashboardArea || isExperienceArea
 
   // Non connecté → on exige une connexion pour les zones protégées.
   if (!session) {
@@ -49,6 +50,13 @@ export async function proxy(request: NextRequest) {
   if (isAnalystArea && session.role !== 'ANALYST' && session.role !== 'ADMIN') {
     return NextResponse.redirect(new URL(homeForRole(session.role), request.url))
   }
+  // §18 — /experience est l'administration GLOBALE des expériences : l'ANALYSTE n'y a
+  // plus accès (il conserve ses projets autorisés sous /analyst/projects). Refus au
+  // niveau du Proxy en plus de la garde serveur du layout : le masquage de navigation
+  // ne suffirait pas si l'URL est saisie directement.
+  if (isExperienceArea && session.role === 'ANALYST') {
+    return NextResponse.redirect(new URL(homeForRole(session.role), request.url))
+  }
 
   // Déjà connecté → jamais la peine de revoir /login ou /register.
   if (isAuthPage) {
@@ -61,6 +69,7 @@ export const config = {
     '/admin/:path*',
     '/analyst/:path*',
     '/dashboard/:path*',
+    '/experience/:path*',
     '/login',
     '/register',
   ],

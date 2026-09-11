@@ -52,7 +52,12 @@ import {
   type GlobalExportRow,
   type GlobalExportSource,
 } from '@/lib/globalExportModel'
-import { observationFallsInWindow } from '@/lib/windowMatch'
+import {
+  attributeOccurrences,
+  buildAttributionPlan,
+  type AttributionOutcome,
+  type AttributionPlan,
+} from '@/lib/windowAttribution'
 
 /** Déclencheurs de version (modifications de configuration du périmètre analytique). */
 export const ANALYTICS_TRIGGERS = {
@@ -65,6 +70,10 @@ export const ANALYTICS_TRIGGERS = {
   videoUpdated: 'VIDEO_UPDATED',
   videoRemoved: 'VIDEO_REMOVED',
   videoDuplicated: 'VIDEO_DUPLICATED',
+  /** Déclassement d'un observateur dans les analyses du projet (§12). */
+  observerExcluded: 'OBSERVER_EXCLUDED',
+  /** Rétablissement d'un observateur précédemment déclassé. */
+  observerIncluded: 'OBSERVER_INCLUDED',
 } as const
 
 export type AnalyticsTrigger = (typeof ANALYTICS_TRIGGERS)[keyof typeof ANALYTICS_TRIGGERS]
@@ -102,6 +111,16 @@ export type AnalyticsPerimeterConfig = {
   observationTypes: string[]
   points: SnapshotPoint[]
   videos: SnapshotVideo[]
+  /**
+   * Observateurs DÉCLASSÉS (EXCLUDED) de l'analyse, triés.
+   *
+   * Optionnel et absent des instantanés antérieurs au déclassement — d'où le
+   * `?? []` partout. Sa présence dans l'empreinte du périmètre garantit qu'une
+   * exclusion produit bien une version, et son figement dans `configuration`
+   * garantit qu'une version historique conserve les exclusions de son époque :
+   * une exclusion prononcée AUJOURD'HUI ne réécrit JAMAIS une version passée.
+   */
+  excludedObserverIds?: string[]
 }
 
 /** Ligne d'observation valide (certifiée) alimentant un instantané. */
@@ -226,7 +245,15 @@ export function perimeterFingerprint(config: AnalyticsPerimeterConfig): string {
     .map((video) => `${video.id}:${(video.typeLabel ?? '').trim()}`)
     .sort((a, b) => a.localeCompare(b))
     .join('')
-  return `p${config.points.length}|t${types}|w${points}|v${videos}`
+  // Les déclassements n'entrent dans l'empreinte que s'il y en a : un projet qui
+  // n'exclut personne conserve EXACTEMENT l'empreinte historique, donc aucune
+  // version parasite n'apparaît dans les projets déjà en service.
+  const excluded = (config.excludedObserverIds ?? [])
+    .slice()
+    .sort((a, b) => a.localeCompare(b))
+    .join(',')
+  const suffix = excluded ? `|o${excluded}` : ''
+  return `p${config.points.length}|t${types}|w${points}|v${videos}${suffix}`
 }
 
 /** Vrai si la modification a réellement changé le périmètre analytique. */
@@ -287,9 +314,14 @@ export function toExportSource(
  * analytique. Le calcul COURANT ne lit donc pas la classification persistée : il la
  * REDÉRIVE à partir de l'horodatage + de la passe vidéo de chaque capture.
  *
- *  — une capture dont l'horodatage tombe dans une fenêtre de SA passe vidéo ⇒ VALIDE
- *    (pointId = fenêtre, isGhostPoint = false) ;
+ *  — une capture dont l'horodatage tombe dans une ou plusieurs fenêtres de SA passe
+ *    vidéo ⇒ VALIDE, rattachée à UNE SEULE de ces fenêtres ;
  *  — sinon ⇒ POINT FANTÔME (fausse alerte, pointId = null, isGhostPoint = true).
+ *
+ * L'attribution n'est plus « la première fenêtre couvrante » : elle suit le moteur
+ * déterministe de `windowAttribution` (hiérarchie parent/enfant, chevauchements,
+ * état « fenêtre satisfaite » par observateur et par type). Voir ce module pour la
+ * règle complète. Aucune capture n'est jamais comptée deux fois.
  *
  * Une version HISTORIQUE, elle, reste immuable : elle ne passe jamais par ici.
  */
@@ -297,18 +329,38 @@ export function rematchRowsToWindows(
   rows: readonly AnalyticsObservationRow[],
   config: AnalyticsPerimeterConfig,
 ): AnalyticsObservationRow[] {
-  return rows.map((row) => {
-    const matched = config.points.find((point) =>
-      observationFallsInWindow(
-        { videoId: row.videoId ?? null, timestampTotal: row.timestampTotal },
-        point,
-      ),
-    )
-    if (matched) {
-      return { ...row, pointId: matched.id, pointLabel: matched.label, isGhostPoint: false }
+  return attributeRowsToWindows(rows, config).rows
+}
+
+/**
+ * Variante instrumentée : renvoie les lignes réattribuées ET le détail de
+ * l'attribution de chaque capture (fenêtres candidates, remontée éventuelle).
+ * Sert à l'inspection (audit du moteur) et aux tests — jamais à un calcul
+ * parallèle : les lignes renvoyées sont exactement celles de
+ * `rematchRowsToWindows`.
+ */
+export function attributeRowsToWindows(
+  rows: readonly AnalyticsObservationRow[],
+  config: AnalyticsPerimeterConfig,
+): { rows: AnalyticsObservationRow[]; outcomes: AttributionOutcome[]; plan: AttributionPlan } {
+  // Le plan (hiérarchie + index par passe vidéo) est construit UNE fois pour tout
+  // le relevé : aucune requête, aucun balayage capture × fenêtre répété.
+  const plan = buildAttributionPlan(config.points)
+  const outcomes = attributeOccurrences(rows, plan)
+  const labelById = new Map(config.points.map((point) => [point.id, point.label]))
+  const rematched = rows.map((row, index) => {
+    const windowId = outcomes[index].windowId
+    if (windowId !== null) {
+      return {
+        ...row,
+        pointId: windowId,
+        pointLabel: labelById.get(windowId) ?? null,
+        isGhostPoint: false,
+      }
     }
     return { ...row, pointId: null, pointLabel: null, isGhostPoint: true }
   })
+  return { rows: rematched, outcomes, plan }
 }
 
 function roundTenth(value: number): number {

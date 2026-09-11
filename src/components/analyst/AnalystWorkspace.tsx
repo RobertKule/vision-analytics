@@ -20,7 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import {
-  addWindowToProject,
+  addWindowsToProject,
   archiveOwnedProject,
   createOwnedProject,
   deleteWindowFromProject,
@@ -29,11 +29,14 @@ import {
 } from '@/app/actions/analystActions'
 import type { AnalystProjectDto } from '@/lib/types'
 import { fill, type AnalystText, type Locale } from '@/lib/i18n'
+import { parseTimecodeToSeconds, secondsToTimecode } from '@/lib/timecode'
 import {
-  isTimecodePairValid,
-  parseTimecodeToSeconds,
-  secondsToTimecode,
-} from '@/lib/timecode'
+  analyzeWindowDrafts,
+  isDraftDuplicate,
+  MAX_WINDOW_ROWS,
+  windowBoundsKeys,
+  type WindowDraftError,
+} from '@/lib/windowDraft'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { friendlyActionError } from '@/lib/actionError'
 import Sheet from '@/components/ui/Sheet'
@@ -590,6 +593,7 @@ function ProjectCard({
         {addingWindow ? (
           <AddWindowSheet
             projectId={project.id}
+            existingWindows={project.points}
             locale={locale}
             t={t}
             onClose={() => setAddingWindow(false)}
@@ -648,13 +652,25 @@ function WindowRow({
 }
 
 /* ——— Ajout d'une fenêtre ——— */
+/** Une ligne de saisie : début / fin d'UNE trame temporelle. */
+type AnalystIntervalDraft = { key: string; start: string; end: string }
+
+let analystIntervalSeed = 0
+function nextAnalystIntervalKey(): string {
+  analystIntervalSeed += 1
+  return `analyst-interval-${analystIntervalSeed}`
+}
+
 function AddWindowSheet({
   projectId,
+  existingWindows,
   locale,
   t,
   onClose,
 }: {
   projectId: string
+  /** Trames déjà définies : détection locale des doublons exacts avant l'appel serveur. */
+  existingWindows: { trameDebut: number; trameFin: number }[]
   locale: Locale
   t: AnalystText
   onClose: () => void
@@ -662,8 +678,11 @@ function AddWindowSheet({
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [pointName, setPointName] = useState('')
-  const [start, setStart] = useState('')
-  const [end, setEnd] = useState('')
+  // Un point scientifique peut apparaître plusieurs fois dans la vidéo : la saisie
+  // accepte d'emblée plusieurs trames (§2), sans boucle ajouter→confirmer→recommencer.
+  const [intervals, setIntervals] = useState<AnalystIntervalDraft[]>([
+    { key: nextAnalystIntervalKey(), start: '', end: '' },
+  ])
   const [isPending, startTransition] = useTransition()
 
   const steps: StepperStep[] = [
@@ -672,40 +691,64 @@ function AddWindowSheet({
   ]
   const nameValid = pointName.trim().length > 0
 
-  const startSeconds = parseTimecodeToSeconds(start)
-  const endSeconds = parseTimecodeToSeconds(end)
-  const bothFilled = start.trim() !== '' && end.trim() !== ''
-  let boundsError: string | null = null
-  if (bothFilled) {
-    if (startSeconds === null || endSeconds === null) {
-      boundsError = t.windowTimecodeError
-    } else if (startSeconds >= endSeconds) {
-      boundsError = t.windowBoundsError
-    }
-  }
-  const boundsValid = isTimecodePairValid(start, end)
+  // Diagnostic complet du tiroir : la règle vit dans `lib/windowDraft`, PARTAGÉE avec
+  // l'espace administrateur et les Server Actions. Seuls les libellés sont traduits ici.
+  const analysis = analyzeWindowDrafts(intervals, windowBoundsKeys(existingWindows), {
+    maxWindows: MAX_WINDOW_ROWS,
+  })
+  const checks = analysis.checks
+  const boundsValid = analysis.canSubmit
+  const isDuplicate = (check: (typeof checks)[number]): boolean =>
+    isDraftDuplicate(check, analysis.duplicateKeys)
 
-  const duration =
-    startSeconds !== null && endSeconds !== null && startSeconds < endSeconds
-      ? endSeconds - startSeconds
-      : null
+  const draftErrorLabel = (error: WindowDraftError): string =>
+    error === 'timecode' ? t.windowTimecodeError : t.windowBoundsError
+
+  const updateInterval = (key: string, patch: Partial<Omit<AnalystIntervalDraft, 'key'>>) => {
+    setIntervals((current) =>
+      current.map((draft) => (draft.key === key ? { ...draft, ...patch } : draft)),
+    )
+  }
+
+  const addInterval = () => {
+    setIntervals((current) =>
+      current.length >= MAX_WINDOW_ROWS
+        ? current
+        : [...current, { key: nextAnalystIntervalKey(), start: '', end: '' }],
+    )
+  }
+
+  const removeInterval = (key: string) => {
+    setIntervals((current) =>
+      current.length <= 1 ? current : current.filter((draft) => draft.key !== key),
+    )
+  }
 
   const doAdd = () => {
     if (!nameValid || !boundsValid) return
-    const debut = parseTimecodeToSeconds(start)
-    const fin = parseTimecodeToSeconds(end)
-    if (debut === null || fin === null || debut >= fin) return
+    const windows = intervals.map((draft) => ({
+      trameDebut: parseTimecodeToSeconds(draft.start) as number,
+      trameFin: parseTimecodeToSeconds(draft.end) as number,
+    }))
+    if (windows.some((window) => window.trameDebut >= window.trameFin)) return
     const nextName = pointName.trim()
     startTransition(async () => {
-      const result = await addWindowToProject({
+      const result = await addWindowsToProject({
         projectId,
         pointName: nextName,
-        trameDebut: debut,
-        trameFin: fin,
+        windows,
         locale,
       }).catch((error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }))
       if (result.ok) {
-        toast.success(locale === 'en' ? 'Window added' : 'Fenêtre ajoutée')
+        toast.success(
+          windows.length > 1
+            ? locale === 'en'
+              ? `${windows.length} frames added`
+              : `${windows.length} trames ajoutées`
+            : locale === 'en'
+              ? 'Window added'
+              : 'Fenêtre ajoutée',
+        )
         router.refresh()
         onClose()
       } else {
@@ -760,7 +803,11 @@ function AddWindowSheet({
               ) : (
                 <Plus aria-hidden="true" className="h-4 w-4" />
               )}
-              {isPending ? t.adding : t.addCta}
+              {isPending
+                ? t.adding
+                : intervals.length > 1
+                  ? `${t.addCta} (${intervals.length})`
+                  : t.addCta}
             </button>
           )}
         </div>
@@ -827,59 +874,119 @@ function AddWindowSheet({
 
           {step === 2 ? (
             <div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label
-                    htmlFor={`analyst-window-start-${projectId}`}
-                    className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                  >
-                    {t.windowStartLabel}
-                  </label>
-                  <input
-                    id={`analyst-window-start-${projectId}`}
-                    type="text"
-                    inputMode="numeric"
-                    autoFocus
-                    value={start}
-                    onChange={(event) => setStart(event.target.value)}
-                    placeholder={t.windowStartPlaceholder}
-                    spellCheck={false}
-                    className={boundsInputClass}
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor={`analyst-window-end-${projectId}`}
-                    className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
-                  >
-                    {t.windowEndLabel}
-                  </label>
-                  <input
-                    id={`analyst-window-end-${projectId}`}
-                    type="text"
-                    inputMode="numeric"
-                    value={end}
-                    onChange={(event) => setEnd(event.target.value)}
-                    placeholder={t.windowEndPlaceholder}
-                    spellCheck={false}
-                    className={boundsInputClass}
-                  />
-                </div>
+              <div className="flex flex-col gap-3">
+                {intervals.map((draft, index) => {
+                  const check = checks[index]
+                  const duplicate = isDuplicate(check)
+                  const duration =
+                    check.startSeconds !== null &&
+                    check.endSeconds !== null &&
+                    check.startSeconds < check.endSeconds
+                      ? check.endSeconds - check.startSeconds
+                      : null
+                  return (
+                    <div
+                      key={draft.key}
+                      className="rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-3 dark:border-zinc-700 dark:bg-zinc-950/60"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                          {t.windowRowLabel} {index + 1}
+                        </span>
+                        {intervals.length > 1 ? (
+                          <button
+                            type="button"
+                            onClick={() => removeInterval(draft.key)}
+                            aria-label={`${t.windowRemoveRow} ${index + 1}`}
+                            className="inline-flex h-7 items-center rounded-md px-2 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-clay-50 hover:text-clay-600 dark:text-zinc-400 dark:hover:bg-clay-500/20 dark:hover:text-clay-300"
+                          >
+                            {t.windowRemoveRow}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <label
+                            htmlFor={`analyst-window-start-${draft.key}`}
+                            className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+                          >
+                            {t.windowStartLabel}
+                          </label>
+                          <input
+                            id={`analyst-window-start-${draft.key}`}
+                            type="text"
+                            inputMode="numeric"
+                            autoFocus={index === 0}
+                            value={draft.start}
+                            onChange={(event) => updateInterval(draft.key, { start: event.target.value })}
+                            placeholder={t.windowStartPlaceholder}
+                            spellCheck={false}
+                            className={boundsInputClass}
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor={`analyst-window-end-${draft.key}`}
+                            className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+                          >
+                            {t.windowEndLabel}
+                          </label>
+                          <input
+                            id={`analyst-window-end-${draft.key}`}
+                            type="text"
+                            inputMode="numeric"
+                            value={draft.end}
+                            onChange={(event) => updateInterval(draft.key, { end: event.target.value })}
+                            placeholder={t.windowEndPlaceholder}
+                            spellCheck={false}
+                            className={boundsInputClass}
+                          />
+                        </div>
+                      </div>
+
+                      {check.error ? (
+                        <p
+                          role="alert"
+                          className="mt-2 rounded-lg border border-clay-200 bg-clay-50 px-3 py-2 text-sm text-clay-700 dark:border-clay-800 dark:bg-clay-900/40 dark:text-clay-300"
+                        >
+                          {draftErrorLabel(check.error)}
+                        </p>
+                      ) : duplicate ? (
+                        <p
+                          role="alert"
+                          className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+                        >
+                          {t.windowDuplicateError}
+                        </p>
+                      ) : duration !== null ? (
+                        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                          {locale === 'en' ? 'Frame duration' : 'Durée de la trame'} :{' '}
+                          {secondsToTimecode(duration)}
+                        </p>
+                      ) : null}
+                    </div>
+                  )
+                })}
               </div>
 
-              <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">{t.windowAddHint}</p>
+              <button
+                type="button"
+                onClick={addInterval}
+                disabled={intervals.length >= MAX_WINDOW_ROWS}
+                className="mt-3 inline-flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-zinc-400 px-3 text-xs font-semibold text-zinc-600 transition-colors hover:border-gold-600/60 hover:bg-gold-500/10 hover:text-gold-800 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:border-gold-400/50 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
+              >
+                <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                {t.windowAddRow}
+              </button>
 
-              {boundsError ? (
-                <p
-                  role="alert"
-                  className="mt-2 rounded-lg border border-clay-200 bg-clay-50 px-3 py-2 text-sm text-clay-700 dark:border-clay-800 dark:bg-clay-900/40 dark:text-clay-300"
-                >
-                  {boundsError}
-                </p>
-              ) : duration !== null ? (
+              <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">{t.windowMultiHint}</p>
+              <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">{t.windowAddHint}</p>
+
+              {intervals.length > 1 && analysis.totalDurationSeconds > 0 ? (
                 <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                  {locale === 'en' ? 'Window duration' : 'Durée de la fenêtre'} :{' '}
-                  {secondsToTimecode(duration)}
+                  {intervals.length} {t.windowCount} — {t.windowTotalDuration} :{' '}
+                  {secondsToTimecode(analysis.totalDurationSeconds)}
                 </p>
               ) : null}
             </div>

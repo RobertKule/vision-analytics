@@ -105,6 +105,11 @@ export const AUDIT_ACTIONS = {
   analyticsVersionCreated: 'ANALYTICS_VERSION_CREATED',
   analyticsRecalculated: 'ANALYTICS_RECALCULATED',
   analyticsVersionViewed: 'ANALYTICS_VERSION_VIEWED',
+  // Déclassement scientifique d'un observateur (§12) — jamais une suppression
+  observerAnalysisExcluded: 'OBSERVER_ANALYSIS_EXCLUDED',
+  observerAnalysisIncluded: 'OBSERVER_ANALYSIS_INCLUDED',
+  // Consultation d'une comparaison multi-types (§14) — mêmes règles analytiques
+  analyticsTypeCompared: 'ANALYTICS_TYPE_COMPARED',
   // Partage d'expériences entre analystes
   experienceShared: 'EXPERIENCE_SHARED',
   experienceShareRevoked: 'EXPERIENCE_SHARE_REVOKED',
