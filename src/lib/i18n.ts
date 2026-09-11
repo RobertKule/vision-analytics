@@ -534,7 +534,7 @@ const en = {
     projectCreateStep2: 'Context & protocol',
     projectCreateStep3: 'Target video',
     windowStep1: 'Window name',
-    windowStep2: 'Time bounds (MM:SS)',
+    windowStep2: 'Time frames (MM:SS)',
     windowAddHint:
       'Bounds are entered as MM:SS (e.g. 01:00 → 02:30) or HH:MM:SS. Start must be earlier than end.',
     windowStartLabel: 'Start (MM:SS)',
@@ -543,6 +543,14 @@ const en = {
     windowEndPlaceholder: '02:30',
     windowBoundsError: 'Start must be earlier than end.',
     windowTimecodeError: 'Enter each bound as MM:SS or HH:MM:SS.',
+    windowAddRow: 'Add a time frame',
+    windowRemoveRow: 'Remove',
+    windowRowLabel: 'Frame',
+    windowDuplicateError: 'This time frame already exists for this video (exact duplicate).',
+    windowMultiHint:
+      'A point may appear several times in the video — enter all its frames at once. Frames may overlap or nest: each observation is attributed to a single frame, most specific first.',
+    windowCount: 'frames',
+    windowTotalDuration: 'Total duration',
     videoPicker: {
       title: 'Import or select your video',
       subtitle:
@@ -1310,7 +1318,7 @@ const fr: typeof en = {
     projectCreateStep2: 'Contexte & protocole',
     projectCreateStep3: 'Vidéo cible',
     windowStep1: 'Nom de la fenêtre',
-    windowStep2: 'Bornes temporelles (MM:SS)',
+    windowStep2: 'Trames temporelles (MM:SS)',
     windowAddHint:
       'Les bornes se saisissent en MM:SS (ex. 01:00 → 02:30) ou HH:MM:SS. Le début doit précéder la fin.',
     windowStartLabel: 'Début (MM:SS)',
@@ -1319,6 +1327,14 @@ const fr: typeof en = {
     windowEndPlaceholder: '02:30',
     windowBoundsError: 'Le début doit précéder la fin.',
     windowTimecodeError: 'Saisissez chaque borne en MM:SS ou HH:MM:SS.',
+    windowAddRow: 'Ajouter une trame',
+    windowRemoveRow: 'Retirer',
+    windowRowLabel: 'Trame',
+    windowDuplicateError: 'Cette trame existe déjà pour cette vidéo (doublon exact).',
+    windowMultiHint:
+      'Un point peut apparaître plusieurs fois dans la vidéo — saisissez toutes ses trames d’un coup. Les trames peuvent se chevaucher ou s’inclure : chaque observation reste attribuée à une seule trame, la plus spécifique d’abord.',
+    windowCount: 'trames',
+    windowTotalDuration: 'Durée cumulée',
     videoPicker: {
       title: 'Importer ou sélectionner votre vidéo',
       subtitle:
