@@ -72,7 +72,9 @@ export async function GET(request: Request, ctx: ExportContext): Promise<NextRes
     },
   })
 
-  const buffer = await generateExcelWorkbook(source, { versionLabel })
+  // Le classeur reprend les métriques de la vue résolue (version figée comprise) :
+  // Excel global = dashboard = PDF = ZIP, sans recomptage propre à l'export.
+  const buffer = await generateExcelWorkbook(source, { versionLabel, metrics: view.metrics })
   const filename = `${brandFileName(
     `${sanitizeBaseName(`${source.project.title}_Export_Global${fileToken}`)}`,
   )}.xlsx`
