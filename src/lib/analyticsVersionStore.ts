@@ -45,11 +45,16 @@ import {
 } from '@/lib/analyticsVersioning'
 import {
   loadAnalyticsRows,
+  loadObserverInclusionSummary,
   loadPerimeterConfig,
   narrowPerimeterConfig,
   restrictRowsToConfig,
   type AnalyticsRowFilter,
 } from '@/lib/analyticsSource'
+import {
+  applyObserverExclusions,
+  type ObserverInclusionSummary,
+} from '@/lib/observerExclusion'
 
 /** Résumé d'une version pour les sélecteurs d'interface (sans les payloads lourds). */
 export type AnalyticsVersionSummary = {
@@ -367,6 +372,12 @@ export type ResolvedAnalyticsView = {
   versions: AnalyticsVersionSummary[]
   /** Filtre réellement appliqué. */
   appliedFilter: AnalyticsRowFilter
+  /**
+   * SITUATION DES OBSERVATEURS (§13) : combien participent, combien sont comptés,
+   * combien sont écartés et pourquoi. Permet aux interfaces d'afficher le
+   * dénominateur réellement retenu au lieu de masquer un observateur exclu.
+   */
+  observerInclusion: ObserverInclusionSummary
 }
 
 function hasFilter(filter: AnalyticsRowFilter): boolean {
@@ -398,6 +409,7 @@ export async function resolveAnalyticsView(
   const currentConfig = await loadPerimeterConfig(projectId)
   if (!currentConfig) return null
 
+  const observerInclusion = await loadObserverInclusionSummary(projectId)
   const history = await listAnalyticsVersions(projectId)
   const versions = summarizeVersions(history)
   const appliedFilter: AnalyticsRowFilter = { ...(filter ?? {}) }
@@ -430,17 +442,24 @@ export async function resolveAnalyticsView(
       frozen: false,
       versions,
       appliedFilter,
+      observerInclusion,
     }
   }
 
   // ——— Version historique : configuration FIGÉE + données bornées ———
   const frozenConfig = version.configuration
   const config = narrowPerimeterConfig(frozenConfig, appliedFilter)
+  // Les exclusions appliquées sont celles FIGÉES dans l'instantané, jamais les
+  // exclusions courantes : déclasser un observateur aujourd'hui ne réécrit pas le
+  // passé (§16). Une version plus ancienne que la fonctionnalité n'en porte aucune.
+  const rawRows = await loadAnalyticsRows(projectId, {
+    cutoffAt: new Date(version.dataCutoffAt),
+    filter: appliedFilter,
+    applyObserverExclusions: false,
+  })
+  const frozenExcluded = new Set(frozenConfig.excludedObserverIds ?? [])
   const rows = restrictRowsToConfig(
-    await loadAnalyticsRows(projectId, {
-      cutoffAt: new Date(version.dataCutoffAt),
-      filter: appliedFilter,
-    }),
+    appliedFilter.observerId ? rawRows : applyObserverExclusions(rawRows, frozenExcluded),
     config,
   )
   const filtered = hasFilter(appliedFilter)
@@ -455,6 +474,7 @@ export async function resolveAnalyticsView(
     frozen: !filtered,
     versions,
     appliedFilter,
+    observerInclusion,
   }
 }
 
