@@ -12,6 +12,7 @@ import {
   FileArchive,
   FileSpreadsheet,
   FileText,
+  GitCompareArrows,
   History,
   LayoutDashboard,
   Loader2,
@@ -24,6 +25,8 @@ import {
 import type { ObservationCaptureDto, ProjectAnalyticsDto } from '@/lib/types'
 import Tabs from '@/components/ui/Tabs'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
+import ObserverInclusionPanel from '@/components/admin/projects/ObserverInclusionPanel'
+import TypeComparisonPanel from '@/components/admin/projects/TypeComparisonPanel'
 import ClientChart from '@/components/charts/ClientChart'
 import {
   buildDetectionSeries,
@@ -73,9 +76,14 @@ type ProjectAnalyticsDashboardProps = {
   analytics: ProjectAnalyticsDto
   /** Nom (ou email) affiché comme auteur du rapport imprimable. */
   authorName?: string
+  /**
+   * Droit de déclasser un observateur (§12). Réservé aux ADMIN : un analyste voit
+   * le périmètre mais ne le modifie pas.
+   */
+  canManageObserverInclusion?: boolean
 }
 
-type AnalyticsTab = 'overview' | 'inspection' | 'alertes'
+type AnalyticsTab = 'overview' | 'inspection' | 'alertes' | 'types'
 
 function formatSeconds(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -108,6 +116,7 @@ function getConcordanceBadge(rate: number) {
 export default function ProjectAnalyticsDashboard({
   analytics: initialAnalytics,
   authorName = '',
+  canManageObserverInclusion = false,
 }: ProjectAnalyticsDashboardProps) {
   // L'analyse vit en état local : les filtres (type/vidéo) déclenchent un
   // RECALCUL CÔTÉ SERVEUR, puis remplacent ces données — jamais une coupe frontend.
@@ -645,6 +654,12 @@ export default function ProjectAnalyticsDashboard({
             icon: EyeOff,
             hint: 'Points fantômes et leur distribution temporelle',
           },
+          {
+            id: 'types',
+            label: 'Comparaison de types',
+            icon: GitCompareArrows,
+            hint: 'Matrice point × type, calculée par le même moteur analytique',
+          },
         ]}
       />
 
@@ -1106,6 +1121,14 @@ export default function ProjectAnalyticsDashboard({
               </div>
             )}
           </section>
+
+          {/* Périmètre humain (§12, §13) — déclasser n'efface aucune donnée. */}
+          <ObserverInclusionPanel
+            projectId={project.id}
+            observers={observersMetrics}
+            inclusion={analytics.observerInclusion}
+            canManage={canManageObserverInclusion}
+          />
         </div>
       )}
 
@@ -1420,6 +1443,24 @@ export default function ProjectAnalyticsDashboard({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ————————————————————————————————————————————————————————————————
+          ONGLET 4 : COMPARAISON DE PLUSIEURS TYPES (§14)
+          Chaque type est résolu par `resolveAnalyticsView` — le moteur partagé —
+          puis mis en regard : aucun second moteur statistique.
+      ———————————————————————————————————————————————————————————————— */}
+      {activeTab === 'types' && (
+        <div className="flex flex-col gap-6" role="tabpanel" id="panel-types">
+          <TypeComparisonPanel
+            projectId={project.id}
+            // Une version historique affichée est comparée à SON époque.
+            options={{
+              versionId: selectedVersionId ? selectedVersionId : null,
+              asOfDate: selectedVersionId ? null : (versionContext?.asOfDate ?? null),
+            }}
+          />
         </div>
       )}
 
