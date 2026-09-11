@@ -9,12 +9,13 @@ import {
 import { getCurrentSession } from '@/lib/auth'
 import { brandFileName, sanitizeBaseName } from '@/lib/exportHelpers'
 import type { GlobalExportRow } from '@/lib/globalExportModel'
-import {
-  buildDetectionProbabilityTable,
-  buildProjectSummary,
-} from '@/lib/globalExportModel'
+// Seul l'accord inter-observateurs (Jaccard) n'est pas porté par les métriques du
+// moteur : il reste obtenu par la fonction PURE PARTAGÉE avec l'Excel global, sur la
+// MÊME source résolue — jamais un calcul propre au PDF.
+import { buildProjectSummary } from '@/lib/globalExportModel'
 import { resolveExportSource } from '@/lib/exportSource'
 import { auditVersionViewed } from '@/lib/analyticsVersionStore'
+import type { AnalyticsVersionMetrics } from '@/lib/analyticsVersioning'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
@@ -56,12 +57,15 @@ function pngInfo(buffer: Uint8Array): { width: number; height: number } | null {
   return { width, height }
 }
 
-// ——— Modèle de rapport (recalcul serveur, jamais la coupe frontend) ———
-// Sémantique identique au moteur d'analyse (`analyticsActions` / `globalExportModel`) :
-// règle produit « point unique » — un observateur qui capture N fois la MÊME fenêtre
-// (`pointId`) ne « détecte » cette fenêtre qu'une fois. Les fausses alertes restent
-// des événements (chaque capture hors trame = 1). Le total « déclarations » =
-// points uniques validés + fausses alertes → dénominateur commun de la précision.
+// ——— Modèle de rapport (mise en forme de la source analytique unique) ———
+// AUCUN indicateur n'est recalculé ici : les nombres viennent de `view.metrics`
+// (`resolveAnalyticsView`), exactement comme le tableau de bord et l'Excel. Ce module
+// ne fait que les RÉPARTIR dans la mise en page du rapport, et rattacher à chaque
+// fenêtre les captures brutes nécessaires au rendu des vignettes.
+// Règle produit rappelée : « une détection = (observateur, type, fenêtre) » — un
+// observateur qui capture N fois la MÊME fenêtre ne « détecte » cette fenêtre qu'une
+// fois. Les fausses alertes restent des événements (chaque capture hors trame = 1).
+// Le total « déclarations » = détections + fausses alertes.
 
 type ReportPointInput = {
   id: string
@@ -94,7 +98,7 @@ type ReportObserver = {
   userId: string
   anonymousId: string
   email: string
-  /** « Déclarations » = points uniques validés + fausses alertes. */
+  /** « Déclarations » = détections + fausses alertes. */
   totalObservations: number
   validObservationsCount: number
   ghostPointsCount: number
@@ -103,9 +107,9 @@ type ReportObserver = {
 }
 
 type ReportModel = {
-  /** Total « déclarations » = points uniques validés + fausses alertes. */
+  /** Total « déclarations » = détections + fausses alertes. */
   totalObservations: number
-  /** Points uniques validés : couples distincts (observateur, pointId) non fantômes. */
+  /** Détections analytiques : triplets distincts (observateur, type, fenêtre). */
   validObservationsCount: number
   /** Fausses alertes (événements). */
   ghostPointsCount: number
@@ -120,42 +124,24 @@ type ReportModel = {
   ghostCaptures: ReportCapture[]
 }
 
-/** Reconstruit les indicateurs du rapport exécutif depuis les lignes vérifiées. */
-function buildReportModel(rows: GlobalExportRow[], points: ReportPointInput[]): ReportModel {
-  const observerMap = new Map<string, { userId: string; anonymousId: string; email: string }>()
-  for (const row of rows) {
-    if (!observerMap.has(row.userId)) {
-      observerMap.set(row.userId, {
-        userId: row.userId,
-        anonymousId: row.anonymousId,
-        email: row.email ?? '',
-      })
-    }
-  }
-  const totalObservers = observerMap.size
-
-  // ——— Règle produit « détection analytique » (observateur × type × trame) ———
-  const validPointKeys = new Set<string>()
-  for (const row of rows) {
-    if (row.isGhostPoint) continue
-    if (!row.pointId) continue
-    validPointKeys.add(`${row.userId}|${row.observationType?.trim() || ''}|${row.pointId}`)
-  }
-  const validObservationsCount = validPointKeys.size
-  const ghostPointsCount = rows.filter((row) => row.isGhostPoint).length
-  const totalObservations = validObservationsCount + ghostPointsCount
+/**
+ * Met en forme le rapport exécutif : TOUS les indicateurs sont ceux du moteur
+ * (`view.metrics`), jamais un recomptage. Seules les LISTES DE CAPTURES (vignettes,
+ * horodatages, délais unitaires) sont rattachées depuis le relevé attribué — ce sont
+ * des données de rendu, pas des statistiques.
+ */
+function buildReportModel(
+  rows: GlobalExportRow[],
+  points: ReportPointInput[],
+  metrics: AnalyticsVersionMetrics,
+): ReportModel {
+  /** Métrique moteur d'une fenêtre : la référence, y compris pour une version figée. */
+  const metricOf = (pointId: string) =>
+    metrics.perPoint.find((item) => item.pointId === pointId)
 
   const reportPoints: ReportPoint[] = points.map((point) => {
-    const matching = rows.filter((row) => row.pointId === point.id)
-    const distinctObserversOnPoint = new Set(matching.map((row) => row.userId)).size
-    const concordanceRate =
-      totalObservers > 0 ? Math.round((distinctObserversOnPoint / totalObservers) * 100) : 0
-
-    const delays = matching.map((row) => Math.max(0, row.timestampTotal - point.trameDebut))
-    const avgDelaySeconds =
-      delays.length > 0
-        ? Math.round((delays.reduce((acc, d) => acc + d, 0) / delays.length) * 10) / 10
-        : null
+    const metric = metricOf(point.id)
+    const matching = rows.filter((row) => row.pointId === point.id && !row.isGhostPoint)
 
     const captures: ReportCapture[] = matching.map((row) => ({
       timestampTotal: row.timestampTotal,
@@ -171,34 +157,15 @@ function buildReportModel(rows: GlobalExportRow[], points: ReportPointInput[]): 
       trameDebut: point.trameDebut,
       trameFin: point.trameFin,
       targetDuration: point.trameFin - point.trameDebut,
-      observerCount: distinctObserversOnPoint,
-      concordanceRate,
-      avgDelaySeconds,
+      observerCount: metric?.observersDetected ?? 0,
+      concordanceRate: metric?.concordanceRate ?? 0,
+      avgDelaySeconds: metric?.avgDelaySeconds ?? null,
       captures,
     }
   })
 
-  const overallConcordanceRate =
-    reportPoints.length > 0
-      ? Math.round(
-          reportPoints.reduce((acc, point) => acc + point.concordanceRate, 0) /
-            reportPoints.length,
-        )
-      : 0
-  const overallPrecisionRate =
-    totalObservations > 0 ? Math.round((validObservationsCount / totalObservations) * 100) : 0
-  const ghostRate =
-    totalObservations > 0 ? Math.round((ghostPointsCount / totalObservations) * 100) : 0
-
-  // Délai moyen PAR ÉVÉNEMENT (chaque capture validée), pas par point unique.
-  const allDelays = reportPoints.flatMap((point) =>
-    point.captures.map((capture) => capture.delaySeconds),
-  )
-  const averageDetectionDelay =
-    allDelays.length > 0
-      ? Math.round((allDelays.reduce((acc, d) => acc + d, 0) / allDelays.length) * 10) / 10
-      : null
-
+  // Listes de rendu (une fausse alerte = une vignette), jamais des compteurs : le
+  // nombre affiché reste `metrics.ghostEvents`.
   const ghostCaptures: ReportCapture[] = rows
     .filter((row) => row.isGhostPoint)
     .map((row) => ({
@@ -209,42 +176,29 @@ function buildReportModel(rows: GlobalExportRow[], points: ReportPointInput[]): 
       createdAt: row.createdAt,
     }))
 
-  const observers: ReportObserver[] = Array.from(observerMap.values())
-    .map((observer) => {
-      const userRows = rows.filter((row) => row.userId === observer.userId)
-      const uniquePointKeys = new Set<string>()
-      for (const row of userRows) {
-        if (row.isGhostPoint) continue
-        if (row.pointId) {
-          uniquePointKeys.add(`${row.userId}|${row.observationType?.trim() || ''}|${row.pointId}`)
-        }
-      }
-      const uniquePointsDetected = uniquePointKeys.size
-      const ghostEvents = userRows.filter((row) => row.isGhostPoint).length
-      const totalDeclarations = uniquePointsDetected + ghostEvents
-      return {
-        userId: observer.userId,
-        anonymousId: observer.anonymousId,
-        email: observer.email,
-        totalObservations: totalDeclarations,
-        validObservationsCount: uniquePointsDetected,
-        ghostPointsCount: ghostEvents,
-        pointsDetectedCount: uniquePointsDetected,
-        precisionRate:
-          totalDeclarations > 0 ? Math.round((uniquePointsDetected / totalDeclarations) * 100) : 0,
-      }
-    })
-    .sort((a, b) => b.totalObservations - a.totalObservations)
+  const observers: ReportObserver[] = metrics.perObserver.map((observer) => ({
+    userId: observer.observerId,
+    anonymousId: observer.anonymousId,
+    email: observer.email ?? '',
+    totalObservations: observer.totalClaims,
+    validObservationsCount: observer.detections,
+    ghostPointsCount: observer.ghostEvents,
+    pointsDetectedCount: observer.detections,
+    precisionRate: observer.precision !== null ? Math.round(observer.precision * 100) : 0,
+  }))
+
+  const ghostRate =
+    metrics.totalClaims > 0 ? Math.round((metrics.ghostEvents / metrics.totalClaims) * 100) : 0
 
   return {
-    totalObservations,
-    validObservationsCount,
-    ghostPointsCount,
+    totalObservations: metrics.totalClaims,
+    validObservationsCount: metrics.detections,
+    ghostPointsCount: metrics.ghostEvents,
     ghostRate,
-    totalObservers,
-    overallConcordanceRate,
-    overallPrecisionRate,
-    averageDetectionDelay,
+    totalObservers: metrics.observerCount,
+    overallConcordanceRate: metrics.concordanceRate,
+    overallPrecisionRate: metrics.precision !== null ? Math.round(metrics.precision * 100) : 0,
+    averageDetectionDelay: metrics.averageDetectionDelay,
     points: reportPoints,
     observers,
     ghostCaptures,
@@ -310,12 +264,13 @@ function reportFileName(projectTitle: string): string {
  *
  * Architecture : le client rasterise les SVG STATIQUES du rapport (ReportCharts.tsx)
  * en PNG haute résolution et les POSTe ici. La route s'autorise elle-même (session +
- * accès de gestion), RECALCULE tous les nombres depuis la base (observations
- * isVerified=true uniquement) via des fonctions pures partageant la sémantique du
- * moteur d'analyse, valide chaque image (PNG réel, taille bornée, dimensions
- * décodées), puis assemble le PDF : en-tête institutionnel, métadonnées projet,
- * indicateurs clés, graphiques embarqués, tableaux par fenêtre et bilan
- * observateurs, bloc signature. Aucun chiffre client n'est utilisé.
+ * accès de gestion), résout la SOURCE ANALYTIQUE UNIQUE (`resolveExportSource` →
+ * `resolveAnalyticsView`) et reprend SES métriques telles quelles — dynamique de
+ * rematch, fenêtres multiples et déclassements d'observateurs inclus — puis valide
+ * chaque image (PNG réel, taille bornée, dimensions décodées) et assemble le PDF :
+ * en-tête institutionnel, métadonnées projet, indicateurs clés, graphiques embarqués,
+ * tableaux par fenêtre et bilan observateurs, bloc signature. Aucun chiffre client
+ * n'est utilisé, et aucun indicateur n'est recalculé en parallèle du moteur.
  */
 export async function POST(request: Request, ctx: ExportContext): Promise<NextResponse> {
   const session = await getCurrentSession()
@@ -373,9 +328,12 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       trameDebut: point.trameDebut,
       trameFin: point.trameFin,
     })),
+    // Indicateurs du moteur PARTAGÉ : ce PDF affiche exactement la version résolue,
+    // y compris pour un export historique (`?versionId=` / `?before=`).
+    view.metrics,
   )
-  // Probabilités empiriques de détection par type/décalage (règle analytique).
-  const probabilityTable = buildDetectionProbabilityTable(source)
+  // Probabilités empiriques de détection par type : celles du moteur, telles quelles.
+  const probabilityTable = view.metrics.perType
   // Accord inter-observateurs (Jaccard) — note méthodologique du rapport.
   const agreement = buildProjectSummary(source).agreement
   const agreementLabel =
