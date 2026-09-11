@@ -362,6 +362,23 @@ export type AnalyticsVideoContextDto = BlindVideoDto & {
 }
 
 /** Données complètes d'analyse d'un projet d'observation. */
+/**
+ * Situation analytique des observateurs d'un projet (§13). Permet d'AFFICHER le
+ * dénominateur réellement retenu au lieu de laisser croire que tout le monde est
+ * compté. `participating` est le dénominateur de `summary.totalObservers`.
+ */
+export type ObserverInclusionSummaryDto = {
+  participating: number
+  included: number
+  excluded: number
+  excludedObservers: {
+    userId: string
+    displayName: string
+    reason: string | null
+    excludedAt: string | null
+  }[]
+}
+
 export type ProjectAnalyticsDto = {
   project: {
     id: string
@@ -422,6 +439,8 @@ export type ProjectAnalyticsDto = {
   pointsAnalytics: PointConcordanceDto[]
   ghostPointsAnalytics: GhostPointAnalyticsDto
   observersMetrics: ObserverMetricDto[]
+  /** Périmètre humain de l'analyse (§13) : participants, inclus, déclassés. */
+  observerInclusion?: ObserverInclusionSummaryDto
 }
 
 // ——— Types pour l'Espace Projet Admin & les Exports (Phase 6) ———
