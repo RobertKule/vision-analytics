@@ -19,6 +19,11 @@ import 'server-only'
 import { prisma } from '@/lib/prisma'
 import { videoDisplayName } from '@/lib/exportHelpers'
 import type { GlobalExportRow } from '@/lib/globalExportModel'
+import {
+  buildInclusionSummary,
+  type ObserverInclusionRecord,
+  type ObserverInclusionSummary,
+} from '@/lib/observerExclusion'
 import type {
   AnalyticsObservationRow,
   AnalyticsPerimeterConfig,
@@ -70,6 +75,10 @@ export async function loadPerimeterConfig(
         orderBy: { orderIndex: 'asc' },
         select: { id: true, name: true, typeLabel: true, orderIndex: true },
       },
+      observerInclusions: {
+        where: { status: 'EXCLUDED' },
+        select: { userId: true },
+      },
     },
   })
   if (!project) return null
@@ -96,6 +105,11 @@ export async function loadPerimeterConfig(
     observationTypes: project.observationTypes,
     points,
     videos,
+    // Les déclassements font partie de la CONFIGURATION analytique : ils entrent
+    // donc dans l'empreinte du périmètre (⇒ une exclusion crée bien une version) et
+    // sont FIGÉS dans l'instantané, si bien qu'une version historique continue de
+    // représenter exactement l'état analytique de son époque (§16).
+    excludedObserverIds: project.observerInclusions.map((row) => row.userId).sort(),
   }
 }
 
@@ -123,23 +137,115 @@ export function narrowPerimeterConfig(
   return { ...config, points }
 }
 
-/** Lignes d'observation certifiées, avec la borne haute et les filtres demandés. */
+/**
+ * DECLASSEMENTS ANALYTIQUES d'un projet : observateurs marqués EXCLUDED.
+ *
+ * L'absence de ligne vaut INCLUDED : les projets et observateurs existants ne
+ * remontent donc AUCUNE exclusion et ne nécessitent aucun backfill.
+ */
+export async function loadObserverInclusions(
+  projectId: string,
+): Promise<ObserverInclusionRecord[]> {
+  const rows = await prisma.projectObserverInclusion.findMany({
+    where: { projectId },
+    select: { userId: true, status: true },
+  })
+  return rows.map((row) => ({
+    userId: row.userId,
+    status: row.status === 'EXCLUDED' ? 'EXCLUDED' : 'INCLUDED',
+  }))
+}
+
+/**
+ * SITUATION ANALYTIQUE DES OBSERVATEURS (§13) — combien participent, combien sont
+ * comptés, combien sont écartés et pourquoi.
+ *
+ * Les interfaces l'affichent explicitement : un observateur exclu ne doit jamais
+ * disparaître silencieusement en laissant croire que le dénominateur est inchangé.
+ */
+export async function loadObserverInclusionSummary(
+  projectId: string,
+): Promise<ObserverInclusionSummary> {
+  const [observations, records] = await Promise.all([
+    prisma.observation.findMany({
+      where: { projectId, isVerified: true },
+      select: {
+        userId: true,
+        user: { select: { username: true, email: true, anonymousId: true } },
+      },
+      distinct: ['userId'],
+    }),
+    prisma.projectObserverInclusion.findMany({
+      where: { projectId, status: 'EXCLUDED' },
+      select: { userId: true, exclusionReason: true, excludedAt: true },
+    }),
+  ])
+
+  const participants = observations.map((row) => ({
+    userId: row.userId,
+    displayName: row.user?.username?.trim() || row.user?.email?.trim() || row.user?.anonymousId || '—',
+  }))
+
+  return buildInclusionSummary({
+    participants,
+    records: records.map((row) => ({ userId: row.userId, status: 'EXCLUDED' as const })),
+    detail: records.map((row) => ({
+      userId: row.userId,
+      reason: row.exclusionReason,
+      excludedAt: row.excludedAt ? row.excludedAt.toISOString() : null,
+    })),
+  })
+}
+
+/**
+ * Lignes d'observation certifiées, avec la borne haute et les filtres demandés.
+ *
+ * EXCLUSIONS D'OBSERVATEURS (§12/§13) : le relevé est filtré ICI, en amont de tout
+ * calcul — numérateur ET dénominateur suivent donc la même règle, et aucun appelant
+ * (tableau de bord, exports, PDF, comparaison, instantané) ne peut l'oublier.
+ *
+ * EXCEPTION D'AUDIT (§12) : quand l'appelant demande EXPLICITEMENT un observateur
+ * précis via `filter.observerId`, ses données restent renvoyées même s'il est exclu —
+ * c'est le chemin de consultation et d'export individuel à visée d'audit, et aucune
+ * donnée n'a jamais été supprimée. Les agrégats, eux, ne la voient jamais.
+ */
 export async function loadAnalyticsRows(
   projectId: string,
-  options?: { cutoffAt?: Date | null; filter?: AnalyticsRowFilter | null },
+  options?: {
+    cutoffAt?: Date | null
+    filter?: AnalyticsRowFilter | null
+    /**
+     * Appliquer les exclusions COURANTES. Mis à `false` par la lecture d'une
+     * version HISTORIQUE, qui doit rester figée : elle applique alors les
+     * exclusions ENREGISTRÉES dans son propre instantané (§16).
+     */
+    applyObserverExclusions?: boolean
+  },
 ): Promise<AnalyticsObservationRow[]> {
   const filter = options?.filter ?? {}
+  const respectExclusions = options?.applyObserverExclusions !== false
   const where: {
     projectId: string
     isVerified: boolean
     createdAt?: { lte: Date }
     observationType?: string
-    userId?: string
+    userId?: string | { notIn: string[] }
     videoId?: string | null
   } = { projectId, isVerified: true }
   if (options?.cutoffAt) where.createdAt = { lte: options.cutoffAt }
   if (filter.observationType) where.observationType = filter.observationType
-  if (filter.observerId) where.userId = filter.observerId
+  if (filter.observerId) {
+    where.userId = filter.observerId
+  } else if (respectExclusions) {
+    const excludedIds = Array.from(
+      new Set(
+        (await loadObserverInclusions(projectId))
+          .filter((record) => record.status === 'EXCLUDED')
+          .map((record) => record.userId),
+      ),
+    )
+    if (excludedIds.length > 0) where.userId = { notIn: excludedIds }
+  }
   if (filter.videoId !== undefined) {
     where.videoId = filter.videoId === LEGACY_GENERIC_VIDEO_ID ? null : filter.videoId
   }
