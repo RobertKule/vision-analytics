@@ -37,7 +37,12 @@ export default async function ProjectAnalyticsPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
-      <ProjectAnalyticsDashboard analytics={analytics} authorName={authorName} />
+      <ProjectAnalyticsDashboard
+        analytics={analytics}
+        authorName={authorName}
+        // Déclasser un observateur (§12) engage le protocole scientifique : ADMIN seul.
+        canManageObserverInclusion={session?.role === 'ADMIN'}
+      />
     </div>
   )
 }

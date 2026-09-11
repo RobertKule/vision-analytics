@@ -48,12 +48,15 @@ export default async function Navbar() {
 
         {/* ——— Liens centraux (desktop) ——— */}
         <div className="hidden items-center gap-1 md:flex">
-          <Link
-            href="/experience"
-            className="rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-300 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
-          >
-            {t.observe}
-          </Link>
+          {/* §18 — onglet Expériences (administration globale) : jamais pour l'ANALYSTE. */}
+          {session?.role !== 'ANALYST' ? (
+            <Link
+              href="/experience"
+              className="rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:bg-gold-500/10 hover:text-gold-800 dark:text-zinc-300 dark:hover:bg-gold-400/10 dark:hover:text-gold-200"
+            >
+              {t.observe}
+            </Link>
+          ) : null}
           {session && workspaceHref ? (
             <Link
               href={workspaceHref}
