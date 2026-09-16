@@ -13,7 +13,7 @@ import DemoVideo from '@/components/public/DemoVideo'
  * Renseigner l'URL le jour venu ; tant qu'elle est absente, le composant
  * `DemoVideo` affiche un placeholder élégant (aucune requête, aucune vidéo).
  */
-const DEMO_YOUTUBE_URL: string | null = null
+const DEMO_YOUTUBE_URL: string | null = "https://youtu.be/Yk4wd8Bun6U"
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getLocale()
