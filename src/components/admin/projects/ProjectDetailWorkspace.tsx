@@ -10,6 +10,7 @@ import {
   Images,
   LayoutDashboard,
   ListFilter,
+  ShieldCheck,
   Share2,
   Users,
 } from 'lucide-react'
@@ -33,6 +34,7 @@ import ProjectOverviewTab from '@/components/admin/projects/ProjectOverviewTab'
 import ObservationsTab from '@/components/admin/projects/ObservationsTab'
 import ObserverActivityTab from '@/components/admin/projects/ObserverActivityTab'
 import ObserverTokensTab from '@/components/admin/projects/ObserverTokensTab'
+import AnalystAccessPanel from '@/components/admin/projects/AnalystAccessPanel'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 
 const toolbarButton =
@@ -55,8 +57,10 @@ export default function ProjectDetailWorkspace({
   analytics,
   authorName = '',
 }: ProjectDetailWorkspaceProps) {
-  const { project, rows, points, videos } = detail
-  const [activeTab, setActiveTab] = useState<'overview' | 'observations' | 'activity' | 'share'>('overview')
+  const { project, rows, points, videos, analystAccess, canManageAnalystAccess } = detail
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'observations' | 'activity' | 'share' | 'analysts'
+  >('overview')
   const [isReportOpen, setIsReportOpen] = useState(false)
 
   // ——— Consultation par type d'observation (Partie S) ———
@@ -208,10 +212,18 @@ export default function ProjectDetailWorkspace({
           { id: 'observations', label: 'Observations', count: scoped.rows.length, icon: Images },
           { id: 'activity', label: 'Activité des observateurs', count: scoped.observers, icon: Users },
           { id: 'share', label: 'Partager', icon: Share2 },
+          ...(canManageAnalystAccess
+            ? [{ id: 'analysts', label: 'Analystes', icon: ShieldCheck }]
+            : []),
         ]}
         active={activeTab}
         onChange={(id) =>
-          setActiveTab(id as 'overview' | 'observations' | 'activity' | 'share')
+          setActiveTab((current) => {
+            const next = id as typeof current
+            // Un onglet disparu (droits révoqués entre deux rendus) ne doit pas
+            // laisser le panneau sur un contenu vide.
+            return next === 'analysts' && !canManageAnalystAccess ? current : next
+          })
         }
       />
 
@@ -233,6 +245,13 @@ export default function ProjectDetailWorkspace({
         ) : null}
         {activeTab === 'share' ? (
           <ObserverTokensTab projectId={project.id} projectTitle={project.title} />
+        ) : null}
+        {activeTab === 'analysts' && canManageAnalystAccess ? (
+          <AnalystAccessPanel
+            projectId={project.id}
+            projectTitle={project.title}
+            initialAccess={analystAccess}
+          />
         ) : null}
       </div>
 

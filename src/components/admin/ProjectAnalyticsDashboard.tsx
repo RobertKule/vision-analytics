@@ -656,7 +656,7 @@ export default function ProjectAnalyticsDashboard({
           },
           {
             id: 'types',
-            label: 'Comparaison de types',
+            label: 'Comparaisons',
             icon: GitCompareArrows,
             hint: 'Matrice point × type, calculée par le même moteur analytique',
           },
@@ -779,7 +779,7 @@ export default function ProjectAnalyticsDashboard({
                     : '—'}
                 </span>
                 <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  détections / (points × observateurs)
+                  détections / points possibles
                 </span>
               </div>
               <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">

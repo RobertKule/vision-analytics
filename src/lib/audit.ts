@@ -110,6 +110,8 @@ export const AUDIT_ACTIONS = {
   observerAnalysisIncluded: 'OBSERVER_ANALYSIS_INCLUDED',
   // Consultation d'une comparaison multi-types (§14) — mêmes règles analytiques
   analyticsTypeCompared: 'ANALYTICS_TYPE_COMPARED',
+  // Consultation d'une comparaison par GROUPES A/B (agrégation de types)
+  analyticsGroupsCompared: 'ANALYTICS_GROUPS_COMPARED',
   // Partage d'expériences entre analystes
   experienceShared: 'EXPERIENCE_SHARED',
   experienceShareRevoked: 'EXPERIENCE_SHARE_REVOKED',

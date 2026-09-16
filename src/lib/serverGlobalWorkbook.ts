@@ -15,6 +15,7 @@ import {
   countAnalyticDetections,
   detectionProbability,
   listDatasetObservers,
+  totalPossibleObservations,
   typeGroupLabel,
   type DetectionProbabilityRow,
 } from '@/lib/globalExportModel'
@@ -26,7 +27,8 @@ import type { AnalyticsVersionMetrics } from '@/lib/analyticsVersioning'
  * handlers `app/api/**`). Tout est calculé sur le sous-ensemble filtré transmis.
  *
  * Nouvelle structure (règle de la détection analytique « observateur + type +
- * trame », probabilité P = Détections / (points configurés × observateurs)) :
+ * trame », probabilité P = Détections / points possibles du type, où
+ * possibles(type) = fenêtres du type × observateurs ayant participé à ce type) :
  *
  *   Synthèse                analyse des probabilités de détection par type/décalage
  *                           + détail par point + synthèse par observateur
@@ -643,8 +645,10 @@ function writeObserverSummarySheet(
 
   const { project, rows } = source
   const detections = countAnalyticDetections(rows)
-  const pointsPossible = project.definedPoints
-  const probability = detectionProbability(detections, pointsPossible, 1)
+  // Le relevé ne porte QUE les captures de cet observateur : le total des fenêtres
+  // possibles est donc celui des types qu'il a réellement rejoints (§4).
+  const pointsPossible = totalPossibleObservations(source)
+  const probability = detectionProbability(detections, pointsPossible)
 
   const title = sheet.addRow([`Observateur — ${observerLabel}`, ''])
   title.getCell(1).font = { bold: true, size: 13, color: { argb: MILK } }
@@ -679,8 +683,10 @@ function writeObserverSummarySheet(
   for (const type of Array.from(types).sort((a, b) => a.localeCompare(b))) {
     const typeRows = rows.filter((row) => (row.observationType?.trim() || '') === type)
     const typeDetections = countAnalyticDetections(typeRows)
+    // Fenêtres possibles de ce type pour CET observateur : il y a participé (la
+    // liste des types est construite depuis son propre relevé), donc × 1.
     const typePoints = project.definedPointsByType[type] ?? 0
-    const typeProbability = detectionProbability(typeDetections, typePoints, 1)
+    const typeProbability = detectionProbability(typeDetections, typePoints)
     const row = sheet.addRow([type, typeDetections, typePoints, typeProbability])
     if (typeProbability !== null) row.getCell(4).numFmt = '0.00%'
     else row.getCell(4).value = '—'
@@ -692,7 +698,7 @@ function writeObserverSummarySheet(
       rows.filter((row) => !(row.observationType?.trim() || '')),
     )
     const genericPoints = project.definedPointsByType[''] ?? 0
-    const genericProbability = detectionProbability(genericDetections, genericPoints, 1)
+    const genericProbability = detectionProbability(genericDetections, genericPoints)
     const row = sheet.addRow([
       'Sans type (passe générique)',
       genericDetections,

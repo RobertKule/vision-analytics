@@ -821,7 +821,7 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
   drawTextLine(
     'Note — Les trames constituent l’unité d’observation : plusieurs captures d’un même observateur ' +
       'dans une même trame et sous le même type comptent pour une seule détection analytique. ' +
-      'Probabilité empirique = détections / (points configurés × observateurs).',
+      'Probabilité empirique = détections / points possibles, pondérée par type : chaque type garde son propre dénominateur (fenêtres du type × observateurs ayant réellement participé à ce type).',
     { size: 7, color: COLOR_MUTED, lineHeight: 9 },
   )
   gap(6)

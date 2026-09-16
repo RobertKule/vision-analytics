@@ -12,6 +12,7 @@ import {
   Eye,
   Film,
   FolderKanban,
+  KeyRound,
   Plus,
   Share2,
   Trash2,
@@ -40,6 +41,7 @@ import {
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { friendlyActionError } from '@/lib/actionError'
 import Sheet from '@/components/ui/Sheet'
+import ObserverTokensTab from '@/components/admin/projects/ObserverTokensTab'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
 import VideoUrlPicker from '@/components/ui/VideoUrlPicker'
 
@@ -150,6 +152,7 @@ export default function AnalystWorkspace({ locale, t, projects, isAdmin }: Analy
               t={t}
               canArchive={project.isOwner || isAdmin}
               canShare={project.isOwner || isAdmin}
+              canManageObserverLinks={project.canEdit}
             />
           ))}
         </ul>
@@ -433,15 +436,23 @@ function ProjectCard({
   t,
   canArchive,
   canShare,
+  canManageObserverLinks,
 }: {
   project: AnalystProjectDto
   locale: Locale
   t: AnalystText
   canArchive: boolean
   canShare: boolean
+  /**
+   * Créer / révoquer les liens d'accès observateur (§2). Vrai pour le propriétaire
+   * du projet et pour un invité dont le partage donne le droit d'édition — la même
+   * règle que `canCreateObserverTokens`, revérifiée côté serveur par chaque action.
+   */
+  canManageObserverLinks: boolean
 }) {
   const router = useRouter()
   const [addingWindow, setAddingWindow] = useState(false)
+  const [showObserverLinks, setShowObserverLinks] = useState(false)
 
   const handleCopyLink = async () => {
     const url = `${window.location.origin}/observe/${project.id}`
@@ -598,6 +609,32 @@ function ProjectCard({
             t={t}
             onClose={() => setAddingWindow(false)}
           />
+        ) : null}
+
+        {/* Liens d'accès observateur — le propriétaire invite et génère les sessions (§2) */}
+        {canManageObserverLinks ? (
+          <div className="mt-4 border-t border-zinc-100 pt-4 dark:border-white/10">
+            <button
+              type="button"
+              onClick={() => setShowObserverLinks((current) => !current)}
+              aria-expanded={showObserverLinks}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 px-3 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/5"
+            >
+              <KeyRound aria-hidden="true" className="h-3.5 w-3.5" />
+              {showObserverLinks
+                ? locale === 'en'
+                  ? 'Hide observer links'
+                  : 'Masquer les liens observateurs'
+                : locale === 'en'
+                  ? 'Observer links & invitations'
+                  : 'Liens observateurs et invitations'}
+            </button>
+            {showObserverLinks ? (
+              <div className="mt-3">
+                <ObserverTokensTab projectId={project.id} projectTitle={project.title} />
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {/* Partage (propriétaire ou administrateur) */}

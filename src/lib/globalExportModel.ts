@@ -21,9 +21,18 @@
  *   - Accord inter-observateurs = sémantique d'union par fenêtre (sans type).
  *   - Précision = détections analytiques / (détections analytiques + fausses alertes).
  *
+ * DÉNOMINATEUR « OBSERVATIONS POSSIBLES » (corrigé) :
+ *   possibles(type) = points/trames configurés(type) × observateurs PARTICIPANTS(type)
+ *   possibles(total) = Σ possibles(type)
+ * Chaque type garde SON dénominateur : jamais `pointsTotaux × observateursTotaux`,
+ * jamais le maximum des observateurs pris comme base commune. Voir
+ * `computeTypeParticipation`.
+ *
  * PROBABILITÉ DE DÉTECTION (synthèse du classeur global & du PDF) :
- *   P(type) = DétectionsAnalytiques(type) / (points/trames configurés(type) × observateurs)
- * (formule `detectionProbability`) ; interprétation en bandes textuelles FR.
+ *   P(type) = DétectionsAnalytiques(type) / possibles(type)
+ * et le taux global est PONDÉRÉ : Σ détections / Σ possibles (jamais la moyenne
+ * arithmétique des taux de types aux dénominateurs différents). Formule
+ * `detectionProbability` ; interprétation en bandes textuelles FR.
  *
  * Le détail des points configurés est porté par `GlobalExportProject.points`
  * (`type` = typeLabel de la passe vidéo, clé générique réservée si passe non
@@ -475,18 +484,137 @@ export function countUniquePointsByType(rows: readonly GlobalExportRow[]): Map<s
   return out
 }
 
+// ——— DÉNOMINATEUR « OBSERVATIONS POSSIBLES » : participation RÉELLE ———
+//
+// RÈGLE (corrigée) — chaque type garde SON dénominateur :
+//
+//     possibles(type) = pointsConfigurés(type) × observateursParticipants(type)
+//     possibles(total) = Σ possibles(type)
+//
+// et JAMAIS `pointsTotaux × observateursTotaux`. Prendre la RÉUNION (ou le maximum)
+// des observateurs comme base commune à tous les types gonflerait le dénominateur
+// des types les moins suivis : avec 10 points/5 observateurs pour A et 8 points/
+// 3 observateurs pour B, la base commune donnerait 18 × 5 = 90 au lieu de
+// 10 × 5 + 8 × 3 = 74.
+//
+// « Observateur PARTICIPANT à un type » = observateur ayant au moins une capture
+// CERTIFIÉE rattachée à ce type dans la source (validée ou hors trame — dans les
+// deux cas il a bien eu l'occasion d'observer ce type). Un observateur simplement
+// invité mais n'ayant jamais capturé ne compte pas. Les observateurs DÉCLASSÉS
+// (EXCLUDED) sont retirés du relevé EN AMONT (§13) : ils ne participent donc jamais
+// au dénominateur, et une réinclusion les y réintègre au calcul suivant.
+
+/** Participation d'un type : ses fenêtres, ses participants, son dénominateur. */
+export type TypeParticipation = {
+  /** Clé normalisée du type/groupe ('' = passe générique héritée). */
+  type: string
+  /** Points/trames configurés portés par ce type. */
+  pointCount: number
+  /** Observateurs distincts ayant réellement participé à CE type. */
+  participants: number
+  /** Dénominateur du type : `pointCount × participants`. */
+  possibleObservations: number
+}
+
 /**
- * Probabilité empirique de détection d'un type/décalage :
- *   P = DétectionsAnalytiques / (points/trames configurés × observateurs)
- * Renvoie null si `pointsConfigured ≤ 0` ou `observerCount ≤ 0` (non calculable).
+ * Participation réelle par type d'un relevé : qui a réellement observé quoi.
+ * Exposé séparément du tableau des probabilités pour que le tableau de bord,
+ * l'inspection et les exports partagent le MÊME dénominateur.
+ */
+export function computeTypeParticipation(
+  source: GlobalExportSource,
+): Map<string, TypeParticipation> {
+  const participantsByType = new Map<string, Set<string>>()
+  for (const row of source.rows) {
+    const type = normalizedType(row.observationType)
+    const ids = participantsByType.get(type)
+    if (ids) ids.add(row.userId)
+    else participantsByType.set(type, new Set([row.userId]))
+  }
+
+  const out = new Map<string, TypeParticipation>()
+  // Types configurés (même sans aucune capture : dénominateur 0, jamais nul).
+  for (const [type, pointCount] of Object.entries(source.project.definedPointsByType)) {
+    const participants = participantsByType.get(type)?.size ?? 0
+    out.set(type, {
+      type,
+      pointCount,
+      participants,
+      possibleObservations: pointCount * participants,
+    })
+  }
+  // Types observés sans point configuré : aucune fenêtre ⇒ aucun possible.
+  for (const [type, ids] of participantsByType) {
+    if (out.has(type)) continue
+    out.set(type, { type, pointCount: 0, participants: ids.size, possibleObservations: 0 })
+  }
+  return out
+}
+
+/**
+ * TOTAL des observations possibles = SOMME des dénominateurs de chaque type.
+ * C'est le seul dénominateur global admis (taux global PONDÉRÉ par les vrais
+ * dénominateurs, jamais une moyenne de pourcentages).
+ */
+export function totalPossibleObservations(source: GlobalExportSource): number {
+  let total = 0
+  for (const entry of computeTypeParticipation(source).values()) {
+    total += entry.possibleObservations
+  }
+  return total
+}
+
+/** Types réellement observés par chaque observateur (≥ 1 capture certifiée). */
+export function participationByObserver(
+  source: GlobalExportSource,
+): Map<string, Set<string>> {
+  const byObserver = new Map<string, Set<string>>()
+  for (const row of source.rows) {
+    const types = byObserver.get(row.userId)
+    if (types) types.add(normalizedType(row.observationType))
+    else byObserver.set(row.userId, new Set([normalizedType(row.observationType)]))
+  }
+  return byObserver
+}
+
+/** Types auxquels cet observateur a réellement participé (≥ 1 capture certifiée). */
+export function observerParticipatedTypes(
+  source: GlobalExportSource,
+  observerId: string,
+): Set<string> {
+  return participationByObserver(source).get(observerId) ?? new Set<string>()
+}
+
+/**
+ * Observations possibles d'UN observateur = somme des fenêtres des types auxquels
+ * IL a réellement participé. Un observateur qui n'a jamais rejoint une passe ne
+ * doit pas se voir imputer ses fenêtres comme occasions manquées.
+ */
+export function possibleObservationsForObserver(
+  source: GlobalExportSource,
+  observerId: string,
+): number {
+  let total = 0
+  for (const type of participationByObserver(source).get(observerId) ?? []) {
+    total += source.project.definedPointsByType[type] ?? 0
+  }
+  return total
+}
+
+/**
+ * Probabilité empirique de détection :
+ *   P = DétectionsAnalytiques / ObservationsPossibles
+ * `possibleObservations` est TOUJOURS le dénominateur de participation réel
+ * (`computeTypeParticipation`, `totalPossibleObservations`,
+ * `possibleObservationsForObserver`) — jamais `points × observateurs` recalculé à
+ * la main. Renvoie null si le dénominateur est nul (non calculable).
  */
 export function detectionProbability(
   detections: number,
-  pointsConfigured: number,
-  observerCount: number,
+  possibleObservations: number,
 ): number | null {
-  if (!(pointsConfigured > 0) || !(observerCount > 0)) return null
-  return detections / (pointsConfigured * observerCount)
+  if (!(possibleObservations > 0)) return null
+  return detections / possibleObservations
 }
 
 /**
@@ -755,7 +883,13 @@ export type DetectionProbabilityRow = {
   type: string
   /** Points/trames configurés rattachés à ce type/décalage. */
   pointCount: number
-  /** Observations possibles = pointCount × observateurs distincts du jeu exporté. */
+  /** Observateurs distincts ayant RÉELLEMENT participé à ce type/décalage. */
+  observerCount: number
+  /**
+   * Observations possibles = pointCount × observateurs PARTICIPANTS du type.
+   * Chaque type porte SON dénominateur : jamais celui d'un autre type, jamais le
+   * maximum/la réunion des observateurs (voir `computeTypeParticipation`).
+   */
   possibleObservations: number
   /** Détections analytiques des lignes portant ce type. */
   detections: number
@@ -769,12 +903,14 @@ export type DetectionProbabilityRow = {
  * Construit le tableau « ANALYSE DES PROBABILITÉS DE DÉTECTION ».
  * Ordre : types configurés (même sans capture), puis types observés non
  * configurés (alphabétique), puis éventuellement le groupe générique réservé.
+ *
+ * Le dénominateur de chaque ligne est celui du type lui-même (participation réelle,
+ * `computeTypeParticipation`) — jamais la réunion des observateurs du jeu exporté.
  */
 export function buildDetectionProbabilityTable(source: GlobalExportSource): DetectionProbabilityRow[] {
   const { project, rows } = source
   const configured = cleanConfiguredTypes(project.observationTypes)
-  const observers = listDatasetObservers(source)
-  const observerCount = observers.length
+  const participation = computeTypeParticipation(source)
 
   const observedUnknown = new Set<string>()
   let hasGeneric = false
@@ -808,12 +944,16 @@ export function buildDetectionProbabilityTable(source: GlobalExportSource): Dete
       (row) => normalizedType(row.observationType) === groupKey,
     )
     const detections = countAnalyticDetections(groupRows)
-    const possibleObservations = pointCount * observerCount
-    const probability = detectionProbability(detections, pointCount, observerCount)
+    // Dénominateur du type : ses fenêtres × ses propres participants.
+    const entry = participation.get(groupKey)
+    const observerCount = entry?.participants ?? 0
+    const possibleObservations = entry?.possibleObservations ?? 0
+    const probability = detectionProbability(detections, possibleObservations)
     return {
       label,
       type: groupKey,
       pointCount,
+      observerCount,
       possibleObservations,
       detections,
       probability,
@@ -864,7 +1004,11 @@ export type ObserverSynthesisRow = {
   anonymousId: string
   /** Points/trames uniques détectés au sens analytique (observateur, type, trame). */
   uniqueDetections: number
-  /** Points/trames possibles = points configurés du périmètre exporté. */
+  /**
+   * Points/trames possibles pour CET observateur = fenêtres des types auxquels il
+   * a réellement participé (voir `possibleObservationsForObserver`). Les fenêtres
+   * d'un type qu'il n'a jamais rejoint ne sont pas des occasions manquées.
+   */
   pointsPossible: number
   /** Taux de couverture 0..1 (uniqueDetections / pointsPossible) ; null si aucun point. */
   rate: number | null
@@ -872,18 +1016,22 @@ export type ObserverSynthesisRow = {
 
 /** Construit le bloc « SYNTHÈSE PAR OBSERVATEUR ». */
 export function buildObserverSynthesisRows(source: GlobalExportSource): ObserverSynthesisRow[] {
-  const { project, rows } = source
+  const { rows } = source
   const byId = new Map<string, GlobalExportRow[]>()
   for (const row of rows) {
     const list = byId.get(row.userId)
     if (list) list.push(row)
     else byId.set(row.userId, [row])
   }
-  const pointsPossible = project.definedPoints
+  const participatedByObserver = participationByObserver(source)
   return Array.from(byId.entries())
     .map(([observerId, observerRows]) => {
       const sample = observerRows[0]
       const uniqueDetections = countAnalyticDetections(observerRows)
+      let pointsPossible = 0
+      for (const type of participatedByObserver.get(observerId) ?? []) {
+        pointsPossible += source.project.definedPointsByType[type] ?? 0
+      }
       return {
         observerId,
         displayName: observerDisplayLabel(sample),
@@ -911,7 +1059,7 @@ export type TypeSheetRow = {
   detectionsByObserver: Record<string, 0 | 1>
   /** Nombre d'observateurs ayant détecté ce point (≥ 1). */
   detectorCount: number
-  /** Probabilité empirique = détecteurs / observateurs du jeu exporté (null si 0). */
+  /** Probabilité empirique = détecteurs / observateurs PARTICIPANTS du type (null si 0). */
   probability: number | null
 }
 
@@ -926,7 +1074,9 @@ export function buildTypeSheetRows(
   observers: readonly DatasetObserver[],
 ): TypeSheetRow[] {
   const { project, rows } = source
-  const observerCount = observers.length
+  // Dénominateur du type : ses propres participants (jamais la réunion du jeu).
+  const observerCount =
+    computeTypeParticipation(source).get(typeKey)?.participants ?? 0
   const points = project.points.filter((point) => normalizedType(point.type) === typeKey)
 
   return points.map((point) => {

@@ -6,11 +6,15 @@
  *
  *  — Les observations valides déjà réalisées restent valides.
  *  — Les détections existantes restent comptabilisées (le NUMÉRATEUR ne baisse pas).
- *  — Le DÉNOMINATEUR (observations possibles) suit la configuration COURANTE :
- *        observations possibles = points/fenêtres configurés × observateurs
+ *  — Le DÉNOMINATEUR (observations possibles) suit la configuration COURANTE,
+ *    TYPE PAR TYPE :
+ *        possibles(type)  = points/fenêtres configurés(type) × observateurs PARTICIPANTS(type)
+ *        possibles(total) = Σ possibles(type)
  *    Ajouter une fenêtre augmente donc le dénominateur, sans jamais remettre le
  *    numérateur à zéro. Le numérateur n'augmente que lorsqu'une nouvelle détection
- *    valide existe RÉELLEMENT.
+ *    valide existe RÉELLEMENT. Chaque type garde SON dénominateur : le dénominateur
+ *    global n'est jamais `pointsTotaux × observateursTotaux` (voir
+ *    `globalExportModel.computeTypeParticipation`).
  *  — L'analyse actuelle = ANCIENNES DONNÉES VALIDES + NOUVELLES DONNÉES VALIDES.
  *
  * ─── CE QU'EST UNE VERSION ──────────────────────────────────────────────────
@@ -46,6 +50,8 @@ import {
   detectionProbability,
   interpretationBand,
   observerDisplayLabel,
+  participationByObserver,
+  totalPossibleObservations,
   type DetectionProbabilityRow,
   type GlobalExportPoint,
   type GlobalExportProject,
@@ -158,7 +164,10 @@ export type SnapshotObserverMetric = {
   totalClaims: number
   /** Précision 0..1 ; null si aucune déclaration. */
   precision: number | null
-  /** Observations possibles pour CET observateur = fenêtres configurées. */
+  /**
+   * Observations possibles pour CET observateur = fenêtres des types auxquels il a
+   * réellement participé (voir `possibleObservationsForObserver`).
+   */
   possibleObservations: number
   firstSubmittedAt: string | null
   lastSubmittedAt: string | null
@@ -173,7 +182,10 @@ export type AnalyticsVersionMetrics = {
   observerCount: number
   /** Fenêtres/points configurés du périmètre (dénominateur de base). */
   configuredPoints: number
-  /** Observations possibles = configuredPoints × observerCount. */
+  /**
+   * Observations possibles = Σ (pointsConfigurés(type) × observateursParticipants(type)).
+   * Chaque type porte SON dénominateur — jamais `configuredPoints × observerCount`.
+   */
   possibleObservations: number
   /** Détections analytiques (NUMÉRATEUR) — conservées d'une version à l'autre. */
   detections: number
@@ -185,7 +197,7 @@ export type AnalyticsVersionMetrics = {
   windowsHit: number
   /** Précision 0..1 = détections / déclarations ; null si aucune déclaration. */
   precision: number | null
-  /** Probabilité empirique = détections / (points configurés × observateurs). */
+  /** Probabilité empirique PONDÉRÉE = Σ détections / Σ observations possibles. */
   detectionProbability: number | null
   /** Bande d'interprétation FR de la probabilité. */
   interpretation: string
@@ -370,9 +382,18 @@ function roundTenth(value: number): number {
 /**
  * Calcule les métriques analytiques d'un périmètre + un jeu d'observations valides.
  *
- * Le dénominateur (`possibleObservations`) provient de la CONFIGURATION transmise ;
- * le numérateur (`detections`) provient des DONNÉES transmises. Ajouter une fenêtre
- * augmente donc le premier sans jamais toucher au second.
+ * DÉNOMINATEUR (`possibleObservations`) — participation RÉELLE, type par type :
+ *   possibles(type)  = pointsConfigurés(type) × observateursParticipants(type)
+ *   possibles(total) = Σ possibles(type)
+ * Chaque type garde SON dénominateur : jamais `pointsTotaux × observateursTotaux`
+ * (ce serait prendre la réunion/le maximum des observateurs comme base commune et
+ * gonfler le dénominateur des types les moins suivis). Voir `computeTypeParticipation`.
+ *
+ * NUMÉRATEUR (`detections`) — issu des DONNÉES transmises. Ajouter une fenêtre
+ * augmente le premier sans jamais toucher au second.
+ *
+ * TAUX GLOBAL — pondéré par les vrais dénominateurs : `Σ détections / Σ possibles`,
+ * jamais la moyenne arithmétique des taux de types aux dénominateurs différents.
  */
 export function computeAnalyticsMetrics(
   config: AnalyticsPerimeterConfig,
@@ -387,7 +408,9 @@ export function computeAnalyticsMetrics(
   const detections = countAnalyticDetections(rows)
   const ghostEvents = countGhostEvents(rows)
   const totalClaims = detections + ghostEvents
-  const probability = detectionProbability(detections, configuredPoints, observerCount)
+  // Somme des dénominateurs de chaque type — le seul dénominateur global admis.
+  const possibleObservations = totalPossibleObservations(source)
+  const probability = detectionProbability(detections, possibleObservations)
 
   // ——— Par fenêtre ———
   const delays: number[] = []
@@ -429,6 +452,10 @@ export function computeAnalyticsMetrics(
     if (list) list.push(row)
     else byObserver.set(row.userId, [row])
   }
+  // Les fenêtres « possibles » d'un observateur sont celles des types qu'IL a
+  // réellement rejoints : les fenêtres d'un type qu'il n'a jamais observé ne sont
+  // pas des occasions manquées (même règle que le dénominateur global, §4).
+  const participatedByObserver = participationByObserver(source)
   const perObserver: SnapshotObserverMetric[] = Array.from(byObserver.entries())
     .map(([observerId, observerRows]) => {
       const sample = observerRows[0]
@@ -436,6 +463,10 @@ export function computeAnalyticsMetrics(
       const observerGhosts = countGhostEvents(observerRows)
       const claims = observerDetections + observerGhosts
       const dates = observerRows.map((row) => row.createdAt).sort((a, b) => a.localeCompare(b))
+      let observerPossiblePoints = 0
+      for (const type of participatedByObserver.get(observerId) ?? []) {
+        observerPossiblePoints += source.project.definedPointsByType[type] ?? 0
+      }
       return {
         observerId,
         displayName: observerDisplayLabel(sample),
@@ -445,7 +476,7 @@ export function computeAnalyticsMetrics(
         ghostEvents: observerGhosts,
         totalClaims: claims,
         precision: claims > 0 ? observerDetections / claims : null,
-        possibleObservations: configuredPoints,
+        possibleObservations: observerPossiblePoints,
         firstSubmittedAt: dates[0] ?? null,
         lastSubmittedAt: dates[dates.length - 1] ?? null,
       }
@@ -462,7 +493,7 @@ export function computeAnalyticsMetrics(
   return {
     observerCount,
     configuredPoints,
-    possibleObservations: configuredPoints * observerCount,
+    possibleObservations,
     detections,
     ghostEvents,
     totalClaims,

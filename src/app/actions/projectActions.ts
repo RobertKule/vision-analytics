@@ -1,10 +1,15 @@
 'use server'
 
 import { revalidatePath, updateTag } from 'next/cache'
-import { Prisma } from '@prisma/client'
+import { Prisma, Role } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { getCurrentAdmin } from '@/lib/auth'
-import { canManage, getCurrentProjectAccess } from '@/lib/projectGuard'
+import {
+  canManage,
+  getCurrentProjectAccess,
+  getCurrentProjectPermissions,
+  type ProjectPermissions,
+} from '@/lib/projectGuard'
 import { deleteManyDriveFiles } from '@/lib/drive'
 import { captureImageEndpoint } from '@/lib/captureImageAccess'
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
@@ -30,6 +35,7 @@ import {
 import type {
   ActionResult,
   AdminProjectDetailDto,
+  AnalystAccessDto,
   ProjectDto,
   ProjectObservationRowDto,
   VideoAdminDto,
@@ -114,6 +120,32 @@ type VideoPayload = { videoId: string; source?: string; typeLabel?: string | nul
 const VIDEO_BENCHMARK_MAX_SECONDS = 7 * 3600 // garde-fou serveur (durée vidéo non persistée)
 
 /** Trace une action d'audit dont l'acteur est l'admin courant (best effort). */
+/**
+ * GARDE DE CONFIGURATION d'un projet (§2).
+ *
+ * Remplace l'ancienne garde « ADMIN uniquement » pour les mutations qui ne font que
+ * CONFIGURER un projet : un analyste PROPRIÉTAIRE doit pouvoir régler son projet —
+ * titre, types d'observation, passes vidéo — sans devenir administrateur, et un
+ * invité dont le partage donne le droit d'édition peut en faire autant.
+ *
+ * Ce n'est pas un élargissement de privilège : `canConfigure` est FAUX pour un
+ * partage en consultation seule (niveau 'shared' sans canEdit) et pour un
+ * observateur. Les mutations DESTRUCTRICES (supprimer un projet, une vidéo, une
+ * fenêtre) gardent leur garde stricte et ne passent jamais par ce helper.
+ */
+async function assertProjectConfiguration(projectId: string): Promise<ActionResult | null> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return { ok: false, error: 'Identifiant de projet invalide.' }
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!permissions.canConfigure) {
+    return {
+      ok: false,
+      error: 'Accès refusé : vous ne configurez pas ce projet.',
+    }
+  }
+  return null
+}
+
 async function adminAudit(input: Omit<AuditLogInput, 'userId'>): Promise<void> {
   const admin = await getCurrentAdmin()
   await recordAudit({ ...input, userId: admin?.uid ?? null })
@@ -289,9 +321,12 @@ export async function getAdminProjectDetail(
   const accessLevel = await getCurrentProjectAccess(id)
   if (!canManage(accessLevel)) return null
 
+  const permissions = await getCurrentProjectPermissions(id)
+
   const project = await prisma.project.findUnique({
     where: { id },
     include: {
+      owner: { select: { username: true } },
       points: {
         orderBy: { trameDebut: 'asc' },
       },
@@ -370,7 +405,106 @@ export async function getAdminProjectDetail(
     })),
     videos: project.videos.map((video) => toVideoAdminDto(video)),
     rows,
+    canManageAnalystAccess: canAdministerAnalystAccess(permissions.level),
+    analystAccess: canAdministerAnalystAccess(permissions.level)
+      ? await loadAnalystAccess(project.id)
+      : [],
+    ownerUsername: project.owner?.username ?? null,
   }
+}
+
+/**
+ * Qui peut VOIR et MODIFIER le registre des analystes autorisés ?
+ * Le propriétaire et l'ADMIN — exactement les profils que `unshareProjectFromUser`
+ * accepte. Un invité éditeur conserve la possibilité de partager le projet
+ * (comportement historique) sans pour autant consulter le registre complet.
+ */
+function canAdministerAnalystAccess(level: ProjectPermissions['level']): boolean {
+  return level === 'owner' || level === 'admin'
+}
+
+/**
+ * CANDIDATS au partage (§1) : tous les analystes actifs, avec l'accès qu'ils
+ * détiennent DÉJÀ sur ce projet. Sert au panneau « Analystes autorisés » : cocher
+ * accorde l'accès, décocher le retire — jamais un droit implicite.
+ *
+ * Le propriétaire du projet est exclu de la liste : il n'a pas besoin d'un partage
+ * sur son propre projet, et lui en créer un serait trompeur.
+ */
+export async function listAnalystAccessCandidates(
+  projectId: string,
+): Promise<AnalystAccessCandidateDto[]> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return []
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!canAdministerAnalystAccess(permissions.level)) return []
+
+  const project = await prisma.project.findUnique({
+    where: { id },
+    select: { ownerId: true },
+  })
+  if (!project) return []
+
+  const [candidates, grants] = await Promise.all([
+    prisma.user.findMany({
+      where: { role: Role.ANALYST, isActive: true, id: { not: project.ownerId ?? '' } },
+      orderBy: { username: 'asc' },
+      select: { id: true, username: true, email: true },
+    }),
+    prisma.projectAccess.findMany({
+      where: { projectId: id },
+      select: { userId: true, canEdit: true, createdAt: true },
+    }),
+  ])
+
+  const grantByUser = new Map(grants.map((grant) => [grant.userId, grant]))
+  return candidates.map((candidate) => {
+    const grant = grantByUser.get(candidate.id)
+    return {
+      userId: candidate.id,
+      username: candidate.username ?? candidate.email,
+      email: candidate.email,
+      granted: grant !== undefined,
+      canEdit: grant?.canEdit ?? false,
+      createdAt: grant ? grant.createdAt.toISOString() : null,
+    }
+  })
+}
+
+/** Un analyste actif, avec l'accès qu'il détient (ou non) sur le projet. */
+export type AnalystAccessCandidateDto = AnalystAccessDto & {
+  /** Vrai si un partage `ProjectAccess` existe déjà pour ce projet. */
+  granted: boolean
+}
+
+/**
+ * ANALYSTES AUTORISÉS d'un projet (§1) — lecture des partages `ProjectAccess`.
+ *
+ * Le partage est le mécanisme EXISTANT : il n'existe pas de second modèle d'accès.
+ * Aucune donnée analytique n'est exposée ici : uniquement l'identité des collègues
+ * autorisés et l'étendue de leur droit.
+ */
+async function loadAnalystAccess(projectId: string): Promise<AnalystAccessDto[]> {
+  const rows = await prisma.projectAccess.findMany({
+    where: { projectId },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      userId: true,
+      canEdit: true,
+      createdAt: true,
+      user: { select: { username: true, email: true, role: true, isActive: true } },
+    },
+  })
+  return rows
+    // Seuls les comptes ANALYSTE portent un accès de consultation analytique.
+    .filter((row) => row.user.role === Role.ANALYST)
+    .map((row) => ({
+      userId: row.userId,
+      username: row.user.username ?? row.user.email,
+      email: row.user.email,
+      canEdit: row.canEdit,
+      createdAt: row.createdAt.toISOString(),
+    }))
 }
 
 /** Crée un nouveau projet d'observation (et ses vidéos éventuelles, de façon atomique). */
@@ -446,11 +580,9 @@ export async function createProject(input: CreateProjectInput): Promise<ActionRe
  * ACTIF — les types d'observation (non destructifs vis-à-vis de l'historique).
  */
 export async function updateProject(input: UpdateProjectInput): Promise<ActionResult> {
-  if (!(await getCurrentAdmin())) {
-    return { ok: false, error: 'Accès réservé aux administrateurs.' }
-  }
   const projectId = typeof input?.projectId === 'string' ? input.projectId.trim() : ''
-  if (!projectId) return { ok: false, error: 'Identifiant de projet invalide.' }
+  const denied = await assertProjectConfiguration(projectId)
+  if (denied) return denied
 
   try {
     const project = await prisma.project.findUnique({
@@ -538,14 +670,10 @@ export async function updateProjectObservationTypes(
   projectId: string,
   observationTypes: string[],
 ): Promise<ActionResult> {
-  if (!(await getCurrentAdmin())) {
-    return { ok: false, error: 'Accès réservé aux administrateurs.' }
-  }
+  const denied = await assertProjectConfiguration(projectId)
+  if (denied) return denied
   try {
-    const id = typeof projectId === 'string' ? projectId.trim() : ''
-    if (!id) {
-      return { ok: false, error: 'Identifiant de projet invalide.' }
-    }
+    const id = projectId.trim()
 
     const project = await prisma.project.findUnique({
       where: { id },
@@ -759,9 +887,8 @@ export async function addProjectVideo(input: {
   typeLabel?: string | null
   name?: string | null
 }): Promise<ActionResult> {
-  if (!(await getCurrentAdmin())) {
-    return { ok: false, error: 'Accès réservé aux administrateurs.' }
-  }
+  const denied = await assertProjectConfiguration(input?.projectId ?? '')
+  if (denied) return denied
   try {
     const projectId = (input?.projectId ?? '').trim()
     const source = (input?.source ?? '').trim()
@@ -814,15 +941,15 @@ export async function addProjectVideo(input: {
  * libellé, ordre). Non destructif : les observations passées conservent leur type.
  */
 export async function updateProjectVideo(input: VideoPayload): Promise<ActionResult> {
-  if (!(await getCurrentAdmin())) {
-    return { ok: false, error: 'Accès réservé aux administrateurs.' }
-  }
   try {
     const videoId = (input?.videoId ?? '').trim()
     if (!videoId) return { ok: false, error: 'Identifiant de vidéo invalide.' }
 
     const video = await loadManageableVideoProject(videoId)
     if (!video) return { ok: false, error: 'Vidéo introuvable.' }
+    // Le périmètre se lit depuis la VIDÉO : la garde porte sur son projet réel.
+    const denied = await assertProjectConfiguration(video.project.id)
+    if (denied) return denied
     if (video.project.isArchived) {
       return { ok: false, error: 'Ce projet est archivé : la configuration est figée.' }
     }

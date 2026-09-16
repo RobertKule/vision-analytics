@@ -325,7 +325,7 @@ export default function ExecutiveReportModal({
                     : '—'}
                 </p>
                 <span className="text-[10px] text-zinc-400">
-                  Détections / (points configurés × observateurs)
+                  Détections / points possibles (pondéré par type)
                 </span>
               </div>
             </div>

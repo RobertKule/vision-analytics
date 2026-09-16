@@ -215,7 +215,9 @@ export type ActionResult = { ok: true; id?: string } | { ok: false; error: strin
 // détections analytiques / (détections analytiques + fausses alertes).
 // Le relevé brut (`pointsAnalytics[].captures`, `ghostPointsAnalytics.captures`)
 // conserve, lui, chaque capture certifiée — aucune perte de données brutes.
-// Probabilité empirique de détection = détections / (points configurés × observateurs).
+// Probabilité empirique de détection = Σ détections / Σ points possibles, chaque
+// type conservant SON dénominateur (fenêtres du type × observateurs ayant
+// réellement participé à ce type) — jamais `pointsTotaux × observateursTotaux`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Capture d'observation détaillée pour l'analyse administrateur (donnée BRUTE). */
@@ -331,7 +333,7 @@ export type AnalyticsVersionOptionDto = {
   observerCount: number
   /** Détections analytiques figées (numérateur). */
   detections: number
-  /** Observations possibles = fenêtres configurées × observateurs. */
+  /** Observations possibles = Σ (fenêtres du type × observateurs participants du type). */
   possibleObservations: number
   detectionProbability: number | null
 }
@@ -416,14 +418,18 @@ export type ProjectAnalyticsDto = {
      */
     averageDetectionDelay: number | null
     /**
-     * Probabilité empirique de détection (0..1) sur le périmètre filtré :
-     * `détections analytiques / (points configurés × observateurs distincts)`.
-     * null si le dénominateur est nul (aucun point configuré ou aucun observateur).
+     * Probabilité empirique de détection (0..1) sur le périmètre filtré — taux
+     * PONDÉRÉ : `Σ détections analytiques / Σ observations possibles`, jamais la
+     * moyenne des taux de types aux dénominateurs différents.
+     * null si le dénominateur est nul (aucune fenêtre configurée ou aucun participant).
      */
     detectionProbability?: number | null
     /**
-     * Observations POSSIBLES du périmètre = fenêtres/points configurés × observateurs.
-     * C'est le DÉNOMINATEUR : ajouter une fenêtre l'augmente, sans jamais toucher au
+     * Observations POSSIBLES du périmètre — DÉNOMINATEUR, calculé TYPE PAR TYPE :
+     * `Σ (fenêtres/points configurés du type × observateurs ayant réellement
+     * participé à ce type)`. Chaque type garde son propre dénominateur ; on
+     * n'utilise jamais `pointsTotaux × observateursTotaux` (réunion/maximum des
+     * observateurs). Ajouter une fenêtre l'augmente sans jamais toucher au
      * numérateur (`validObservationsCount`).
      */
     possibleObservations?: number
@@ -496,6 +502,35 @@ export type AdminProjectDetailDto = {
   videos: VideoAdminDto[]
   /** Relevé complet des observations, plus récentes d'abord. */
   rows: ProjectObservationRowDto[]
+  /**
+   * ANALYSTES AUTORISÉS sur ce projet (§1) — accès accordés via `ProjectAccess`.
+   * Liste renvoyée uniquement aux profils qui peuvent PARTAGER (propriétaire,
+   * ADMIN, invité éditeur) : un invité en consultation seule n'a pas à voir les
+   * collègues du propriétaire.
+   */
+  analystAccess: AnalystAccessDto[]
+  /** Le nom du propriétaire du projet, s'il en a un (projets hérités : null). */
+  ownerUsername: string | null
+  /**
+   * Vrai si la session peut TENIR le registre des analystes autorisés (propriétaire
+   * ou ADMIN). Ne conditionne que l'AFFICHAGE : chaque action est revérifiée côté
+   * serveur, où un invité éditeur reste refusé.
+   */
+  canManageAnalystAccess: boolean
+}
+
+/** Un accès analyste accordé sur un projet — lecture, plus édition si `canEdit`. */
+export type AnalystAccessDto = {
+  userId: string
+  username: string
+  email: string
+  /**
+   * Droit de modification accordé. FAUX = accès « Visualiser les données » :
+   * voir, analyser, exporter — mais jamais configurer, partager ni administrer.
+   */
+  canEdit: boolean
+  /** Date d'attribution, ou null si la ligne est antérieure au suivi des dates. */
+  createdAt: string | null
 }
 
 // ——— Statistiques réelles du tableau de bord par rôle (sections 20–21) ———
