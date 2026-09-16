@@ -65,8 +65,17 @@ et reprend où il s'était arrêté.
 - **Une détection analytique par (observateur + type/décalage + trame)** : plusieurs captures du même
   observateur dans la même trame (fenêtre/type) comptent pour **une seule** détection. La règle est
   identique partout — tableau de bord, analyses, Excel global, Excel par observateur, PDF.
-- **Probabilité de détection** : `P(détection) = Détections / (Nombre de points/trames configurés × Nombre
-  d'observateurs) × 100`.
+- **Probabilité de détection** : `P(détection) = Σ Détections / Σ Possibles × 100`, où les **possibles** sont
+  calculés **type par type** : `possibles(type) = points/trames configurés DU TYPE × observateurs ayant
+  réellement participé à ce type`, puis **sommés**. Jamais `points totaux × observateurs totaux`, jamais le
+  maximum d'observateurs pris comme base commune, jamais la moyenne des taux des types.
+- **Concordance globale = le même nombre.** La carte « Concordance Globale » et la carte « Probabilité de
+  détection » du tableau de bord, comme les colonnes « Concordance » du PDF, de l'Excel et du rapport
+  exécutif, sortent **toutes** de `Σ Détections / Σ Possibles` : deux valeurs différentes signaleraient une
+  régression. Ce n'est **pas** la moyenne des taux de fenêtres — leurs dénominateurs diffèrent (chaque type a
+  ses propres observateurs participants), et une moyenne non pondérée donnerait un pourcentage ininterprétable.
+- **Concordance par fenêtre** : `observateurs détecteurs de la fenêtre / observateurs ayant participé au TYPE
+  de cette fenêtre` — jamais un rapport au total des observateurs du projet.
 - **Relevés bruts** (Données brutes) : conservent **toujours** chaque capture individuelle.
 - Précision, concordance inter-observateurs, délai moyen de détection, répartition des fantômes —
   par fenêtre cible, par type/décalage, par observateur.
@@ -103,6 +112,28 @@ L'accès est revérifié à **chaque** Server Action et à **chaque** route `/ap
 jamais sur le proxy). Les routes d'export vérifient `session + accès projet` avant de servir le moindre octet.
 Modifier un `projectId`, une URL ou un paramètre ne donne jamais accès à une expérience non autorisée : la
 décision est **toujours re-calculée côté serveur** sur le projet réel.
+
+### Analystes autorisés sur un projet
+
+L'ADMIN — et le propriétaire du projet — accordent ou retirent explicitement un accès ANALYSTE depuis l'onglet
+**« Analystes »** de la fiche projet (`/admin/projects/[id]`). Le registre liste les analystes actifs avec, pour
+chacun, la permission réellement accordée :
+
+| Permission | Droit effectif |
+|------------|----------------|
+| **Visualiser les données** (`ProjectAccess.canEdit = false`) | Voir le projet, ses fenêtres, ses statistiques, ses analyses, ses observations et les exports permis. **Ni** configuration, **ni** partage, **ni** clés observateur, **ni** suppression, **ni** administration des comptes. |
+| **Modifier la configuration** (`canEdit = true`) | Tout ce qui précède **+** configuration du projet, partage et création de liens observateur, dans le périmètre du projet uniquement. La gestion des **utilisateurs** reste ADMIN. |
+
+Décocher **révoque** l'accès : le serveur refuse alors toute lecture comme toute mutation, sans qu'**aucune
+donnée** ne soit supprimée (ni le compte, ni le projet, ni les observations). Réaccorder l'accès redonne
+exactement les mêmes droits. Le mécanisme est **`ProjectAccess`** — il n'existe pas de second modèle d'accès — et
+la décision est prise par `resolveProjectPermissions`, appelé par `getCurrentProjectPermissions` **avant** toute
+lecture ou écriture.
+
+Un analyste **propriétaire** configure son propre projet sans devenir ADMIN : titre, types d'observation,
+passes vidéo, fenêtres (`canConfigure`), partage à des collègues et création des **liens observateurs /
+invitations** (`canCreateObserverTokens`). Les suppressions destructrices (projet, vidéo, fenêtre) gardent leur
+garde stricte.
 
 ### Comptes & validation
 
@@ -163,8 +194,9 @@ en altérant la requête (`videoId` ou type inconnus, source absente ou différe
   type/décalage comptent pour **une seule** détection — appliquée à l'identique au tableau de bord, aux analyses,
   à l'Excel global, à l'Excel par observateur et au PDF. Les exports bruts (Données brutes) conservent toutes les
   captures.
-- **Probabilité empirique de détection** : `P(détection) = Détections / (Nombre de points/trames configurés × Nombre
-  d'observateurs) × 100`.
+- **Probabilité empirique de détection** : `P(détection) = Σ Détections / Σ Possibles × 100`, chaque type portant
+  SON dénominateur (`points du type × observateurs participants du type`) — voir
+  [Versionnage des analyses](#versionnage-des-analyses).
 - Métriques : précision (détections uniques valides / total), concordance (partage d'une fenêtre entre
   observateurs), délai moyen de détection (par événement), répartition des fantômes.
 
@@ -179,8 +211,11 @@ métriques calculées sur les observations valides disponibles à cette date.
   modification / suppression / duplication d'une **passe vidéo**. Consulter le dashboard, filtrer, consulter un
   type, l'historique, un export, enregistrer une capture ou une observation **ne crée jamais** de version.
 - **AJOUTER UNE FENÊTRE NE SUPPRIME PAS LE PASSÉ.** Les détections déjà réalisées restent comptabilisées
-  (le **numérateur** ne baisse jamais) ; seul le **dénominateur** (`observations possibles = fenêtres configurées
-  × observateurs`) augmente. L'analyse actuelle combine **anciennes données valides + nouvelles données valides**.
+  (le **numérateur** ne baisse jamais) ; seul le **dénominateur** augmente. Le dénominateur est calculé
+  **type par type** : `observations possibles = Σ (fenêtres du type × observateurs ayant réellement participé
+  à ce type)`. Chaque type garde son propre dénominateur — jamais `points totaux × observateurs totaux`,
+  jamais le maximum d'observateurs pris comme base commune — et le taux global est **pondéré** par ces vrais
+  dénominateurs (`Σ détections / Σ possibles`), jamais une moyenne de pourcentages. L'analyse actuelle combine **anciennes données valides + nouvelles données valides**.
 - Chaque version historique est **immuable** : elle n'est jamais recalculée avec la configuration ou les données
   apparues après elle. Exemple : `V1` = 10 fenêtres / 8 détections / 10 possibles ; `V2` (ajout fenêtre 11) =
   11 fenêtres / 8 détections / 11 possibles ; `V3` (détection sur la fenêtre 11) = 11 / 9 / 11.
@@ -188,6 +223,26 @@ métriques calculées sur les observations valides disponibles à cette date.
   (filtre de **versions**, pas de captures) — qui sélectionne la dernière version disponible à cette date.
 - **Dashboard = Excel = PDF.** Tous les exports partent de la **même source analytique** ; un export sans paramètre
   utilise l'**analyse actuelle**, `?versionId=` / `?before=YYYY-MM-DD` exportent la version historique figée.
+
+### Comparaisons (onglet « Comparaisons »)
+
+Deux lectures, **un seul moteur** : chaque type comparé est résolu par `resolveAnalyticsView` — le point d'entrée
+du tableau de bord et de tous les exports — et la comparaison se contente de **mettre en regard** les résultats.
+
+- **Par type** : matrice `point × type` (taux de détection, observateurs détecteurs, détections, délai moyen) et
+  tableau des indicateurs par type, avec le dénominateur de chaque type (`points du type × observateurs participants`).
+- **Par groupes (A/B)** : on répartit les types du projet en **Groupe A** et **Groupe B** (au moins un type par
+  groupe, **aucun type dans les deux**, aucun doublon). Les groupes ne sont qu'une **agrégation** :
+
+  ```
+  possibles(groupe) = Σ (points du type × observateurs ayant participé à ce type)
+  détections(groupe) = Σ détections du type
+  taux(groupe) = Σ détections / Σ possibles        ← pondéré, jamais une moyenne de taux
+  ```
+
+  Résultat : un tableau (points possibles, détections, non détectés, taux pondéré, fausses alertes) et **un
+  graphique circulaire par groupe** (détectés / non détectés), alimentés par **les mêmes chiffres** que le tableau.
+  Un type ne pouvant appartenir qu'à un groupe, les points possibles ne sont jamais comptés deux fois.
 
 ---
 

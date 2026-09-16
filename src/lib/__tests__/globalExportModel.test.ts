@@ -463,9 +463,20 @@ describe('scénario obligatoire : 12 observateurs × 8 points A + 8 points B', (
     const a = table.find((entry) => entry.type === 'A')
     const b = table.find((entry) => entry.type === 'B')
 
-    // Observations possibles = points configurés × observateurs = 8 × 12 = 96.
-    expect(a).toMatchObject({ pointCount: 8, possibleObservations: 96, detections: 96 })
-    expect(b).toMatchObject({ pointCount: 8, possibleObservations: 96, detections: 96 })
+    // Observations possibles = points du type × observateurs PARTICIPANTS du type
+    // = 8 × 12 = 96 (ici les 12 observateurs ont participé aux DEUX types).
+    expect(a).toMatchObject({
+      pointCount: 8,
+      observerCount: 12,
+      possibleObservations: 96,
+      detections: 96,
+    })
+    expect(b).toMatchObject({
+      pointCount: 8,
+      observerCount: 12,
+      possibleObservations: 96,
+      detections: 96,
+    })
     expect(a?.probability).toBeCloseTo(1, 5)
     expect(b?.probability).toBeCloseTo(1, 5)
 
@@ -478,10 +489,10 @@ describe('scénario obligatoire : 12 observateurs × 8 points A + 8 points B', (
     expect(ledger).toHaveLength(194)
     expect(ledger.filter((entry) => entry.pointFound === 'Oui')).toHaveLength(193)
 
-    // La fonction pure `detectionProbability` est cohérente avec le tableau.
-    expect(detectionProbability(96, 8, 12)).toBeCloseTo(1, 5)
-    expect(detectionProbability(0, 8, 12)).toBe(0)
-    expect(detectionProbability(96, 0, 12)).toBeNull()
-    expect(detectionProbability(96, 8, 0)).toBeNull()
+    // La fonction pure `detectionProbability` est cohérente avec le tableau :
+    // elle ne reçoit QUE le dénominateur de participation déjà calculé.
+    expect(detectionProbability(96, 96)).toBeCloseTo(1, 5)
+    expect(detectionProbability(0, 96)).toBe(0)
+    expect(detectionProbability(96, 0)).toBeNull()
   })
 })

@@ -6,11 +6,15 @@
  *
  *  — Les observations valides déjà réalisées restent valides.
  *  — Les détections existantes restent comptabilisées (le NUMÉRATEUR ne baisse pas).
- *  — Le DÉNOMINATEUR (observations possibles) suit la configuration COURANTE :
- *        observations possibles = points/fenêtres configurés × observateurs
+ *  — Le DÉNOMINATEUR (observations possibles) suit la configuration COURANTE,
+ *    TYPE PAR TYPE :
+ *        possibles(type)  = points/fenêtres configurés(type) × observateurs PARTICIPANTS(type)
+ *        possibles(total) = Σ possibles(type)
  *    Ajouter une fenêtre augmente donc le dénominateur, sans jamais remettre le
  *    numérateur à zéro. Le numérateur n'augmente que lorsqu'une nouvelle détection
- *    valide existe RÉELLEMENT.
+ *    valide existe RÉELLEMENT. Chaque type garde SON dénominateur : le dénominateur
+ *    global n'est jamais `pointsTotaux × observateursTotaux` (voir
+ *    `globalExportModel.computeTypeParticipation`).
  *  — L'analyse actuelle = ANCIENNES DONNÉES VALIDES + NOUVELLES DONNÉES VALIDES.
  *
  * ─── CE QU'EST UNE VERSION ──────────────────────────────────────────────────
@@ -43,9 +47,13 @@ import {
   countAnalyticDetections,
   countGhostEvents,
   countWindowsHit,
+  computeTypeParticipation,
   detectionProbability,
   interpretationBand,
   observerDisplayLabel,
+  participationByObserver,
+  totalPossibleObservations,
+  typeKeyOf,
   type DetectionProbabilityRow,
   type GlobalExportPoint,
   type GlobalExportProject,
@@ -138,7 +146,11 @@ export type SnapshotPointMetric = {
   observersDetected: number
   /** Détections analytiques sur la fenêtre. */
   detections: number
-  /** Taux de concordance 0–100 = observateurs détecteurs / observateurs du jeu. */
+  /**
+   * Taux de concordance 0–100 de la fenêtre = observateurs détecteurs / observateurs
+   * PARTICIPANTS au type de CETTE fenêtre (jamais le total des observateurs du jeu,
+   * qui gonflerait le dénominateur des types les moins suivis).
+   */
   concordanceRate: number
   /** Délai moyen (s) par événement validé de la fenêtre ; null si aucun. */
   avgDelaySeconds: number | null
@@ -158,7 +170,10 @@ export type SnapshotObserverMetric = {
   totalClaims: number
   /** Précision 0..1 ; null si aucune déclaration. */
   precision: number | null
-  /** Observations possibles pour CET observateur = fenêtres configurées. */
+  /**
+   * Observations possibles pour CET observateur = fenêtres des types auxquels il a
+   * réellement participé (voir `possibleObservationsForObserver`).
+   */
   possibleObservations: number
   firstSubmittedAt: string | null
   lastSubmittedAt: string | null
@@ -173,7 +188,10 @@ export type AnalyticsVersionMetrics = {
   observerCount: number
   /** Fenêtres/points configurés du périmètre (dénominateur de base). */
   configuredPoints: number
-  /** Observations possibles = configuredPoints × observerCount. */
+  /**
+   * Observations possibles = Σ (pointsConfigurés(type) × observateursParticipants(type)).
+   * Chaque type porte SON dénominateur — jamais `configuredPoints × observerCount`.
+   */
   possibleObservations: number
   /** Détections analytiques (NUMÉRATEUR) — conservées d'une version à l'autre. */
   detections: number
@@ -185,11 +203,17 @@ export type AnalyticsVersionMetrics = {
   windowsHit: number
   /** Précision 0..1 = détections / déclarations ; null si aucune déclaration. */
   precision: number | null
-  /** Probabilité empirique = détections / (points configurés × observateurs). */
+  /** Probabilité empirique PONDÉRÉE = Σ détections / Σ observations possibles. */
   detectionProbability: number | null
   /** Bande d'interprétation FR de la probabilité. */
   interpretation: string
-  /** Moyenne des taux de concordance des fenêtres (0–100, entier). */
+  /**
+   * Taux de concordance GLOBAL (0–100, entier) = Σ détections / Σ possibles × 100,
+   * PONDÉRÉ par les dénominateurs réels de chaque type. C'est le même nombre que
+   * `detectionProbability × 100`, arrondi : les deux surfaces mesurent la même
+   * grandeur et ne doivent jamais diverger. Jamais la moyenne arithmétique des
+   * taux de fenêtres (dénominateurs différents ⇒ moyenne fausse, §5).
+   */
   concordanceRate: number
   /** Délai moyen de réaction par événement validé (s) ; null si aucun. */
   averageDetectionDelay: number | null
@@ -370,9 +394,23 @@ function roundTenth(value: number): number {
 /**
  * Calcule les métriques analytiques d'un périmètre + un jeu d'observations valides.
  *
- * Le dénominateur (`possibleObservations`) provient de la CONFIGURATION transmise ;
- * le numérateur (`detections`) provient des DONNÉES transmises. Ajouter une fenêtre
- * augmente donc le premier sans jamais toucher au second.
+ * DÉNOMINATEUR (`possibleObservations`) — participation RÉELLE, type par type :
+ *   possibles(type)  = pointsConfigurés(type) × observateursParticipants(type)
+ *   possibles(total) = Σ possibles(type)
+ * Chaque type garde SON dénominateur : jamais `pointsTotaux × observateursTotaux`
+ * (ce serait prendre la réunion/le maximum des observateurs comme base commune et
+ * gonfler le dénominateur des types les moins suivis). Voir `computeTypeParticipation`.
+ *
+ * NUMÉRATEUR (`detections`) — issu des DONNÉES transmises. Ajouter une fenêtre
+ * augmente le premier sans jamais toucher au second.
+ *
+ * TAUX GLOBAL — pondéré par les vrais dénominateurs : `Σ détections / Σ possibles`,
+ * jamais la moyenne arithmétique des taux de types aux dénominateurs différents.
+ *
+ * LES DEUX SURFACES D'AFFICHAGE SONT LE MÊME NOMBRE : `concordanceRate` (tableau de
+ * bord, PDF, classeurs) et `detectionProbability` (carte « Probabilité de
+ * détection ») sortent tous deux de `detections / possibleObservations`. Un écart
+ * entre les deux signale une régression, jamais une nuance d'analyse.
  */
 export function computeAnalyticsMetrics(
   config: AnalyticsPerimeterConfig,
@@ -387,13 +425,20 @@ export function computeAnalyticsMetrics(
   const detections = countAnalyticDetections(rows)
   const ghostEvents = countGhostEvents(rows)
   const totalClaims = detections + ghostEvents
-  const probability = detectionProbability(detections, configuredPoints, observerCount)
+  // Somme des dénominateurs de chaque type — le seul dénominateur global admis.
+  const possibleObservations = totalPossibleObservations(source)
+  const probability = detectionProbability(detections, possibleObservations)
+  // Participation réelle par type : source unique des dénominateurs (§4).
+  const participation = computeTypeParticipation(source)
 
   // ——— Par fenêtre ———
   const delays: number[] = []
   const perPoint: SnapshotPointMetric[] = config.points.map((point) => {
     const matched = rows.filter((row) => row.pointId === point.id && !row.isGhostPoint)
     const detectors = new Set(matched.map((row) => row.userId))
+    // Dénominateur de la fenêtre = observateurs qui ont RÉELLEMENT participé au
+    // type de cette fenêtre — jamais le total des observateurs du projet.
+    const participants = participation.get(typeKeyOf(point.type))?.participants ?? 0
     const pointDelays = matched.map((row) => row.timestampTotal - point.trameDebut)
     for (const delay of pointDelays) delays.push(delay)
     const clamped = pointDelays.map((delay) => Math.max(0, delay))
@@ -406,8 +451,7 @@ export function computeAnalyticsMetrics(
       videoName: point.videoName,
       observersDetected: detectors.size,
       detections: countAnalyticDetections(matched),
-      concordanceRate:
-        observerCount > 0 ? Math.round((detectors.size / observerCount) * 100) : 0,
+      concordanceRate: participants > 0 ? Math.round((detectors.size / participants) * 100) : 0,
       avgDelaySeconds:
         clamped.length > 0
           ? roundTenth(clamped.reduce((acc, delay) => acc + delay, 0) / clamped.length)
@@ -415,10 +459,10 @@ export function computeAnalyticsMetrics(
     }
   })
 
-  const concordanceRate =
-    perPoint.length > 0
-      ? Math.round(perPoint.reduce((acc, point) => acc + point.concordanceRate, 0) / perPoint.length)
-      : 0
+  // Taux GLOBAL = le taux PONDÉRÉ §5 (Σ détections / Σ possibles), arrondi. Calculé
+  // depuis les compteurs — jamais depuis les taux arrondis des fenêtres, dont la
+  // moyenne donnerait un nombre différent du même indicateur affiché ailleurs.
+  const concordanceRate = probability !== null ? Math.round(probability * 100) : 0
   const averageDetectionDelay =
     delays.length > 0 ? roundTenth(delays.reduce((acc, d) => acc + d, 0) / delays.length) : null
 
@@ -429,6 +473,10 @@ export function computeAnalyticsMetrics(
     if (list) list.push(row)
     else byObserver.set(row.userId, [row])
   }
+  // Les fenêtres « possibles » d'un observateur sont celles des types qu'IL a
+  // réellement rejoints : les fenêtres d'un type qu'il n'a jamais observé ne sont
+  // pas des occasions manquées (même règle que le dénominateur global, §4).
+  const participatedByObserver = participationByObserver(source)
   const perObserver: SnapshotObserverMetric[] = Array.from(byObserver.entries())
     .map(([observerId, observerRows]) => {
       const sample = observerRows[0]
@@ -436,6 +484,10 @@ export function computeAnalyticsMetrics(
       const observerGhosts = countGhostEvents(observerRows)
       const claims = observerDetections + observerGhosts
       const dates = observerRows.map((row) => row.createdAt).sort((a, b) => a.localeCompare(b))
+      let observerPossiblePoints = 0
+      for (const type of participatedByObserver.get(observerId) ?? []) {
+        observerPossiblePoints += source.project.definedPointsByType[type] ?? 0
+      }
       return {
         observerId,
         displayName: observerDisplayLabel(sample),
@@ -445,7 +497,7 @@ export function computeAnalyticsMetrics(
         ghostEvents: observerGhosts,
         totalClaims: claims,
         precision: claims > 0 ? observerDetections / claims : null,
-        possibleObservations: configuredPoints,
+        possibleObservations: observerPossiblePoints,
         firstSubmittedAt: dates[0] ?? null,
         lastSubmittedAt: dates[dates.length - 1] ?? null,
       }
@@ -462,7 +514,7 @@ export function computeAnalyticsMetrics(
   return {
     observerCount,
     configuredPoints,
-    possibleObservations: configuredPoints * observerCount,
+    possibleObservations,
     detections,
     ghostEvents,
     totalClaims,

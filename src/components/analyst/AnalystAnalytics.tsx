@@ -10,6 +10,7 @@ import {
   FileSpreadsheet,
   FolderArchive,
   Ghost,
+  ListFilter,
   Loader2,
   Printer,
   RotateCcw,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react'
 import type { ProjectAnalyticsDto } from '@/lib/types'
 import type { Locale, AnalyticsText } from '@/lib/i18n'
+import Accordion from '@/components/ui/Accordion'
 import ClientChart from '@/components/charts/ClientChart'
 import ExecutiveReportModal from '@/components/admin/ExecutiveReportModal'
 import { buildSplitSlices, buildWindowBars } from '@/components/charts/chartData'
@@ -258,8 +260,6 @@ export default function AnalystAnalytics({
     </div>
   )
 
-  const card = 'rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#161b22]'
-
   return (
     <div className="flex flex-col gap-6">
       {/* ——— Synthèse ——— */}
@@ -277,8 +277,25 @@ export default function AnalystAnalytics({
         )}
       </section>
 
-      {/* ——— Filtres Version / Type / Vidéo — recalcul côté serveur ——— */}
-      <section className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
+      {/* ——— Filtres Version / Type / Vidéo — recalcul côté serveur ———
+          Replié par défaut : le repère de l'en-tête rappelle en permanence le filtre
+          réellement appliqué, donc aucune information ne disparaît au repli. */}
+      <Accordion
+        id="analytics-filters"
+        title={locale === 'en' ? 'Filters & analytical version' : 'Filtres & version analytique'}
+        icon={ListFilter}
+        tone="ink"
+        defaultOpen={false}
+        hint={
+          isHistoricalVersion
+            ? `V${versionHistory.find((entry) => entry.id === selectedVersionId)?.versionNumber ?? ''} · ${
+                hasAppliedFilter ? contextParts.join(' · ') : t.filterAll
+              }`
+            : hasAppliedFilter
+              ? `${t.filterApplied} ${contextParts.join(' · ')}`
+              : t.filterAll
+        }
+      >
         <div className="mb-4 flex flex-wrap items-end gap-4 border-b border-zinc-100 pb-4 dark:border-white/5">
           <label className="flex flex-col gap-1 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
             Version analytique
@@ -398,7 +415,7 @@ export default function AnalystAnalytics({
             t.filterAll
           )}
         </p>
-      </section>
+      </Accordion>
 
       {/* ——— Exports scientifiques & rapport imprimable ——— */}
       <section className="flex flex-wrap items-center gap-3">
@@ -449,17 +466,12 @@ export default function AnalystAnalytics({
       </section>
 
       {/* ——— Concordance par fenêtre cible ——— */}
-      <section className={card}>
-        <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-          <Target aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-          {t.windowTitle}
-          {hasWindows ? (
-            <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-bold text-zinc-500 dark:bg-white/10 dark:text-zinc-300">
-              {analytics.pointsAnalytics.length}
-            </span>
-          ) : null}
-        </h2>
-
+      <Accordion
+        id="analytics-windows"
+        title={t.windowTitle}
+        icon={Target}
+        count={hasWindows ? analytics.pointsAnalytics.length : undefined}
+      >
         {!hasWindows ? (
           <div className="mt-4 rounded-xl border border-dashed border-zinc-300 px-4 py-8 text-center dark:border-white/10">
             <p className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{t.noWindowTitle}</p>
@@ -503,19 +515,15 @@ export default function AnalystAnalytics({
             ))}
           </ul>
         )}
-      </section>
+      </Accordion>
 
       <div className="grid items-start gap-6 lg:grid-cols-2">
         {/* ——— Distribution des points fantômes ——— */}
-        <section className={card}>
-          <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-            <Ghost aria-hidden="true" className="h-4 w-4 text-slate" />
-            {t.ghostsTitle}
-          </h2>
+        <Accordion id="analytics-ghosts" title={t.ghostsTitle} icon={Ghost} tone="slate">
           {!hasData || totalGhostBuckets.length === 0 ? (
-            <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">{t.noObservationsHint}</p>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{t.noObservationsHint}</p>
           ) : (
-            <ul className="mt-4 flex flex-col gap-1.5">
+            <ul className="mt-1 flex flex-col gap-1.5">
               {totalGhostBuckets.map((bucket) => (
                 <li key={bucket.intervalLabel} className="flex items-center gap-2 text-xs">
                   <span className="w-16 shrink-0 font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
@@ -534,18 +542,19 @@ export default function AnalystAnalytics({
               ))}
             </ul>
           )}
-        </section>
+        </Accordion>
 
         {/* ——— Performance des observateurs ——— */}
-        <section className={card}>
-          <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-            <Users aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-            {t.observerTitle}
-          </h2>
+        <Accordion
+          id="analytics-observers"
+          title={t.observerTitle}
+          icon={Users}
+          count={analytics.observersMetrics.length}
+        >
           {analytics.observersMetrics.length === 0 ? (
-            <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">{t.observersNone}</p>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{t.observersNone}</p>
           ) : (
-            <ul className="mt-4 flex flex-col gap-2">
+            <ul className="mt-1 flex flex-col gap-2">
               {analytics.observersMetrics.map((observer) => (
                 <li
                   key={observer.userId}
@@ -577,19 +586,22 @@ export default function AnalystAnalytics({
               ))}
             </ul>
           )}
-        </section>
+        </Accordion>
       </div>
 
       {/* ——— Visualisations (Recharts), filtrables par observateur ——— */}
-      <section className={card}>
+      <Accordion
+        id="analytics-viz"
+        title={t.vizTitle}
+        icon={ChartPie}
+        hint={
+          observerFiltered && selectedObserver
+            ? `${t.observerSelector} ${shortId(selectedObserver.anonymousId).toUpperCase()} · ${selectedObserver.precisionRate}%`
+            : t.observerAll
+        }
+      >
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="flex items-center gap-2 text-base font-bold text-zinc-900 dark:text-zinc-50">
-              <ChartPie aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-              {t.vizTitle}
-            </h2>
-            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{t.vizHint}</p>
-          </div>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{t.vizHint}</p>
           {analytics.observersMetrics.length > 0 ? (
             <label className="flex items-center gap-2 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
               {t.observerSelector}
@@ -760,7 +772,7 @@ export default function AnalystAnalytics({
             </div>
           </div>
         )}
-      </section>
+      </Accordion>
 
       <ExecutiveReportModal
         isOpen={isReportOpen}

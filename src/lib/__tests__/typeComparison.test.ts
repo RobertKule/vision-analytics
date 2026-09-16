@@ -94,6 +94,7 @@ function inputOf(
       windowsHit: metrics.windowsHit,
       concordanceRate: metrics.concordanceRate,
       precision: metrics.precision,
+      possibleObservations: metrics.possibleObservations,
       detectionProbability: metrics.detectionProbability,
       averageDetectionDelay: metrics.averageDetectionDelay,
     },

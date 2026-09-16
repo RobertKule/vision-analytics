@@ -24,7 +24,7 @@
  * les indicateurs agrègent les trois trames.
  */
 
-import { countAnalyticDetections } from '@/lib/globalExportModel'
+import { countAnalyticDetections, detectionProbability } from '@/lib/globalExportModel'
 import type {
   AnalyticsObservationRow,
   AnalyticsPerimeterConfig,
@@ -52,6 +52,11 @@ export type TypeComparisonInput = {
     concordanceRate: number
     precision: number | null
     detectionProbability: number | null
+    /**
+     * Observations possibles DU TYPE (participation réelle : points du type ×
+     * observateurs ayant participé à ce type), telles que calculées par le moteur.
+     */
+    possibleObservations: number
     averageDetectionDelay: number | null
   }
 }
@@ -97,6 +102,11 @@ export type TypeComparisonColumn = {
   ghostEvents: number
   concordanceRate: number
   precision: number | null
+  /**
+   * Observations possibles du type = points du type × observateurs PARTICIPANTS
+   * du type (dénominateur de participation réelle, §4).
+   */
+  possibleObservations: number
   detectionProbability: number | null
   averageDetectionDelay: number | null
   /** Taux de détection moyen sur ses points logiques (0–100). */
@@ -222,6 +232,7 @@ export function buildTypeComparison(inputs: readonly TypeComparisonInput[]): Typ
       ghostEvents: input.metrics.ghostEvents,
       concordanceRate: input.metrics.concordanceRate,
       precision: input.metrics.precision,
+      possibleObservations: input.metrics.possibleObservations,
       detectionProbability: input.metrics.detectionProbability,
       averageDetectionDelay: input.metrics.averageDetectionDelay,
       averageDetectionRate:
@@ -329,4 +340,193 @@ export function mostObservedPoints(
 /** Clé de passe vidéo d'un point (exposée pour l'affichage groupé par passe). */
 export function pointVideoScope(point: SnapshotPoint): string {
   return videoScopeKey(point.videoId ?? null)
+}
+
+// ——— COMPARAISON PAR GROUPES (Groupe A / Groupe B) ———
+//
+// Un GROUPE est un ENSEMBLE de types d'observation du même projet. Comparer deux
+// groupes n'introduit AUCUNE règle statistique nouvelle : chaque type membre est
+// résolu par le moteur partagé (comme la comparaison de types), et ce module se
+// contente de SOMMER les dénominateurs et les numérateurs des types membres.
+//
+// Agrégation du §6, groupe par groupe :
+//     possibles(groupe) = Σ possibles(type) = Σ (points du type × participants du type)
+//     détections(groupe) = Σ détections(type)
+//     taux(groupe) = détections / possibles   ← PONDÉRÉ par les vrais dénominateurs,
+//                    jamais la moyenne arithmétique des taux des types.
+
+/** Libellés des deux groupes comparés. */
+export const GROUP_A_LABEL = 'Groupe A'
+export const GROUP_B_LABEL = 'Groupe B'
+
+/** Un type membre d'un groupe, avec son propre dénominateur de participation. */
+export type GroupTypeRow = {
+  type: string
+  label: string
+  /** Points/trames configurés du type. */
+  pointCount: number
+  /** Observateurs ayant réellement participé à ce type. */
+  participants: number
+  /** Dénominateur du type = pointCount × participants. */
+  possibleObservations: number
+  detections: number
+  /** Taux du type 0..1 ; null si le type n'a aucune observation possible. */
+  rate: number | null
+}
+
+/** Agrégat d'un groupe — les chiffres affichés dans le tableau et le graphique. */
+export type GroupComparisonSide = {
+  label: string
+  /** Types membres, dans l'ordre demandé. */
+  types: GroupTypeRow[]
+  typeCount: number
+  /** Dénominateur du groupe = Σ dénominateurs de ses types. */
+  possibleObservations: number
+  /** Numérateur du groupe = Σ détections de ses types. */
+  detections: number
+  ghostEvents: number
+  /** Points possibles non détectés = possibles − détections (jamais négatif). */
+  undetected: number
+  /** Observateurs distincts ayant participé à AU MOINS UN type du groupe. */
+  observerCount: number
+  /** Taux PONDÉRÉ du groupe 0..1 ; null si le dénominateur est nul. */
+  rate: number | null
+  /** Délai moyen de réaction du groupe (moyenne des types renseignés) ; null sinon. */
+  averageDetectionDelay: number | null
+}
+
+export type GroupComparisonModel = {
+  groupA: GroupComparisonSide
+  groupB: GroupComparisonSide
+}
+
+/** Affectation des types aux deux groupes (listes de clés de type). */
+export type GroupAssignment = {
+  groupA: readonly string[]
+  groupB: readonly string[]
+}
+
+export type GroupAssignmentCheck = { ok: true } | { ok: false; error: string }
+
+/**
+ * VALIDATION d'une affectation A/B (pure, utilisée côté client ET côté serveur) :
+ *  — Groupe A non vide ;
+ *  — Groupe B non vide ;
+ *  — aucun doublon à l'intérieur d'un groupe ;
+ *  — un même type ne peut pas être dans les DEUX groupes.
+ */
+export function validateGroupAssignment(input: GroupAssignment): GroupAssignmentCheck {
+  const a = (input.groupA ?? []).map(normalizedType)
+  const b = (input.groupB ?? []).map(normalizedType)
+
+  const duplicatesIn = (types: readonly string[]): string | null => {
+    const seen = new Set<string>()
+    for (const type of types) {
+      if (seen.has(type)) return type
+      seen.add(type)
+    }
+    return null
+  }
+  const duplicateA = duplicatesIn(a)
+  if (duplicateA !== null) {
+    return { ok: false, error: `Type sélectionné plusieurs fois dans le ${GROUP_A_LABEL} : « ${typeColumnLabel(duplicateA)} ».` }
+  }
+  const duplicateB = duplicatesIn(b)
+  if (duplicateB !== null) {
+    return { ok: false, error: `Type sélectionné plusieurs fois dans le ${GROUP_B_LABEL} : « ${typeColumnLabel(duplicateB)} ».` }
+  }
+
+  const inB = new Set(b)
+  const shared = a.find((type) => inB.has(type))
+  if (shared !== undefined) {
+    return {
+      ok: false,
+      error: `Un même type ne peut pas être comparé à lui-même : « ${typeColumnLabel(shared)} » est présent dans les deux groupes.`,
+    }
+  }
+
+  if (a.length === 0) return { ok: false, error: `Sélectionnez au moins un type dans le ${GROUP_A_LABEL}.` }
+  if (b.length === 0) return { ok: false, error: `Sélectionnez au moins un type dans le ${GROUP_B_LABEL}.` }
+  return { ok: true }
+}
+
+/** Agrège les types résolus d'un groupe en un unique jeu de chiffres. */
+function aggregateGroup(
+  label: string,
+  inputs: readonly TypeComparisonInput[],
+): GroupComparisonSide {
+  const types: GroupTypeRow[] = []
+  const observers = new Set<string>()
+  let possibleObservations = 0
+  let detections = 0
+  let ghostEvents = 0
+  const delays: number[] = []
+
+  for (const input of inputs) {
+    for (const row of input.rows) observers.add(row.userId)
+    const possible = input.metrics.possibleObservations
+    const typeDetections = input.metrics.detections
+    types.push({
+      type: normalizedType(input.type),
+      label: typeColumnLabel(input.type),
+      pointCount: input.metrics.configuredPoints,
+      participants: input.observerCount,
+      possibleObservations: possible,
+      detections: typeDetections,
+      rate: detectionProbability(typeDetections, possible),
+    })
+    possibleObservations += possible
+    detections += typeDetections
+    ghostEvents += input.metrics.ghostEvents
+    if (input.metrics.averageDetectionDelay !== null) delays.push(input.metrics.averageDetectionDelay)
+  }
+
+  return {
+    label,
+    types,
+    typeCount: types.length,
+    possibleObservations,
+    detections,
+    ghostEvents,
+    undetected: Math.max(0, possibleObservations - detections),
+    observerCount: observers.size,
+    // Taux PONDÉRÉ : le numérateur ET le dénominateur sont sommés séparément.
+    rate: detectionProbability(detections, possibleObservations),
+    averageDetectionDelay:
+      delays.length > 0
+        ? Math.round((delays.reduce((acc, delay) => acc + delay, 0) / delays.length) * 10) / 10
+        : null,
+  }
+}
+
+/**
+ * Construit la comparaison de deux groupes à partir des types DÉJÀ RÉSOLUS par le
+ * moteur analytique partagé. L'appelant garantit la disjonction A/B (voir
+ * `validateGroupAssignment`) : un type ne peut donc jamais compter dans les deux
+ * groupes, et les points possibles ne sont jamais comptés deux fois.
+ */
+export function buildGroupComparison(
+  groupA: readonly TypeComparisonInput[],
+  groupB: readonly TypeComparisonInput[],
+): GroupComparisonModel {
+  return {
+    groupA: aggregateGroup(GROUP_A_LABEL, groupA),
+    groupB: aggregateGroup(GROUP_B_LABEL, groupB),
+  }
+}
+
+/**
+ * Écart de taux entre les deux groupes, en POINTS de pourcentage (A − B).
+ * null si l'un des deux taux n'est pas calculable.
+ */
+export function groupRateGap(model: GroupComparisonModel): number | null {
+  const a = model.groupA.rate
+  const b = model.groupB.rate
+  if (a === null || b === null) return null
+  return Math.round((a - b) * 1000) / 10
+}
+
+/** Total des fausses alertes des deux groupes (contexte affiché, jamais mélangé aux détections). */
+export function totalGroupGhostEvents(model: GroupComparisonModel): number {
+  return model.groupA.ghostEvents + model.groupB.ghostEvents
 }

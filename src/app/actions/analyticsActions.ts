@@ -5,7 +5,15 @@ import { getCurrentProjectPermissions } from '@/lib/projectGuard'
 import { prisma } from '@/lib/prisma'
 import { captureImageEndpoint } from '@/lib/captureImageAccess'
 import { recordAudit, AUDIT_ACTIONS } from '@/lib/audit'
-import { buildTypeComparison, typeColumnLabel, type TypeComparisonModel } from '@/lib/typeComparison'
+import {
+  buildGroupComparison,
+  buildTypeComparison,
+  typeColumnLabel,
+  validateGroupAssignment,
+  type GroupComparisonModel,
+  type TypeComparisonInput,
+  type TypeComparisonModel,
+} from '@/lib/typeComparison'
 import {
   auditVersionViewed,
   resolveAnalyticsView,
@@ -381,27 +389,15 @@ export async function listComparableTypes(projectId: string): Promise<Comparable
  * Conséquence directe : pour un type donné, le taux affiché ici est EXACTEMENT celui
  * du tableau de bord filtré sur ce type, et celui de l'Excel/PDF exporté.
  */
-export async function compareAnalyticsTypes(
+async function resolveTypeInputs(
   projectId: string,
-  types: string[],
-  options?: ProjectAnalyticsOptions | null,
-): Promise<TypeComparisonModel | null> {
-  const id = typeof projectId === 'string' ? projectId.trim() : ''
-  if (!id) return null
-  const permissions = await getCurrentProjectPermissions(id)
-  if (!permissions.canAnalyze) return null
-
-  const wanted = Array.from(
-    new Set((Array.isArray(types) ? types : []).map((type) => String(type ?? '').trim())),
-  ).slice(0, MAX_COMPARED_TYPES)
-  if (wanted.length === 0) return null
-
-  const selector = normalizeSelector(options)
-
+  types: readonly string[],
+  selector: AnalyticsVersionSelector,
+): Promise<TypeComparisonInput[]> {
   // Une résolution PAR TYPE : le moteur partagé, jamais une seconde implémentation.
   const resolved = await Promise.all(
-    wanted.map(async (type) => {
-      const view = await resolveAnalyticsView(id, selector, { observationType: type })
+    types.map(async (type): Promise<TypeComparisonInput | null> => {
+      const view = await resolveAnalyticsView(projectId, selector, { observationType: type })
       if (!view) return null
       const observerIds = new Set<string>()
       for (const row of view.rows) observerIds.add(row.userId)
@@ -418,14 +414,39 @@ export async function compareAnalyticsTypes(
           windowsHit: view.metrics.windowsHit,
           concordanceRate: view.metrics.concordanceRate,
           precision: view.metrics.precision,
+          // Dénominateur de PARTICIPATION RÉELLE (§4), calculé par le moteur.
+          possibleObservations: view.metrics.possibleObservations,
           detectionProbability: view.metrics.detectionProbability,
           averageDetectionDelay: view.metrics.averageDetectionDelay,
         },
       }
     }),
   )
+  return resolved.filter((entry): entry is TypeComparisonInput => entry !== null)
+}
 
-  const inputs = resolved.filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+/** Normalise et borne une liste de types reçue du client. */
+function normalizeTypeList(types: unknown, limit: number): string[] {
+  return Array.from(
+    new Set((Array.isArray(types) ? types : []).map((type) => String(type ?? '').trim())),
+  ).slice(0, limit)
+}
+
+export async function compareAnalyticsTypes(
+  projectId: string,
+  types: string[],
+  options?: ProjectAnalyticsOptions | null,
+): Promise<TypeComparisonModel | null> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return null
+  const permissions = await getCurrentProjectPermissions(id)
+  if (!permissions.canAnalyze) return null
+
+  const wanted = normalizeTypeList(types, MAX_COMPARED_TYPES)
+  if (wanted.length === 0) return null
+
+  const selector = normalizeSelector(options)
+  const inputs = await resolveTypeInputs(id, wanted, selector)
   if (inputs.length === 0) return null
 
   const session = await getCurrentSession()
@@ -444,6 +465,72 @@ export async function compareAnalyticsTypes(
   })
 
   return buildTypeComparison(inputs)
+}
+
+/** Résultat de la comparaison par groupes : le modèle, ou le refus explicatif. */
+export type GroupComparisonResult =
+  | { ok: true; model: GroupComparisonModel }
+  | { ok: false; error: string }
+
+/**
+ * COMPARAISON PAR GROUPES A/B — LECTURE SEULE.
+ *
+ * Un groupe est un ENSEMBLE de types du MÊME projet. Rien de nouveau n'est calculé :
+ * chaque type est résolu par `resolveAnalyticsView` (le point d'entrée unique du
+ * tableau de bord et de tous les exports), puis `buildGroupComparison` SOMME les
+ * dénominateurs et les numérateurs :
+ *
+ *     possibles(groupe) = Σ (points du type × observateurs PARTICIPANTS du type)
+ *     détections(groupe) = Σ détections du type
+ *     taux(groupe) = Σ détections / Σ possibles        ← pondéré, jamais une moyenne
+ *
+ * Les mêmes chiffres alimentent le tableau ET les graphiques circulaires.
+ *
+ * La validation (groupes non vides, aucun type dans les deux groupes, aucun doublon)
+ * est faite ICI, côté serveur : un appel direct à la Server Action est refusé pour
+ * les mêmes raisons qu'un clic dans l'interface.
+ */
+export async function compareAnalyticsGroups(
+  projectId: string,
+  groupA: string[],
+  groupB: string[],
+  options?: ProjectAnalyticsOptions | null,
+): Promise<GroupComparisonResult> {
+  const id = typeof projectId === 'string' ? projectId.trim() : ''
+  if (!id) return { ok: false, error: 'Projet introuvable.' }
+  const permissions = await getCurrentProjectPermissions(id)
+  // Garde d'accès AVANT toute lecture : masquer le bouton ne suffit jamais.
+  if (!permissions.canAnalyze) return { ok: false, error: 'Accès refusé à ce projet.' }
+
+  const a = normalizeTypeList(groupA, MAX_COMPARED_TYPES)
+  const b = normalizeTypeList(groupB, MAX_COMPARED_TYPES)
+  const check = validateGroupAssignment({ groupA: a, groupB: b })
+  if (!check.ok) return { ok: false, error: check.error }
+
+  const selector = normalizeSelector(options)
+  const [left, right] = await Promise.all([
+    resolveTypeInputs(id, a, selector),
+    resolveTypeInputs(id, b, selector),
+  ])
+  if (left.length === 0 && right.length === 0) {
+    return { ok: false, error: 'Aucune donnée exploitable pour ces groupes.' }
+  }
+
+  const session = await getCurrentSession()
+  await recordAudit({
+    userId: session?.uid ?? null,
+    action: AUDIT_ACTIONS.analyticsGroupsCompared,
+    entityType: 'analytics',
+    entityId: id,
+    metadata: {
+      groupA: left.map((entry) => entry.type).join(','),
+      groupB: right.map((entry) => entry.type).join(','),
+      versionId: selector.versionId ?? null,
+      asOfDate: selector.asOfDate ?? null,
+    },
+  })
+
+  return { ok: true, model: buildGroupComparison(left, right) }
 }
 
 /** Historique des versions analytiques d'un projet (sélecteur d'interface). */

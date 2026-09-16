@@ -16,14 +16,19 @@ import {
   type TypePointCell,
 } from '@/lib/typeComparison'
 import { friendlyActionError } from '@/lib/actionError'
+import GroupComparisonPanel from '@/components/admin/projects/GroupComparisonPanel'
 
 /**
- * COMPARAISON DE PLUSIEURS TYPES (§14).
+ * COMPARAISONS D'UN PROJET — deux modes, un seul moteur.
  *
- * L'interface ne calcule RIEN : elle envoie les types cochés au serveur, qui résout
- * chaque type par le moteur analytique PARTAGÉ (`resolveAnalyticsView`) et renvoie
- * une matrice déjà agrégée. Le taux affiché pour un type est donc exactement celui
- * du tableau de bord filtré sur ce type.
+ *  — « Par type » (§14) : la matrice point × type.
+ *  — « Par groupes (A/B) » (§3, §6) : deux ensembles de types, agrégés par somme
+ *    de leurs dénominateurs et de leurs numérateurs (cf. `GroupComparisonPanel`).
+ *
+ * Dans les deux cas l'interface ne calcule RIEN : elle envoie la sélection au
+ * serveur, qui résout chaque type par le moteur analytique PARTAGÉ
+ * (`resolveAnalyticsView`) et renvoie des chiffres déjà agrégés. Le taux affiché
+ * pour un type est donc exactement celui du tableau de bord filtré sur ce type.
  */
 
 /** Cellule de matrice : `null` = ce type ne porte pas ce point (pas « 0 % »). */
@@ -58,6 +63,7 @@ export default function TypeComparisonPanel({
   /** Sélecteur de version transmis tel quel : comparer une version compare son époque. */
   options?: ProjectAnalyticsOptions | null
 }) {
+  const [mode, setMode] = useState<'type' | 'group'>('type')
   const [available, setAvailable] = useState<ComparableTypesDto[] | null>(null)
   const [selected, setSelected] = useState<string[]>([])
   const [model, setModel] = useState<TypeComparisonModel | null>(null)
@@ -106,6 +112,43 @@ export default function TypeComparisonPanel({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* ——— Mode de comparaison : par type / par groupes ——— */}
+      <div
+        role="tablist"
+        aria-label="Mode de comparaison"
+        className="inline-flex w-fit items-center gap-1 rounded-xl border border-zinc-200 bg-white p-1 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        {(
+          [
+            { id: 'type', label: 'Par type' },
+            { id: 'group', label: 'Par groupes (A/B)' },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={mode === tab.id}
+            onClick={() => setMode(tab.id)}
+            className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${
+              mode === tab.id
+                ? 'bg-ink text-milk dark:bg-milk dark:text-ink'
+                : 'text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-white/5'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'group' ? (
+        <GroupComparisonPanel
+          projectId={projectId}
+          available={available ?? []}
+          options={options ?? null}
+        />
+      ) : (
+        <>
       {/* ——— Sélection des types ——— */}
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -241,6 +284,7 @@ export default function TypeComparisonPanel({
                     <th scope="col" className="px-6 py-3">Type</th>
                     <th scope="col" className="px-6 py-3">Points</th>
                     <th scope="col" className="px-6 py-3">Observateurs</th>
+                    <th scope="col" className="px-6 py-3">Points possibles</th>
                     <th scope="col" className="px-6 py-3">Détections</th>
                     <th scope="col" className="px-6 py-3">Concordance</th>
                     <th scope="col" className="px-6 py-3">Précision</th>
@@ -259,6 +303,9 @@ export default function TypeComparisonPanel({
                       </td>
                       <td className="px-6 py-3 text-zinc-700 dark:text-zinc-300">
                         {column.observerCount}
+                      </td>
+                      <td className="px-6 py-3 tabular-nums text-zinc-700 dark:text-zinc-300">
+                        {column.possibleObservations}
                       </td>
                       <td className="px-6 py-3 font-semibold text-gold-700 dark:text-gold-400">
                         {column.detections}
@@ -344,6 +391,8 @@ export default function TypeComparisonPanel({
               {model.emptyTypes.map((type) => type || 'Générique').join(', ')}.
             </p>
           ) : null}
+        </>
+      )}
         </>
       )}
     </div>

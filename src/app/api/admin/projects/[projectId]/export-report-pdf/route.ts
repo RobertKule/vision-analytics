@@ -766,7 +766,11 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
     { header: 'Cible', width: 96 },
     { header: 'Fenêtre Temporelle', width: 96 },
     { header: 'Durée', width: 40 },
-    { header: 'Observateurs', width: 70 },
+    // Nombre de DÉTECTEURS de la fenêtre. Le dénominateur de la concordance est le
+    // nombre d'observateurs ayant participé au TYPE de la fenêtre : il n'est pas
+    // affiché ici pour ne pas laisser croire que « X / observateurs du projet » est
+    // le rapport dont la colonne suivante est issue.
+    { header: 'Détecteurs', width: 70 },
     { header: 'Concordance', width: 64 },
     { header: 'Délai Moyen', width: 64 },
   ]
@@ -779,7 +783,7 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
       point.pointName,
       `${formatSeconds(point.trameDebut)} – ${formatSeconds(point.trameFin)}`,
       `${point.targetDuration}s`,
-      `${point.observerCount} / ${report.totalObservers}`,
+      `${point.observerCount}`,
       `${point.concordanceRate}%`,
       point.avgDelaySeconds !== null ? `+${point.avgDelaySeconds}s` : '—',
     ])
@@ -821,7 +825,7 @@ export async function POST(request: Request, ctx: ExportContext): Promise<NextRe
   drawTextLine(
     'Note — Les trames constituent l’unité d’observation : plusieurs captures d’un même observateur ' +
       'dans une même trame et sous le même type comptent pour une seule détection analytique. ' +
-      'Probabilité empirique = détections / (points configurés × observateurs).',
+      'Probabilité empirique = détections / points possibles, pondérée par type : chaque type garde son propre dénominateur (fenêtres du type × observateurs ayant réellement participé à ce type).',
     { size: 7, color: COLOR_MUTED, lineHeight: 9 },
   )
   gap(6)
