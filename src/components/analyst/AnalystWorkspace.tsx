@@ -9,12 +9,15 @@ import {
   ChartColumn,
   CirclePlus,
   Copy,
+  Crown,
   Eye,
   Film,
   FolderKanban,
   KeyRound,
+  Loader2,
   Plus,
   Share2,
+  Target,
   Trash2,
   UserRound,
   Users,
@@ -28,6 +31,7 @@ import {
   shareProjectWithUser,
   unshareProjectFromUser,
 } from '@/app/actions/analystActions'
+import { createObserverToken } from '@/app/actions/observerTokenActions'
 import type { AnalystProjectDto } from '@/lib/types'
 import { fill, type AnalystText, type Locale } from '@/lib/i18n'
 import { parseTimecodeToSeconds, secondsToTimecode } from '@/lib/timecode'
@@ -41,6 +45,7 @@ import {
 import { deriveObservationNameFromVideo } from '@/lib/videoName'
 import { friendlyActionError } from '@/lib/actionError'
 import Sheet from '@/components/ui/Sheet'
+import Accordion from '@/components/ui/Accordion'
 import ObserverTokensTab from '@/components/admin/projects/ObserverTokensTab'
 import StepperRail, { type StepperStep } from '@/components/ui/StepperRail'
 import VideoUrlPicker from '@/components/ui/VideoUrlPicker'
@@ -86,32 +91,66 @@ export default function AnalystWorkspace({ locale, t, projects, isAdmin }: Analy
   const sharedCount = projects.filter((project) => project.isShared).length
   const windowCount = projects.reduce((sum, project) => sum + project.points.length, 0)
 
-  const chip = (label: string, value: number, accent: string) => (
+  // Cartes de synthèse : mêmes cartes que l'espace admin (icône colorée + valeur + repère),
+  // pour que le tableau de bord analyste se lise exactement comme celui de l'administration.
+  const statCard = (
+    label: string,
+    value: number,
+    Icon: typeof FolderKanban,
+    accent: string,
+    hint: string,
+  ) => (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-[#161b22]">
-      <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-        {label}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          {label}
+        </p>
+        <span
+          className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${accent}`}
+        >
+          <Icon aria-hidden="true" className="h-4 w-4 text-white" />
+        </span>
+      </div>
+      <p className="mt-1.5 text-2xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
+        {value}
       </p>
-      <p className={`mt-1 text-2xl font-extrabold tracking-tight ${accent}`}>{value}</p>
+      <p className="mt-0.5 truncate text-[11px] text-zinc-400 dark:text-zinc-500">{hint}</p>
     </div>
   )
 
   return (
     <div className="flex flex-col gap-5">
       {/* ——— Synthèse ——— */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {chip(
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {statCard(
           locale === 'en' ? 'Projects' : 'Projets',
           projects.length,
-          'text-gold-700 dark:text-gold-400',
+          FolderKanban,
+          'bg-ink',
+          locale === 'en' ? 'Accessible from this workspace' : 'Accessibles depuis cet espace',
         )}
-        {chip(locale === 'en' ? 'Owned' : 'Possédés', ownedCount, 'text-gold-700 dark:text-gold-400')}
-        {chip(locale === 'en' ? 'Shared' : 'Partagés', sharedCount, 'text-gold-700 dark:text-gold-400')}
-        {chip(
+        {statCard(
+          locale === 'en' ? 'Owned' : 'Possédés',
+          ownedCount,
+          Crown,
+          'bg-gold-700',
+          locale === 'en' ? 'You manage the sessions' : 'Vous gérez les sessions',
+        )}
+        {statCard(
+          locale === 'en' ? 'Shared' : 'Partagés',
+          sharedCount,
+          Share2,
+          'bg-gold-500',
+          locale === 'en' ? 'Invited to another workspace' : 'Invités par un collègue',
+        )}
+        {statCard(
           locale === 'en' ? 'Validation windows' : 'Fenêtres de validation',
           windowCount,
-          'text-zinc-800 dark:text-zinc-100',
+          Target,
+          'bg-slate',
+          locale === 'en' ? 'Across all projects' : 'Cumulées sur tous les projets',
         )}
-      </div>
+      </section>
 
       {/* ——— Nouveau projet ——— */}
       <div>
@@ -452,15 +491,46 @@ function ProjectCard({
 }) {
   const router = useRouter()
   const [addingWindow, setAddingWindow] = useState(false)
-  const [showObserverLinks, setShowObserverLinks] = useState(false)
+  const [creatingLink, setCreatingLink] = useState(false)
 
+  /**
+   * « Copier le lien de session » CRÉE la clé, puis copie le lien complet `/share/<JETON>`.
+   *
+   * Un lien nu `/observe/<projet>` n'ouvre aucune session à un observateur non invité :
+   * il ne doit donc jamais être présenté comme un lien de session. La clé est fabriquée
+   * CÔTÉ SERVEUR (`createObserverToken` revérifie le droit de créer des liens sur ce
+   * projet, et refuse un projet archivé) ; le jeton brut n'existe qu'ici, une seule fois.
+   */
   const handleCopyLink = async () => {
-    const url = `${window.location.origin}/observe/${project.id}`
-    const ok = await copyToClipboard(url)
-    if (ok) {
-      toast.success(locale === 'en' ? 'Session link copied' : 'Lien de session copié')
-    } else {
-      toast.error(locale === 'en' ? 'Copy failed' : 'Copie impossible')
+    if (creatingLink) return
+    setCreatingLink(true)
+    try {
+      const result = await createObserverToken({ projectId: project.id }).catch(
+        (error: unknown) => ({ ok: false as const, error: friendlyActionError(error, locale) }),
+      )
+      if (!result.ok) {
+        toast.error(locale === 'en' ? 'Link creation failed' : 'Création du lien impossible', {
+          description: result.error,
+        })
+        return
+      }
+      const url = `${window.location.origin}/share/${result.rawToken}`
+      const copied = await copyToClipboard(url)
+      if (copied) {
+        toast.success(locale === 'en' ? 'Session link created and copied' : 'Lien de session créé et copié', {
+          description:
+            locale === 'en'
+              ? 'The key is shown only once — send this link to the observer.'
+              : 'La clé n’est affichée qu’une seule fois — transmettez ce lien à l’observateur.',
+        })
+      } else {
+        // La copie a échoué mais la clé EXISTE : on l'affiche pour ne pas la perdre.
+        toast.warning(locale === 'en' ? 'Copy failed — key created' : 'Copie impossible — clé créée', {
+          description: url,
+        })
+      }
+    } finally {
+      setCreatingLink(false)
     }
   }
 
@@ -527,15 +597,24 @@ function ProjectCard({
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleCopyLink()}
-            title={t.copySessionLink}
-            aria-label={`${t.copySessionLink} — ${project.title}`}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-800 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/5"
-          >
-            <Copy aria-hidden="true" className="h-3.5 w-3.5" />
-          </button>
+          {/* Créer la clé n'est offert qu'à qui en a le droit (propriétaire, partage
+              avec édition, ADMIN) — la même règle est revérifiée côté serveur. */}
+          {canManageObserverLinks ? (
+            <button
+              type="button"
+              disabled={creatingLink}
+              onClick={() => void handleCopyLink()}
+              title={t.copySessionLink}
+              aria-label={`${t.copySessionLink} — ${project.title}`}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/5"
+            >
+              {creatingLink ? (
+                <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+              )}
+            </button>
+          ) : null}
           <Link
             href={`/analyst/projects/${project.id}/analytics`}
             className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-gold-700 px-3 text-xs font-semibold text-white transition-colors hover:bg-gold-600 dark:bg-gold-500 dark:hover:bg-gold-400"
@@ -564,10 +643,10 @@ function ProjectCard({
         </div>
       </header>
 
-      <div className="px-5 py-4">
+      <div className="space-y-3 px-5 py-4">
         {/* Vidéo */}
         {project.videoUrl ? (
-          <p className="inline-flex items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-1 font-mono text-xs text-zinc-700 dark:bg-white/5 dark:text-zinc-300">
+          <p className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-zinc-100 px-2 py-1 font-mono text-xs text-zinc-700 dark:bg-white/5 dark:text-zinc-300">
             <Film aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-gold-700 dark:text-gold-400" />
             <span className="truncate">{project.videoUrl}</span>
           </p>
@@ -577,19 +656,26 @@ function ProjectCard({
           </p>
         )}
 
-        {/* Fenêtres */}
-        <div className="mt-4">
-          <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-            {t.pointsLabel} ({project.points.length})
-          </h4>
+        {/* Fenêtres de validation */}
+        <Accordion
+          id={`windows-${project.id}`}
+          title={t.pointsLabel}
+          icon={Target}
+          count={project.points.length}
+          hint={
+            locale === 'en'
+              ? 'Frames used to attribute each capture'
+              : 'Trames servant à attribuer chaque capture'
+          }
+        >
           {project.points.length > 0 ? (
-            <ul className="mt-2 flex flex-col gap-2">
+            <ul className="flex flex-col gap-2">
               {project.points.map((point) => (
                 <WindowRow key={point.id} point={point} locale={locale} />
               ))}
             </ul>
           ) : (
-            <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{t.noPoints}</p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">{t.noPoints}</p>
           )}
           <button
             type="button"
@@ -599,47 +685,53 @@ function ProjectCard({
             <Plus aria-hidden="true" className="h-3.5 w-3.5" />
             {t.addPoint}
           </button>
-        </div>
+        </Accordion>
 
-        {addingWindow ? (
-          <AddWindowSheet
-            projectId={project.id}
-            existingWindows={project.points}
-            locale={locale}
-            t={t}
-            onClose={() => setAddingWindow(false)}
-          />
-        ) : null}
-
-        {/* Liens d'accès observateur — le propriétaire invite et génère les sessions (§2) */}
+        {/* Liens d'accès observateur — le propriétaire invite et génère les sessions (§2).
+            `lazy` : la liste n'est chargée qu'à la première ouverture du panneau. */}
         {canManageObserverLinks ? (
-          <div className="mt-4 border-t border-zinc-100 pt-4 dark:border-white/10">
-            <button
-              type="button"
-              onClick={() => setShowObserverLinks((current) => !current)}
-              aria-expanded={showObserverLinks}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zinc-200 px-3 text-xs font-semibold text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/5"
-            >
-              <KeyRound aria-hidden="true" className="h-3.5 w-3.5" />
-              {showObserverLinks
-                ? locale === 'en'
-                  ? 'Hide observer links'
-                  : 'Masquer les liens observateurs'
-                : locale === 'en'
-                  ? 'Observer links & invitations'
-                  : 'Liens observateurs et invitations'}
-            </button>
-            {showObserverLinks ? (
-              <div className="mt-3">
-                <ObserverTokensTab projectId={project.id} projectTitle={project.title} />
-              </div>
-            ) : null}
-          </div>
+          <Accordion
+            id={`observer-links-${project.id}`}
+            title={
+              locale === 'en' ? 'Observer links & invitations' : 'Liens observateurs et invitations'
+            }
+            icon={KeyRound}
+            defaultOpen={false}
+            lazy
+            hint={
+              locale === 'en'
+                ? 'One key = one observer session'
+                : 'Une clé = une session observateur'
+            }
+          >
+            <ObserverTokensTab projectId={project.id} projectTitle={project.title} />
+          </Accordion>
         ) : null}
 
         {/* Partage (propriétaire ou administrateur) */}
-        {canShare ? <SharePanel project={project} locale={locale} t={t} /> : null}
+        {canShare ? (
+          <Accordion
+            id={`share-${project.id}`}
+            title={t.sharePanel}
+            icon={Share2}
+            defaultOpen={false}
+            hint={t.shareHint}
+          >
+            <SharePanel project={project} locale={locale} t={t} />
+          </Accordion>
+        ) : null}
       </div>
+
+      {/* Modale d'ajout : rendue HORS accordéon — un panneau replié la masquerait. */}
+      {addingWindow ? (
+        <AddWindowSheet
+          projectId={project.id}
+          existingWindows={project.points}
+          locale={locale}
+          t={t}
+          onClose={() => setAddingWindow(false)}
+        />
+      ) : null}
     </article>
   )
 }
@@ -1080,15 +1172,10 @@ function SharePanel({
     }
   }
 
+  // Titre et rappel vivent dans l'en-tête de l'accordéon qui porte ce panneau.
   return (
-    <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/60 p-4 dark:border-white/10 dark:bg-white/5">
-      <h4 className="flex items-center gap-2 text-sm font-semibold text-zinc-800 dark:text-zinc-100">
-        <Share2 aria-hidden="true" className="h-3.5 w-3.5 text-gold-700 dark:text-gold-400" />
-        {t.sharePanel}
-      </h4>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{t.shareHint}</p>
-
-      <div className="mt-3 flex items-center gap-2">
+    <div>
+      <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <UserRound aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
           <input

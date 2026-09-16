@@ -11,6 +11,7 @@ import {
 import {
   buildDetectionProbabilityTable,
   buildProjectSummary,
+  computeTypeParticipation,
 } from '@/lib/globalExportModel'
 import { applyObserverExclusions } from '@/lib/observerExclusion'
 
@@ -144,8 +145,11 @@ describe('K2 — les helpers d’export reproduisent EXACTEMENT le moteur', () =
       const matching = ROWS.filter((item) => item.pointId === metric.pointId && !item.isGhostPoint)
       const detectors = new Set(matching.map((item) => item.userId))
       expect(metric.observersDetected).toBe(detectors.size)
+      // Dénominateur = observateurs PARTICIPANTS au type de la fenêtre — jamais le
+      // total des observateurs du projet (§4).
+      const participants = computeTypeParticipation(source).get(metric.type)?.participants ?? 0
       expect(metric.concordanceRate).toBe(
-        METRICS.observerCount > 0 ? Math.round((detectors.size / METRICS.observerCount) * 100) : 0,
+        participants > 0 ? Math.round((detectors.size / participants) * 100) : 0,
       )
       const delays = matching.map((item) => Math.max(0, item.timestampTotal - metric.trameDebut))
       expect(metric.avgDelaySeconds).toBe(
@@ -198,8 +202,15 @@ describe('K3 — un observateur déclassé disparaît de TOUTES les surfaces', (
     // la trame « chevauchante » que personne ne couvre reste à 0 %.
     expect(withoutB.perPoint.find((item) => item.pointId === 'precise')?.concordanceRate).toBe(100)
     expect(withoutB.perPoint.find((item) => item.pointId === 'large')?.concordanceRate).toBe(100)
-    // Concordance globale = MOYENNE des trois trames configurées : (100 + 100 + 0) / 3.
+    // Taux global = PONDÉRÉ Σ détections / Σ possibles : après déclassement,
+    // 2 détections / (3 fenêtres × 1 participant) = 66,7 % ⇒ 67 — le numérateur ET
+    // le dénominateur suivent le relevé filtré.
+    // (Ici la moyenne des fenêtres donnerait le même entier, parce que tous les
+    // observateurs restants participent au seul type du périmètre. Le cas où les
+    // deux formules divergent — participations hétérogènes — est couvert par
+    // `possibleObservations.test.ts`, bloc H.)
     expect(withoutB.concordanceRate).toBe(67)
+    expect(withoutB.concordanceRate).toBe(Math.round((withoutB.detectionProbability ?? 0) * 100))
     // Contre-preuve : sur un dénominateur de 2 (observateur écarté encore compté),
     // ces mêmes trames ne vaudraient que 50 %.
     expect(METRICS.perPoint.find((item) => item.pointId === 'precise')?.concordanceRate).toBe(50)

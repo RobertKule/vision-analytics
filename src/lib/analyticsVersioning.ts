@@ -47,11 +47,13 @@ import {
   countAnalyticDetections,
   countGhostEvents,
   countWindowsHit,
+  computeTypeParticipation,
   detectionProbability,
   interpretationBand,
   observerDisplayLabel,
   participationByObserver,
   totalPossibleObservations,
+  typeKeyOf,
   type DetectionProbabilityRow,
   type GlobalExportPoint,
   type GlobalExportProject,
@@ -144,7 +146,11 @@ export type SnapshotPointMetric = {
   observersDetected: number
   /** Détections analytiques sur la fenêtre. */
   detections: number
-  /** Taux de concordance 0–100 = observateurs détecteurs / observateurs du jeu. */
+  /**
+   * Taux de concordance 0–100 de la fenêtre = observateurs détecteurs / observateurs
+   * PARTICIPANTS au type de CETTE fenêtre (jamais le total des observateurs du jeu,
+   * qui gonflerait le dénominateur des types les moins suivis).
+   */
   concordanceRate: number
   /** Délai moyen (s) par événement validé de la fenêtre ; null si aucun. */
   avgDelaySeconds: number | null
@@ -201,7 +207,13 @@ export type AnalyticsVersionMetrics = {
   detectionProbability: number | null
   /** Bande d'interprétation FR de la probabilité. */
   interpretation: string
-  /** Moyenne des taux de concordance des fenêtres (0–100, entier). */
+  /**
+   * Taux de concordance GLOBAL (0–100, entier) = Σ détections / Σ possibles × 100,
+   * PONDÉRÉ par les dénominateurs réels de chaque type. C'est le même nombre que
+   * `detectionProbability × 100`, arrondi : les deux surfaces mesurent la même
+   * grandeur et ne doivent jamais diverger. Jamais la moyenne arithmétique des
+   * taux de fenêtres (dénominateurs différents ⇒ moyenne fausse, §5).
+   */
   concordanceRate: number
   /** Délai moyen de réaction par événement validé (s) ; null si aucun. */
   averageDetectionDelay: number | null
@@ -394,6 +406,11 @@ function roundTenth(value: number): number {
  *
  * TAUX GLOBAL — pondéré par les vrais dénominateurs : `Σ détections / Σ possibles`,
  * jamais la moyenne arithmétique des taux de types aux dénominateurs différents.
+ *
+ * LES DEUX SURFACES D'AFFICHAGE SONT LE MÊME NOMBRE : `concordanceRate` (tableau de
+ * bord, PDF, classeurs) et `detectionProbability` (carte « Probabilité de
+ * détection ») sortent tous deux de `detections / possibleObservations`. Un écart
+ * entre les deux signale une régression, jamais une nuance d'analyse.
  */
 export function computeAnalyticsMetrics(
   config: AnalyticsPerimeterConfig,
@@ -411,12 +428,17 @@ export function computeAnalyticsMetrics(
   // Somme des dénominateurs de chaque type — le seul dénominateur global admis.
   const possibleObservations = totalPossibleObservations(source)
   const probability = detectionProbability(detections, possibleObservations)
+  // Participation réelle par type : source unique des dénominateurs (§4).
+  const participation = computeTypeParticipation(source)
 
   // ——— Par fenêtre ———
   const delays: number[] = []
   const perPoint: SnapshotPointMetric[] = config.points.map((point) => {
     const matched = rows.filter((row) => row.pointId === point.id && !row.isGhostPoint)
     const detectors = new Set(matched.map((row) => row.userId))
+    // Dénominateur de la fenêtre = observateurs qui ont RÉELLEMENT participé au
+    // type de cette fenêtre — jamais le total des observateurs du projet.
+    const participants = participation.get(typeKeyOf(point.type))?.participants ?? 0
     const pointDelays = matched.map((row) => row.timestampTotal - point.trameDebut)
     for (const delay of pointDelays) delays.push(delay)
     const clamped = pointDelays.map((delay) => Math.max(0, delay))
@@ -429,8 +451,7 @@ export function computeAnalyticsMetrics(
       videoName: point.videoName,
       observersDetected: detectors.size,
       detections: countAnalyticDetections(matched),
-      concordanceRate:
-        observerCount > 0 ? Math.round((detectors.size / observerCount) * 100) : 0,
+      concordanceRate: participants > 0 ? Math.round((detectors.size / participants) * 100) : 0,
       avgDelaySeconds:
         clamped.length > 0
           ? roundTenth(clamped.reduce((acc, delay) => acc + delay, 0) / clamped.length)
@@ -438,10 +459,10 @@ export function computeAnalyticsMetrics(
     }
   })
 
-  const concordanceRate =
-    perPoint.length > 0
-      ? Math.round(perPoint.reduce((acc, point) => acc + point.concordanceRate, 0) / perPoint.length)
-      : 0
+  // Taux GLOBAL = le taux PONDÉRÉ §5 (Σ détections / Σ possibles), arrondi. Calculé
+  // depuis les compteurs — jamais depuis les taux arrondis des fenêtres, dont la
+  // moyenne donnerait un nombre différent du même indicateur affiché ailleurs.
+  const concordanceRate = probability !== null ? Math.round(probability * 100) : 0
   const averageDetectionDelay =
     delays.length > 0 ? roundTenth(delays.reduce((acc, d) => acc + d, 0) / delays.length) : null
 

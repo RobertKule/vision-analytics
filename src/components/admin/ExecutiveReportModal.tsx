@@ -394,7 +394,10 @@ export default function ExecutiveReportModal({
                     <th scope="col" className="px-4 py-2.5">Cible</th>
                     <th scope="col" className="px-4 py-2.5">Fenêtre Temporelle</th>
                     <th scope="col" className="px-4 py-2.5">Durée</th>
-                    <th scope="col" className="px-4 py-2.5">Observateurs</th>
+                    {/* Nombre de DÉTECTEURS de la fenêtre — le dénominateur de la
+                        concordance est le nombre d'observateurs du TYPE de la
+                        fenêtre, pas le total du projet. */}
+                    <th scope="col" className="px-4 py-2.5">Détecteurs</th>
                     <th scope="col" className="px-4 py-2.5">Concordance</th>
                     <th scope="col" className="px-4 py-2.5">Délai Moyen</th>
                   </tr>
@@ -407,9 +410,7 @@ export default function ExecutiveReportModal({
                         {formatSeconds(point.trameDebut)} → {formatSeconds(point.trameFin)}
                       </td>
                       <td className="px-4 py-3 font-mono">{point.targetDuration}s</td>
-                      <td className="px-4 py-3">
-                        {point.observerCount} / {summary.totalObservers}
-                      </td>
+                      <td className="px-4 py-3 font-mono">{point.observerCount}</td>
                       <td className="px-4 py-3 font-bold text-zinc-900">{point.concordanceRate}%</td>
                       <td className="px-4 py-3 font-semibold text-gold-700">
                         {point.avgDelaySeconds !== null ? `+${point.avgDelaySeconds}s` : '—'}

@@ -31,6 +31,7 @@ import { ValidationWindowsPanel } from '@/components/admin/projects/PointWindows
 import ProjectObservationTypesPanel from '@/components/admin/projects/ProjectObservationTypesPanel'
 import VideoManager from '@/components/admin/projects/VideoManager'
 import Sheet from '@/components/ui/Sheet'
+import Accordion from '@/components/ui/Accordion'
 import { formatDate, formatDateTime, labelClass } from '@/components/admin/projects/projectFormat'
 import { friendlyActionError } from '@/lib/actionError'
 
@@ -260,12 +261,14 @@ export default function ProjectOverviewTab({
       </div>
 
       {/* ——— Fenêtres de validation (gestion) ——— */}
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          <Microscope aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-          Vérité terrain — fenêtres temporelles secrètes
-        </h3>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <Accordion
+        id={`overview-terrain-${project.id}`}
+        title="Vérité terrain — fenêtres temporelles secrètes"
+        icon={Microscope}
+        count={points.length}
+        bodyClassName="px-6 pb-6 pt-2"
+      >
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
           Ces fenêtres restent invisibles pour les observateurs : elles servent à attribuer chaque
           capture à un point (ou à une fausse alerte) lors de l’analyse. Chaque fenêtre est
           rattachée à une vidéo (donc à son type) : une capture n’est validée que par les fenêtres
@@ -282,15 +285,17 @@ export default function ProjectOverviewTab({
             <ValidationWindowsPanel projectId={project.id} points={points} videos={videos} />
           </div>
         )}
-      </section>
+      </Accordion>
 
       {/* ——— Types d'observation (configuration observateurs) ——— */}
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          <Tags aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-          Types d’observation
-        </h3>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <Accordion
+        id={`overview-types-${project.id}`}
+        title="Types d’observation"
+        icon={Tags}
+        count={project.observationTypes.length}
+        bodyClassName="px-6 pb-6 pt-2"
+      >
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
           Catégories que les observateurs choisissent pour qualifier chaque capture lors de leur
           session (ex. « 100m oblique », « Faune détectée », « Bâtiment / Infrastructures »).
         </p>
@@ -307,17 +312,19 @@ export default function ProjectOverviewTab({
             archived={false}
           />
         )}
-      </section>
+      </Accordion>
 
       {/* ——— Passes vidéo (association vidéo → type, benchmarks) ——— */}
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+      <Accordion
+        id={`overview-videos-${project.id}`}
+        title="Vidéos cibles & types associés"
+        icon={Film}
+        count={videos.length}
+        bodyClassName="px-6 pb-6 pt-2"
+      >
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              <Film aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-              Vidéos cibles &amp; types associés
-            </h3>
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
               Chaque vidéo devient un onglet de l’annotateur. L’association à un type verrouille
               celui-ci pour toutes les captures de la passe ; le benchmark est la vérité terrain
               confidentielle (jamais visible des observateurs).
@@ -340,15 +347,17 @@ export default function ProjectOverviewTab({
             archived={project.isArchived}
           />
         </div>
-      </section>
+      </Accordion>
 
       {/* ——— Activité ——— */}
-      <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          <Users aria-hidden="true" className="h-4 w-4 text-gold-700 dark:text-gold-400" />
-          Soumissions
-        </h3>
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <Accordion
+        id={`overview-submissions-${project.id}`}
+        title="Soumissions"
+        icon={Users}
+        count={project.observationCount}
+        bodyClassName="px-6 pb-6 pt-2"
+      >
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
           {project.observationCount} observation{project.observationCount > 1 ? 's' : ''} par{' '}
           {project.observerCount} observateur{project.observerCount > 1 ? 's' : ''}.{' '}
           {project.observationCount > 0
@@ -360,7 +369,7 @@ export default function ProjectOverviewTab({
             {formatDateTime(project.createdAt)}
           </p>
         ) : null}
-      </section>
+      </Accordion>
 
       {/* ——— Édition (titre / description) ——— */}
       <ProjectEditSheet

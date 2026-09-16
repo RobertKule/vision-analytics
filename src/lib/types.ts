@@ -246,7 +246,9 @@ export type PointConcordanceDto = {
   trameFin: number
   targetDuration: number
   observerCount: number // Nombre d'observateurs distincts ayant validé cette cible (déjà unique par observateur)
-  concordanceRate: number // Taux en pourcentage (0-100) par rapport au total des observateurs
+  // Taux en pourcentage (0-100) = observateurs détecteurs / observateurs PARTICIPANTS
+  // au type de cette cible (jamais le total des observateurs du projet).
+  concordanceRate: number
   /**
    * Délai moyen de détection en secondes. Délai PAR ÉVÉNEMENT (chaque capture
    * validée de la fenêtre), pas par point unique : c'est une mesure de réaction.

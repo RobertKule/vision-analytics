@@ -118,11 +118,13 @@ describe('H2 — §13 : l’observateur écarté sort du numérateur ET du déno
   })
 
   it('la concordance est recalculée sur 1 observateur, pas sur 2 amputés', () => {
-    // Avant : 1 détecteur / 2 observateurs = 50 %. Après : 1 / 1 = 100 %.
+    // Dénominateur = participants du TYPE de la fenêtre.
+    // Avant : 1 détecteur / 2 participants = 50 %. Après : 1 / 1 = 100 %.
     expect(before.perPoint[0].concordanceRate).toBe(50)
     expect(after.perPoint[0].concordanceRate).toBe(100)
-    // La concordance globale reste la MOYENNE des fenêtres : (100 + 0) / 2 = 50.
+    // Taux global PONDÉRÉ : 1 détection / (2 fenêtres × 1 participant) = 50 %.
     expect(after.concordanceRate).toBe(50)
+    expect(after.concordanceRate).toBe(Math.round((after.detectionProbability ?? 0) * 100))
   })
 
   it('la précision devient celle du seul observateur retenu', () => {

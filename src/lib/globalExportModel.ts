@@ -62,6 +62,16 @@ export function typeGroupLabel(typeKey: string): string {
   return typeKey === GENERIC_TYPE_KEY ? GENERIC_TYPE_LABEL : typeKey
 }
 
+/**
+ * Clé normalisée d'un type/groupe — EXACTEMENT celle de `definedPointsByType` et
+ * de `computeTypeParticipation`. Exposée pour que les agrégations par fenêtre
+ * (concordance d'un point) retrouvent les participants de LEUR type sans
+ * redéfinir la normalisation, et donc sans risquer une seconde règle.
+ */
+export function typeKeyOf(type: string | null | undefined): string {
+  return normalizedType(type ?? null)
+}
+
 /** Champs de projet nécessaires à l'export (tous réellement persistés). */
 export type GlobalExportProject = {
   id: string

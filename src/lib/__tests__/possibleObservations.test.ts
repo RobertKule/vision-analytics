@@ -12,7 +12,10 @@ import {
   type GlobalExportSource,
 } from '@/lib/globalExportModel'
 import { computeAnalyticsMetrics, toExportSource } from '@/lib/analyticsVersioning'
-import type { AnalyticsPerimeterConfig } from '@/lib/analyticsVersioning'
+import type {
+  AnalyticsObservationRow,
+  AnalyticsPerimeterConfig,
+} from '@/lib/analyticsVersioning'
 
 /**
  * CALCUL DES POINTS POSSIBLES — dénominateur de participation RÉELLE.
@@ -89,6 +92,71 @@ function scenarioSource(options?: { participantsA?: number; participantsB?: numb
     rows,
   }
   return source
+}
+
+/**
+ * Périmètre §4.2 au niveau du MOTEUR (config + relevé), avec des participations
+ * VOLONTAIREMENT inégales : 5 participants au type A, 3 au type B. C'est le seul
+ * cas où la moyenne des taux et le taux pondéré divergent — un projet où tous les
+ * types ont le même nombre d'observateurs ne peut pas révéler la différence.
+ *
+ *   A : 10 fenêtres × 5 participants = 50 possibles, 40 détections (4 observateurs)
+ *   B :  8 fenêtres × 3 participants = 24 possibles, 12 détections (3 observateurs)
+ *   total : 74 possibles, 52 détections ⇒ 52/74 = 70,27 %
+ */
+function metricsScenario(): { config: AnalyticsPerimeterConfig; rows: AnalyticsObservationRow[] } {
+  const config: AnalyticsPerimeterConfig = {
+    projectId: 'p-possible',
+    projectTitle: 'Points possibles',
+    observationTypes: ['A', 'B'],
+    points: [
+      ...Array.from({ length: 10 }, (_, i) => ({
+        id: `A-pt-${i + 1}`,
+        label: `A Point ${i + 1}`,
+        trameDebut: i * 10,
+        trameFin: i * 10 + 5,
+        videoId: null,
+        videoName: null,
+        type: 'A',
+      })),
+      ...Array.from({ length: 8 }, (_, i) => ({
+        id: `B-pt-${i + 1}`,
+        label: `B Point ${i + 1}`,
+        trameDebut: 100 + i * 10,
+        trameFin: 100 + i * 10 + 5,
+        videoId: null,
+        videoName: null,
+        type: 'B',
+      })),
+    ],
+    videos: [],
+    excludedObserverIds: [],
+  }
+  const rows: AnalyticsObservationRow[] = [
+    ...Array.from({ length: 4 }, (_, observer) =>
+      Array.from({ length: 10 }, (_, i) =>
+        row({
+          userId: `a${observer}`,
+          observationType: 'A',
+          pointId: `A-pt-${i + 1}`,
+          timestampTotal: i * 10,
+        }),
+      ),
+    ).flat(),
+    ...Array.from({ length: 3 }, (_, observer) =>
+      Array.from({ length: 4 }, (_, i) =>
+        row({
+          userId: `b${observer}`,
+          observationType: 'B',
+          pointId: `B-pt-${i + 1}`,
+          timestampTotal: 100 + i * 10,
+        }),
+      ),
+    ).flat(),
+    // 5ᵉ participant du type A : présent au dénominateur, absent du numérateur.
+    row({ userId: 'a4', observationType: 'A', isGhostPoint: true, pointId: null }),
+  ]
+  return { config, rows }
 }
 
 describe('E. points possibles — une somme de dénominateurs, pas un maximum', () => {
@@ -239,64 +307,70 @@ describe('G. pourcentage pondéré par les vrais dénominateurs', () => {
   })
 
   it('computeAnalyticsMetrics expose le taux pondéré et la somme des dénominateurs', () => {
-    const config: AnalyticsPerimeterConfig = {
-      projectId: 'p-possible',
-      projectTitle: 'Points possibles',
-      observationTypes: ['A', 'B'],
-      points: [
-        ...Array.from({ length: 10 }, (_, i) => ({
-          id: `A-pt-${i + 1}`,
-          label: `A Point ${i + 1}`,
-          trameDebut: i * 10,
-          trameFin: i * 10 + 5,
-          videoId: null,
-          videoName: null,
-          type: 'A',
-        })),
-        ...Array.from({ length: 8 }, (_, i) => ({
-          id: `B-pt-${i + 1}`,
-          label: `B Point ${i + 1}`,
-          trameDebut: 100 + i * 10,
-          trameFin: 100 + i * 10 + 5,
-          videoId: null,
-          videoName: null,
-          type: 'B',
-        })),
-      ],
-      videos: [],
-      excludedObserverIds: [],
-    }
-    const rows = [
-      ...Array.from({ length: 4 }, (_, observer) =>
-        Array.from({ length: 10 }, (_, i) =>
-          row({
-            userId: `a${observer}`,
-            observationType: 'A',
-            pointId: `A-pt-${i + 1}`,
-            timestampTotal: i * 10,
-          }),
-        ),
-      ).flat(),
-      ...Array.from({ length: 3 }, (_, observer) =>
-        Array.from({ length: 4 }, (_, i) =>
-          row({
-            userId: `b${observer}`,
-            observationType: 'B',
-            pointId: `B-pt-${i + 1}`,
-            timestampTotal: 100 + i * 10,
-          }),
-        ),
-      ).flat(),
-      // 5ᵉ participant du type A : présent au dénominateur, absent du numérateur.
-      row({ userId: 'a4', observationType: 'A', isGhostPoint: true, pointId: null }),
-    ]
-
+    const { config, rows } = metricsScenario()
     const metrics = computeAnalyticsMetrics(config, rows)
     expect(metrics.possibleObservations).toBe(74)
     expect(metrics.detections).toBe(52)
     expect(metrics.detectionProbability).toBeCloseTo(52 / 74, 10)
     // Le dénominateur n'est plus `configuredPoints × observerCount` : 18 × 7 = 126.
     expect(metrics.possibleObservations).not.toBe(metrics.configuredPoints * metrics.observerCount)
+  })
+})
+
+describe('H. la concordance affichée EST la probabilité de détection', () => {
+  const { config, rows } = metricsScenario()
+  const metrics = computeAnalyticsMetrics(config, rows)
+
+  it('les deux surfaces sortent du même rapport Σ détections / Σ possibles', () => {
+    expect(metrics.detectionProbability).toBeCloseTo(52 / 74, 10)
+    // Tableau de bord / PDF / classeurs : `concordanceRate`. Carte « Probabilité de
+    // détection » : `detectionProbability`. Un écart entre les deux est une
+    // régression, pas une nuance d'analyse.
+    expect(metrics.concordanceRate).toBe(Math.round((metrics.detectionProbability ?? 0) * 100))
+    expect(metrics.concordanceRate).toBe(70)
+  })
+
+  it('ce n’est PAS la moyenne des taux de fenêtres (dénominateurs hétérogènes)', () => {
+    const windowMean = Math.round(
+      metrics.perPoint.reduce((acc, point) => acc + point.concordanceRate, 0) /
+        metrics.perPoint.length,
+    )
+    // 10 fenêtres A à 80 %, 4 fenêtres B à 100 %, 4 fenêtres B jamais détectées :
+    // (800 + 400 + 0) / 18 = 66,7 % ⇒ 67 %. Le taux pondéré des mêmes données vaut
+    // 70 % : la moyenne pèse autant une fenêtre suivie par 3 observateurs qu'une
+    // fenêtre suivie par 5, et double le poids des fenêtres du type le plus fourni.
+    expect(windowMean).toBe(67)
+    expect(metrics.concordanceRate).not.toBe(windowMean)
+  })
+
+  it('chaque fenêtre est jugée sur les participants de SON type', () => {
+    const aPoint = metrics.perPoint.find((point) => point.type === 'A')
+    const bPoint = metrics.perPoint.find((point) => point.type === 'B')
+    expect(aPoint?.concordanceRate).toBe(80) // 4 détecteurs / 5 participants du type A
+    expect(bPoint?.concordanceRate).toBe(100) // 3 détecteurs / 3 participants du type B
+    // Ancien dénominateur (TOUS les observateurs du projet, 8) : 4/8 = 50 et 3/8 = 38.
+    expect(aPoint?.concordanceRate).not.toBe(50)
+    expect(bPoint?.concordanceRate).not.toBe(38)
+  })
+
+  it('le numérateur des fenêtres recompose exactement le numérateur global', () => {
+    expect(metrics.perPoint.reduce((acc, point) => acc + point.detections, 0)).toBe(
+      metrics.detections,
+    )
+  })
+
+  it('retirer le 5ᵉ participant du type A remonte ses fenêtres ET son taux global', () => {
+    // a4 ne détecte rien : il n'est que dénominateur. Le retirer (déclassement §13)
+    // fait passer le type A de 5 à 4 participants ⇒ 40 possibles au lieu de 50.
+    const withoutA4 = computeAnalyticsMetrics(
+      config,
+      rows.filter((entry) => entry.userId !== 'a4'),
+    )
+    expect(withoutA4.detections).toBe(52) // numérateur intact
+    expect(withoutA4.possibleObservations).toBe(64) // 10 × 4 + 8 × 3
+    expect(withoutA4.perPoint.find((point) => point.type === 'A')?.concordanceRate).toBe(100)
+    expect(withoutA4.concordanceRate).toBe(Math.round((52 / 64) * 100))
+    expect(withoutA4.concordanceRate).toBe(81)
   })
 })
 

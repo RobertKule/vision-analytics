@@ -692,8 +692,17 @@ export default function ProjectAnalyticsDashboard({
                 <span className="text-3xl font-extrabold tracking-tight text-zinc-900 dark:text-zinc-50">
                   {summary.overallConcordanceRate}%
                 </span>
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  moyenne sur {project.totalDefinedPoints} point{project.totalDefinedPoints > 1 ? 's' : ''}
+                {/*
+                  Taux PONDÉRÉ (§4/§5) : le même nombre que la carte « Probabilité de
+                  détection », lu depuis les mêmes compteurs. Ce n'est PAS la moyenne
+                  des taux de fenêtres — leurs dénominateurs diffèrent (chaque type a
+                  son propre nombre d'observateurs participants).
+                */}
+                <span
+                  className="text-xs text-zinc-500 dark:text-zinc-400"
+                  title="Taux pondéré : Σ détections / Σ points possibles (dénominateurs par type). Identique à la probabilité de détection."
+                >
+                  Σ détections / Σ possibles
                 </span>
               </div>
               <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
@@ -1267,8 +1276,11 @@ export default function ProjectAnalyticsDashboard({
                           <Timer aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
                           {formatSeconds(point.trameDebut)} - {formatSeconds(point.trameFin)}
                         </span>
+                        {/* Nombre de DÉTECTEURS (pas un rapport sur les observateurs
+                            du projet) : le taux ci-dessus se rapporte aux
+                            observateurs ayant participé au type de la fenêtre. */}
                         <span>
-                          {point.observerCount} / {summary.totalObservers} observateur{point.observerCount > 1 ? 's' : ''}
+                          Détecté par {point.observerCount} observateur{point.observerCount > 1 ? 's' : ''}
                         </span>
                       </div>
 

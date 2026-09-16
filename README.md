@@ -69,6 +69,13 @@ et reprend où il s'était arrêté.
   calculés **type par type** : `possibles(type) = points/trames configurés DU TYPE × observateurs ayant
   réellement participé à ce type`, puis **sommés**. Jamais `points totaux × observateurs totaux`, jamais le
   maximum d'observateurs pris comme base commune, jamais la moyenne des taux des types.
+- **Concordance globale = le même nombre.** La carte « Concordance Globale » et la carte « Probabilité de
+  détection » du tableau de bord, comme les colonnes « Concordance » du PDF, de l'Excel et du rapport
+  exécutif, sortent **toutes** de `Σ Détections / Σ Possibles` : deux valeurs différentes signaleraient une
+  régression. Ce n'est **pas** la moyenne des taux de fenêtres — leurs dénominateurs diffèrent (chaque type a
+  ses propres observateurs participants), et une moyenne non pondérée donnerait un pourcentage ininterprétable.
+- **Concordance par fenêtre** : `observateurs détecteurs de la fenêtre / observateurs ayant participé au TYPE
+  de cette fenêtre` — jamais un rapport au total des observateurs du projet.
 - **Relevés bruts** (Données brutes) : conservent **toujours** chaque capture individuelle.
 - Précision, concordance inter-observateurs, délai moyen de détection, répartition des fantômes —
   par fenêtre cible, par type/décalage, par observateur.
